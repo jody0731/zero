@@ -3,6 +3,13 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.4.2
+
+A fix release.
+
+- **The TUI's input boxes are round,** as its other boxes are. Their old edge drew its left side as a reversed block, and in a terminal whose block falls short of the cell a second, faint line showed beside it.
+- The README's screenshots draw the TUI's block characters as shapes, without gaps between the rows.
+
 ## 0.6.2.4.1
 
 One path, one place: a path means the same place in the sandbox and out. And a new README.

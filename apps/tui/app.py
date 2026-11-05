@@ -97,6 +97,11 @@ Screen { background: $background; }
 #askbox { height: auto; border: round $text-warning; padding: 0 1; margin: 0 1;
           display: none; }
 MessageBox { height: auto; max-height: 10; margin: 0 1; }
+/* Round, as the other boxes: Textual's tall border draws its left edge as a
+   reversed block, and a terminal that draws the block a pixel short shows a
+   second, faint line beside it */
+MessageBox, Input { border: round $border-blurred; }
+MessageBox:focus, Input:focus { border: round $border; }
 #status { height: 1; background: $panel; color: $text-muted; padding: 0 1;
           margin: 1 0 0 0; }
 .view-title { dock: top; height: 1; padding: 0 1; background: $panel;

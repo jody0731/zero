@@ -1,7 +1,15 @@
 # Changelog
 
-What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development; versions below
-1.0 may change anything.
+What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
+between two (a fourth number); versions below 1.0 may change anything.
+
+## 0.6.2.2.1
+
+A fix release.
+
+- Each home runs its host as a systemd unit of its own: `zero-host` for `~/.zero`, `zero-host-<hash>` for one that
+  `ZERO_HOME` names elsewhere, so the hosts of two homes run side by side.
+- `zero --help` names Z.E.R.O. as the README does.
 
 ## 0.6.2.2
 

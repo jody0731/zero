@@ -357,7 +357,8 @@ def parser_for(argv):
         return parser, args
     parser = argparse.ArgumentParser(
         prog="zero", usage="zero [new | -r | -p TEXT] [--mode MODE] [--model NAME]",
-        description="ZERO, a local work agent. Commands: " + ", ".join(COMMANDS),
+        description="Z.E.R.O., a general purpose agent. Commands: "
+        + ", ".join(COMMANDS),
     )
     parser.add_argument("-r", action="store_true", help="open the session list")
     parser.add_argument("-p", metavar="TEXT",

@@ -9,7 +9,9 @@ on first use) and permissions.toml (the permissions they saved from an ask);
 all optional. state/ is the host's and lasts: the database, session logs,
 trajectories, locks, jobs' output, the trash, host.log and crashes.log. run/
 holds the running host's socket and locks. The sandbox hides the whole home
-from commands.
+from commands. Each home's host runs as a systemd unit of its own: zero-host
+for ~/.zero, zero-host-<hash> for any other, so two homes' hosts run side by
+side.
 
 Shared by the host and its clients, so neither imports the other. Read when
 called, so a test's ZERO_HOME counts; nothing here names a user or a
@@ -26,6 +28,7 @@ HOME_ENV = "ZERO_HOME"
 # The longest path a Unix socket can bind to (sun_path, less its end)
 SOCKET_MAX = 107
 SOCKET = "zero.sock"
+UNIT = f"{NAME}-host"
 
 
 def home():
@@ -80,6 +83,14 @@ def run_folder(top):
     return Path(runtime) / f"{NAME}-{tag}"
 
 
+def unit_name(top):
+    """The systemd unit a home's host runs as."""
+    if Path(top).absolute() == (Path.home() / f".{NAME}").absolute():
+        return UNIT
+    tag = hashlib.sha256(str(top).encode()).hexdigest()[:8]
+    return f"{UNIT}-{tag}"
+
+
 class Paths:
     def __init__(self, top=None):
         self.home = Path(top) if top else home()
@@ -100,6 +111,7 @@ class Paths:
         self.lock = self.run / "host.lock"
         # Held by a client while it starts a host, so two start one
         self.start_lock = self.run / "start.lock"
+        self.unit = unit_name(self.home)
 
     def environment(self):
         """The variable that leads a host to this home."""

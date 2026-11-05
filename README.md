@@ -14,7 +14,7 @@ Z.E.R.O. (a.k.a. Zealous Efferent Response Operator): a general purpose agent.
   live in code; it is built for the models to come.
 
 ZERO is in development (versions below 1.0): anything may change between releases. Each release is one checkpoint of
-its development; [CHANGELOG.md](CHANGELOG.md) says what each brought.
+its development, or a fix between two; [CHANGELOG.md](CHANGELOG.md) says what each brought.
 
 ## What it needs
 

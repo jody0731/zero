@@ -2,8 +2,9 @@
 
 `hello` with a short timeout says whether a host runs. When none does, the
 client takes start.lock, says hello again (another terminal may have just
-started one) and only then starts it: as a transient systemd user unit,
-`zero-host`, where the user's systemd answers, else as a detached process. It
+started one) and only then starts it: as a transient systemd user unit named
+after its home (`zero-host` for ~/.zero), where the user's systemd answers,
+else as a detached process. It
 polls until the host answers. A host that takes the connection but never
 answers is reported with its pid, never replaced by a second one. A host with
 another build (the code changed since it started) is restarted when it is
@@ -20,7 +21,6 @@ from pathlib import Path
 from client.connection import NoAnswer, NotRunning, ProtocolError, request
 from protocol import verbs, version
 
-UNIT = "zero-host"
 # One hello's wait; a host still starting gets as long as a start
 PROBE_SECONDS = 2
 START_SECONDS = 10
@@ -88,13 +88,15 @@ def probe(paths, seconds=START_SECONDS):
                 ) from None
 
 
-def ensure_host(paths, unit=UNIT, command=None, popen=subprocess.Popen,
+def ensure_host(paths, unit=None, command=None, popen=subprocess.Popen,
                 run=subprocess.run, systemd=None, seconds=START_SECONDS,
                 report=None):
-    """Make sure a host of this code answers. `unit`: the systemd unit's name
-    (tests pass a throwaway one). `command`: the host's argv (tests: a scripted
-    host). `systemd`: True or False to choose, None to ask the user's systemd."""
+    """Make sure a host of this code answers. `unit`: the systemd unit's name,
+    the home's own when None (tests pass a throwaway one). `command`: the
+    host's argv (tests: a scripted host). `systemd`: True or False to choose,
+    None to ask the user's systemd."""
     report = report or (lambda text: print(text, file=sys.stderr))
+    unit = unit or paths.unit
     reply = probe(paths, seconds)
     if reply is not None and current(paths, reply, report, seconds):
         return reply

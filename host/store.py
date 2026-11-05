@@ -1,0 +1,405 @@
+"""The runtime's state in SQLite: what is waiting and what is running.
+
+History lives in the session logs (sessions/log.py); this holds the inbox, the
+session list and the asks waiting for a reply, and the host parts' tables
+(jobs/store.py). Every change is one transaction, committed before the caller
+goes on, so a message that got its ack is on disk. The database is born with
+its whole schema. `on_change` hears each committed
+transaction: the host's live session list.
+"""
+
+import json
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
+from datetime import datetime
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL,
+    -- What its next turn runs with; the user may change them
+    model TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    -- The folder its commands run in; / is the whole machine
+    workspace TEXT NOT NULL,
+    -- idle, running, waiting, failed
+    state TEXT NOT NULL,
+    created REAL NOT NULL,
+    updated REAL NOT NULL,
+    -- The newest record the user has seen, and when they last looked
+    seen_seq INTEGER NOT NULL DEFAULT 0,
+    seen_at REAL,
+    -- The newest turn_end's seq: news while it is past seen_seq
+    end_seq INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    -- What the user set since the last turn started, as JSON: the next new
+    -- turn logs it as a switch and clears it
+    switch TEXT
+);
+CREATE TABLE IF NOT EXISTS inbox (
+    -- The order messages arrived in
+    arrival INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- The sender's id: a message sent twice is kept once
+    id TEXT NOT NULL UNIQUE,
+    session TEXT NOT NULL REFERENCES sessions(id),
+    -- user, stop, or a notice's source (a job ended, checked in or was lost)
+    kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    -- queued, delivered (its turn is running), done
+    status TEXT NOT NULL,
+    created REAL NOT NULL,
+    resumes INTEGER NOT NULL DEFAULT 0,
+    -- 1 when a clean stop cut its turn off: the resume uses no try
+    clean_stop INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS inbox_open ON inbox (status, session, arrival);
+CREATE TABLE IF NOT EXISTS asks (
+    -- The `ask` record's id in the session log, which is the truth
+    id TEXT PRIMARY KEY,
+    session TEXT NOT NULL REFERENCES sessions(id),
+    call TEXT NOT NULL,
+    -- The inbox id of the turn that parked
+    turn TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    command TEXT NOT NULL,
+    why TEXT NOT NULL,
+    -- open, approved, cancelled
+    status TEXT NOT NULL,
+    created REAL NOT NULL,
+    closed REAL,
+    -- The reply's inbox id and source
+    reply TEXT,
+    source TEXT
+);
+CREATE INDEX IF NOT EXISTS asks_open ON asks (session, status);
+"""
+# A user message that waits for the turn's answer instead of steering it
+FOLLOW_UP = "json_extract(payload, '$.follow_up') IS NOT NULL"
+# A notice: any message but a user's and a stop (a job's, jobs/host.py)
+NOTICE = "kind NOT IN ('user', 'stop')"
+
+
+class UnknownSession(Exception):
+    pass
+
+
+class Store:
+    def __init__(self, path, schemas=()):
+        """`schemas`: the host parts' tables, made with the kernel's."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # One connection shared by the runtime's threads, one transaction at a time
+        self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self.db.row_factory = sqlite3.Row
+        self.lock = threading.Lock()
+        with self.lock:
+            self.db.execute("PRAGMA journal_mode = WAL")
+            # Each commit reaches the disk: an acked message survives a power cut
+            self.db.execute("PRAGMA synchronous = FULL")
+            self.db.execute("PRAGMA foreign_keys = ON")
+            self.db.executescript(SCHEMA)
+            for schema in schemas:
+                self.db.executescript(schema)
+        self.on_change = None
+
+    @contextmanager
+    def transaction(self):
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                yield self.db
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+            self.db.execute("COMMIT")
+        # Outside the lock: a listener may read the store
+        if self.on_change is not None:
+            self.on_change()
+
+    def query(self, sql, *args):
+        with self.lock:
+            return [dict(row) for row in self.db.execute(sql, args)]
+
+    def admit(self, msg_id, session, kind, source, payload, new_session=None):
+        """Put a message in the inbox. Returns (admitted, session id).
+
+        `new_session`: the row of a session this message starts (title, source,
+        model, mode), created in the same transaction. A message whose id is
+        already in the inbox isn't admitted again; its session is returned.
+        """
+        now = time.time()
+        with self.transaction() as db:
+            seen = db.execute(
+                "SELECT session FROM inbox WHERE id = ?", (msg_id,)
+            ).fetchone()
+            if seen:
+                return False, seen["session"]
+            if new_session:
+                db.execute(
+                    "INSERT INTO sessions (id, title, source, model, mode, "
+                    "workspace, state, created, updated) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, ?)",
+                    (
+                        session,
+                        new_session["title"],
+                        new_session["source"],
+                        new_session["model"],
+                        new_session["mode"],
+                        new_session.get("workspace", "/"),
+                        now,
+                        now,
+                    ),
+                )
+            elif not db.execute(
+                "SELECT 1 FROM sessions WHERE id = ?", (session,)
+            ).fetchone():
+                raise UnknownSession(session)
+            db.execute(
+                "INSERT INTO inbox (id, session, kind, source, payload, status, "
+                "created) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
+                (msg_id, session, kind, source, json.dumps(payload), now),
+            )
+        return True, session
+
+    def begin(self, arrival, session):
+        """A turn started on this message: the row delivered, the session running."""
+        self._move(arrival, session, "delivered", "running")
+
+    def finish(self, arrival, session, state):
+        """Its turn ended: the row done, the session idle or failed."""
+        self._move(arrival, session, "done", state)
+
+    def requeue(self, arrival, session):
+        self._move(arrival, session, "queued", "idle")
+
+    def resume(self, arrival, session, counted=True):
+        """Count the try and queue it atomically, even if boot then cuts off.
+        `counted` False: a clean stop's turn, whose mark the resume clears."""
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE inbox SET resumes = resumes + ?, clean_stop = 0, "
+                "status = 'queued' WHERE arrival = ?", (int(counted), arrival),
+            )
+            db.execute(
+                "UPDATE sessions SET state = 'idle', updated = ? WHERE id = ?",
+                (time.time(), session),
+            )
+
+    def _move(self, arrival, session, status, state):
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE inbox SET status = ? WHERE arrival = ?", (status, arrival)
+            )
+            db.execute(
+                "UPDATE sessions SET state = ?, updated = ? WHERE id = ?",
+                (state, time.time(), session),
+            )
+
+    # A notice starts a turn only while its session isn't parked on an ask (a
+    # notice is never the reply)
+    STARTS = (
+        f"status = 'queued' AND (kind = 'user' OR ({NOTICE} AND "
+        "(SELECT state != 'waiting' FROM sessions "
+        "WHERE sessions.id = inbox.session)))"
+    )
+
+    def next_queued(self, session):
+        rows = self.query(
+            f"SELECT * FROM inbox WHERE session = ? AND {self.STARTS} "
+            "ORDER BY arrival LIMIT 1",
+            session,
+        )
+        return rows[0] if rows else None
+
+    def waiting(self):
+        """Sessions with messages that can start a turn, the longest waiting
+        first."""
+        rows = self.query(
+            f"SELECT session FROM inbox WHERE {self.STARTS} "
+            "GROUP BY session ORDER BY MIN(arrival)",
+        )
+        return [row["session"] for row in rows]
+
+    def steers(self, session, after, notices_only=False):
+        """Messages a running turn takes in: a client's sent after the turn began,
+        not a follow-up, and every queued notice. `notices_only`: once
+        the turn is stopped, its untaken messages go back to their sender."""
+        user = "0" if notices_only else f"(kind = 'user' AND NOT {FOLLOW_UP})"
+        rows = self.query(
+            "SELECT * FROM inbox WHERE session = ? AND status = 'queued' AND "
+            f"(({user} AND arrival > ?) OR {NOTICE}) ORDER BY arrival",
+            session, after,
+        )
+        return [{"text": json.loads(row["payload"])["text"], "inbox": row["id"],
+                 "source": row["source"]} for row in rows]
+
+    def withdraw_messages(self, session, after):
+        """A stop takes back the user's steers and follow-ups its turn hasn't
+        taken (Pi): done here, and returned for their sender's input."""
+        with self.transaction() as db:
+            rows = db.execute(
+                "SELECT * FROM inbox WHERE session = ? AND status = 'queued' AND "
+                "kind = 'user' AND arrival > ? ORDER BY arrival", (session, after),
+            ).fetchall()
+            db.executemany(
+                "UPDATE inbox SET status = 'done' WHERE arrival = ?",
+                [(row["arrival"],) for row in rows],
+            )
+        result = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            result.append({
+                "id": row["id"], "text": payload["text"], "source": row["source"],
+                "follow_up": bool(payload.get("follow_up")),
+            })
+        return result
+
+    def done(self, msg_id):
+        """A steer is in the log; don't release the turn's claim."""
+        with self.transaction() as db:
+            db.execute("UPDATE inbox SET status = 'done' WHERE id = ?", (msg_id,))
+
+    def stops(self, session, row):
+        rows = self.query(
+            "SELECT * FROM inbox WHERE session = ? AND arrival > ? "
+            "AND kind = 'stop' AND status != 'done' ORDER BY arrival",
+            session, row["arrival"],
+        )
+        return [r for r in rows if json.loads(r["payload"]).get("turn", row["id"])
+                == row["id"]]
+
+    def park(self, session, ask, turn):
+        """A turn parked on `ask` (its log record): the ask open, the session
+        waiting. Kept once: the boot repair may write it again."""
+        created = datetime.fromisoformat(ask["time"]).timestamp()
+        with self.transaction() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO asks (id, session, call, turn, tool, command, "
+                "why, status, created) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+                (ask["ask"], session, ask["call"], turn, ask["tool"],
+                 str(ask["command"]), ask["why"], created),
+            )
+            db.execute(
+                "UPDATE sessions SET state = 'waiting', updated = ? WHERE id = ?",
+                (time.time(), session),
+            )
+
+    def close_ask(self, ask, reply, yes, source):
+        """Its reply is in the log: the ask closed, the reply's row done, the
+        session running again."""
+        now = time.time()
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE asks SET status = ?, closed = ?, reply = ?, source = ? "
+                "WHERE id = ?",
+                ("approved" if yes else "cancelled", now, reply, source, ask),
+            )
+            db.execute("UPDATE inbox SET status = 'done' WHERE id = ?", (reply,))
+            db.execute(
+                "UPDATE sessions SET state = 'running', updated = ? WHERE id = "
+                "(SELECT session FROM asks WHERE id = ?)", (now, ask),
+            )
+
+    def mark_clean_stop(self, msg_id):
+        with self.transaction() as db:
+            db.execute("UPDATE inbox SET clean_stop = 1 WHERE id = ?", (msg_id,))
+
+    def open_asks(self):
+        return self.query("SELECT * FROM asks WHERE status = 'open'")
+
+    def open_ask(self, session):
+        """The session's ask waiting for a reply, or None."""
+        rows = self.query(
+            "SELECT * FROM asks WHERE session = ? AND status = 'open' "
+            "ORDER BY created DESC LIMIT 1", session,
+        )
+        return rows[0] if rows else None
+
+    def set_state(self, session, state):
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE sessions SET state = ?, updated = ? WHERE id = ?",
+                (state, time.time(), session),
+            )
+
+    def notice(self, db, msg_id, session, source, payload):
+        """Queue a notice inside a part's own transaction (jobs/store.py), so
+        its row and its notice commit together; kept once by its id."""
+        db.execute(
+            "INSERT OR IGNORE INTO inbox (id, session, kind, source, payload, "
+            "status, created) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
+            (msg_id, session, source, source, json.dumps(payload), time.time()),
+        )
+
+    def withdraw(self, msg_id):
+        """A notice the model no longer needs: done, if no turn took it yet."""
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE inbox SET status = 'done' WHERE id = ? AND status = 'queued'",
+                (msg_id,),
+            )
+
+    def unfinished(self):
+        """Rows not done, oldest first: what the boot repair looks at."""
+        return self.query("SELECT * FROM inbox WHERE status != 'done' ORDER BY arrival")
+
+    def rows(self, session):
+        return self.query(
+            "SELECT * FROM inbox WHERE session = ? ORDER BY arrival", session
+        )
+
+    def session(self, session):
+        rows = self.query("SELECT * FROM sessions WHERE id = ?", session)
+        return rows[0] if rows else None
+
+    def sessions(self):
+        """Every session, the most recently active first."""
+        return self.query(
+            "SELECT * FROM sessions ORDER BY (state = 'waiting') DESC, "
+            "updated DESC, created DESC"
+        )
+
+    # What the user has seen, and housekeeping
+
+    def ended(self, session, seq):
+        """A turn ended at this record: news until the user sees it."""
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE sessions SET end_seq = MAX(end_seq, ?) WHERE id = ?",
+                (seq, session),
+            )
+
+    def seen(self, session, seq):
+        """The user has seen the session up to `seq`, and worked in it now."""
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE sessions SET seen_seq = MAX(seen_seq, ?), seen_at = ? "
+                "WHERE id = ?", (seq, time.time(), session),
+            )
+
+    def last_seen(self):
+        """The session the user last worked in, not archived; or None."""
+        rows = self.query(
+            "SELECT id FROM sessions WHERE seen_at IS NOT NULL AND archived = 0 "
+            "ORDER BY seen_at DESC LIMIT 1"
+        )
+        return rows[0]["id"] if rows else None
+
+    def update_session(self, session, **fields):
+        names = ", ".join(f"{name} = ?" for name in fields)
+        with self.transaction() as db:
+            db.execute(
+                f"UPDATE sessions SET {names} WHERE id = ?",
+                (*fields.values(), session),
+            )
+
+    def forget(self, session, tables=()):
+        """Every row of the session, its log already moved to the trash.
+        `tables`: the host parts' with a session column (Part.tables)."""
+        with self.transaction() as db:
+            for table in ("asks", *tables, "inbox"):
+                db.execute(f"DELETE FROM {table} WHERE session = ?", (session,))
+            db.execute("DELETE FROM sessions WHERE id = ?", (session,))

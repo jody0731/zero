@@ -1,0 +1,205 @@
+"""A bash command line as the simple commands it runs, and the prefixes
+"don't ask again" grants for it (the bash tool's Grant).
+
+A command is split into its parts (at ; && || | & newlines and parentheses),
+`bash -c` is looked inside, wrappers (`sudo`, `env`, `timeout` …) are looked
+past, and VAR=x is skipped. A command that can't be parsed raises Unparseable.
+"""
+
+import shlex
+from pathlib import Path
+
+SHELLS = {"bash", "sh", "zsh", "dash"}
+# Words that run the rest of the line as a command
+WRAPPERS = {
+    "env", "sudo", "doas", "nohup", "time", "exec", "command", "nice", "ionice",
+    "timeout", "stdbuf", "xargs",
+}
+PUNCTUATION = ";&|()<>\n"
+# How many leading words name what a command does, for programs with
+# subcommands: OpenCode's ARITY (packages/core/src/shell/parse.ts, MIT), with a
+# few of Linux's own added. Any other program is named by its first word
+ARITY = {
+    "apt": 2, "apt-get": 2, "aws": 3, "az": 3, "bazel": 2, "brew": 2, "bun": 2,
+    "bun run": 3, "bun x": 3, "cargo": 2, "cargo add": 3, "cargo run": 3, "cdk": 2,
+    "cf": 2, "cmake": 2, "composer": 2, "consul": 2, "consul kv": 3, "crictl": 2,
+    "deno": 2, "deno task": 3, "docker": 2, "docker builder": 3,
+    "docker compose": 3, "docker container": 3, "docker image": 3,
+    "docker network": 3, "docker volume": 3, "doctl": 3, "eksctl": 2,
+    "eksctl create": 3, "firebase": 2, "flatpak": 2, "flyctl": 2, "gcloud": 3,
+    "gh": 3, "git": 2, "git config": 3, "git remote": 3, "git stash": 3, "go": 2,
+    "gradle": 2, "helm": 2, "heroku": 2, "hostnamectl": 2, "hugo": 2, "ip": 2,
+    "ip addr": 3, "ip link": 3, "ip netns": 3, "ip route": 3, "kind": 2,
+    "kind create": 3, "kubectl": 2, "kubectl kustomize": 3, "kubectl rollout": 3,
+    "kustomize": 2, "loginctl": 2, "make": 2, "mc": 2, "mc admin": 3, "minikube": 2,
+    "mongosh": 2, "mvn": 2, "mysql": 2, "ng": 2, "nmcli": 2, "npm": 2,
+    "npm exec": 3, "npm init": 3, "npm run": 3, "npm view": 3, "npx": 2, "nvm": 2,
+    "nx": 2, "openssl": 2, "openssl req": 3, "openssl x509": 3, "pip": 2,
+    "pipenv": 2, "pnpm": 2, "pnpm dlx": 3, "pnpm exec": 3, "pnpm run": 3,
+    "podman": 2, "podman container": 3, "podman image": 3, "poetry": 2, "psql": 2,
+    "pulumi": 2, "pulumi stack": 3, "pyenv": 2, "rake": 2, "rbenv": 2,
+    "redis-cli": 2, "resolvectl": 2, "rustup": 2, "serverless": 2, "sfdx": 3,
+    "skaffold": 2, "sls": 2, "snap": 2, "sst": 2, "swift": 2, "systemctl": 2,
+    "terraform": 2, "terraform workspace": 3, "timedatectl": 2, "tmux": 2,
+    "turbo": 2, "ufw": 2, "vault": 2, "vault auth": 3, "vault kv": 3, "vercel": 2,
+    "volta": 2, "wp": 2, "yarn": 2, "yarn dlx": 3, "yarn run": 3,
+}
+MAX_DEPTH = 8
+
+
+class Unparseable(Exception):
+    pass
+
+
+def split(command, depth=0):
+    """A command line as a list of simple commands, each a list of words."""
+    if depth > MAX_DEPTH:
+        raise Unparseable("too deeply nested")
+    if "`" in command:
+        raise Unparseable("backticks")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=PUNCTUATION)
+    # Newlines end a command in bash, so they are separators, not spaces
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError as e:
+        raise Unparseable(str(e)) from e
+    parts, words, skip = [], [], False
+    for token in tokens:
+        if skip:
+            skip = False
+        elif token and all(c in PUNCTUATION for c in token):
+            if "<" in token or ">" in token:
+                # The word after a redirect is a file, not a command
+                skip = True
+            else:
+                parts.append(words)
+                words = []
+        else:
+            words.append(token)
+    parts.append(words)
+    simple = []
+    for words in parts:
+        simple += unwrap(words, depth)
+    return [w for w in simple if w]
+
+
+def prefix(words):
+    """The words that name what a simple command does: `git push`, `docker
+    compose up`, `rm` (OpenCode's prefix()); never past an option."""
+    for length in range(min(len(words), 3), 0, -1):
+        arity = ARITY.get(" ".join(words[:length]))
+        if arity is not None:
+            break
+    else:
+        arity = 1
+    taken = []
+    for word in words[:arity]:
+        if word.startswith("-"):
+            break
+        taken.append(word)
+    return " ".join(taken)
+
+
+def unwrap(words, depth):
+    """Skip VAR=x; look past wrappers and inside `bash -c "..."`."""
+    while words and "=" in words[0] and not words[0].startswith("="):
+        words = words[1:]
+    if not words:
+        return []
+    if Path(words[0]).name not in WRAPPERS:
+        return command(words, depth)
+    # Which word starts the wrapped command depends on the wrapper's options
+    # (sudo -u x, nice -n 5), so every tail is checked: an extra match only
+    # makes the verdict stricter, never looser
+    tails = []
+    for start in range(len(words)):
+        tails += command(words[start:], depth)
+    return tails
+
+
+def command(words, depth):
+    """One simple command, its program by basename; `bash -c` opened up."""
+    words = [Path(words[0]).name] + words[1:]
+    if words[0] in SHELLS:
+        for i, word in enumerate(words[1:], 1):
+            if word.startswith("-") and "c" in word and i + 1 < len(words):
+                return split(words[i + 1], depth + 1)
+    return [words]
+
+
+INTERPRETERS = {
+    "python", "python2", "python3", "node", "nodejs", "perl", "ruby", "php",
+    "lua", "deno", "bun", "Rscript", "julia", "osascript", "pwsh",
+    "powershell", "fish", "ksh", "tclsh", "awk", "gawk", "mawk", "nawk",
+}
+# Programs whose prefix would cover anything they run
+UNGRANTED = SHELLS | WRAPPERS | INTERPRETERS
+# Prefixes that run whatever a project or an option says (Codex's banned
+# suggestions): `git -C x …`, a bare `npm run`
+WIDE = {"git", "npm run", "pnpm run", "yarn run", "bun run"}
+# Shell words that open a block or a test: the command is the word after.
+# A block's end only closes it (redirects may follow)
+OPENERS = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}
+CLOSERS = {"done", "fi", "}"}
+# Words that start something other than a command (a loop's list, a case's
+# patterns); a part that starts with an option or a number is a fragment the
+# split left (`find . \( -name x \)`, `) 2>/dev/null`). No grant for these
+UNREAD = {"for", "case", "esac", "select", "function", "coproc"}
+# Options with which a program acts on what it finds: it runs a command,
+# deletes, or writes a file. A grant for the program doesn't cover them
+ACTING = {
+    "find": ("-exec", "-ok", "-delete", "-fprint", "-fls"),
+    "sed": ("--in-place",),
+}
+
+
+def prefixes(command):
+    """Each part's prefix, or None for a command no grant may cover."""
+    try:
+        parts = split(command)
+    except Unparseable:
+        return None
+    found = set()
+    for words in parts:
+        while words and words[0] in OPENERS:
+            words = words[1:]
+        if not words or words[0] in CLOSERS:
+            continue
+        first = words[0]
+        if first in UNREAD or first.startswith("-") or first.isdigit():
+            return None
+        # A program named by a variable runs whatever it holds
+        if "$" in first:
+            return None
+        if first in UNGRANTED or acts(words):
+            return None
+        found.add(prefix(words))
+    if not found:
+        return None
+    if found & WIDE:
+        return None
+    return sorted(found)
+
+
+def acts(words):
+    """Whether a simple command acts through its options (ACTING); for sed,
+    an -i among its short options (`-i`, `-i.bak`, `-ni`) too."""
+    options = ACTING.get(words[0], ())
+    for word in words[1:]:
+        if word.startswith(options):
+            return True
+        short = word.startswith("-") and not word.startswith("--")
+        if words[0] == "sed" and short and "i" in word:
+            return True
+    return False
+
+
+def prefix_words(grant):
+    """A grant in a few words: "`cd` and `git push` commands"."""
+    names = [f"`{p}`" for p in grant["prefixes"]]
+    words = names[0] if len(names) == 1 else (
+        ", ".join(names[:-1]) + f" and {names[-1]}"
+    )
+    return f"{words} commands"

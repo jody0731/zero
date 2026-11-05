@@ -1,0 +1,7 @@
+# The packages ZERO's code imports, at the versions it is tested with
+beautifulsoup4==4.15.0
+httpx2==2.16.0
+markdownify==1.2.3
+openai==3.37.0
+rich==15.0.0
+textual==8.2.8

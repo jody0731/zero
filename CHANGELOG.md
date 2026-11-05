@@ -3,6 +3,12 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.4.3
+
+A fix release.
+
+- **The scratch folder lasts while ZERO runs:** a session keeps its `$TMPDIR`, and the files in it, when its mode, model or workspace changes; before, the change emptied it. It goes when ZERO's host stops, and the session's environment line now says so.
+
 ## 0.6.2.4.2
 
 A fix release.

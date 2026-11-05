@@ -1,8 +1,9 @@
 """The bwrap sandbox every command runs in.
 
 Read-only system (the machine's /tmp included), one writable workspace, a
-scratch folder per session ($TMPDIR) at the same path in the box and out, no
-network, no desktop sockets, secrets hidden: Codex's Linux shape.
+scratch folder per session ($TMPDIR, `Scratch`) at the same path in the box
+and out, kept while the host runs, no network, no desktop sockets, secrets
+hidden: Codex's Linux shape.
 readOnly's sandbox keeps the workspace read-only too, and so does every
 sandbox whose workspace is /: binding / writable would open the whole
 machine and cover the /dev and /proc mounts. The file tools' helper runs
@@ -23,6 +24,12 @@ from model.providers import ProviderError, key_envs
 
 # Hidden behind an empty folder: keys, the gpg keyring, Claude's own login
 SECRETS = [".ssh", ".gnupg", ".claude"]
+# How long the scratch folder lasts, as the line says it: the host keeps it
+# while it runs (Scratch)
+LASTS = (
+    "the scratch folder is kept until ZERO restarts, and a new, empty one "
+    "takes its place then"
+)
 # What the sandbox's walls look like in a command's output
 WALL_MARKS = (
     "Read-only file system",
@@ -77,11 +84,27 @@ class SandboxError(Exception):
     """The sandbox can't be set up, so the command must not run."""
 
 
+class Scratch:
+    """A session's scratch folder, its $TMPDIR: a real folder, made on first
+    use, removed when the last one holding it lets it go. The host keeps
+    each session's while it runs, so a session built again (a switch of mode,
+    model or workspace) finds its files."""
+
+    def __init__(self):
+        self.made = None
+
+    def path(self):
+        if self.made is None:
+            self.made = tempfile.mkdtemp(prefix="agent-tmp-")
+            weakref.finalize(self, shutil.rmtree, self.made, True)
+        return self.made
+
+
 class Sandbox:
     sandboxed = True
 
     def __init__(self, workspace, home=None, read_only=False, private=(),
-                 protected=()):
+                 protected=(), scratch=None):
         self.workspace = Path(workspace).resolve()
         # The harness owner's own folders (ZERO's home with its keys and
         # history; private_folders): hidden from every command
@@ -92,6 +115,8 @@ class Sandbox:
         # Files in the workspace kept read-only, as its .git is: the ones a
         # later session reads as instructions (ZERO.md)
         self.protected = tuple(protected)
+        # The session's scratch folder, or one of this box's own
+        self.scratch = scratch or Scratch()
         self.tmp = None
 
     def command(self, argv):
@@ -148,12 +173,10 @@ class Sandbox:
         return args
 
     def private_tmp(self):
-        """This session's scratch folder, its $TMPDIR: a real folder, made
-        on first use, at the same path in the sandbox and out."""
+        """This session's scratch folder, its $TMPDIR, at the same path in
+        the sandbox and out."""
         if self.tmp is None:
-            self.tmp = tempfile.mkdtemp(prefix="agent-tmp-")
-            # The scratch folder goes when the session's sandbox does
-            weakref.finalize(self, shutil.rmtree, self.tmp, True)
+            self.tmp = self.scratch.path()
         return self.tmp
 
     def env(self):
@@ -181,16 +204,16 @@ class Sandbox:
             return (
                 "sandbox: on, read-only. The system is read-only, /tmp included; "
                 f"only this session's scratch folder, $TMPDIR ({tmp}), is "
-                "writable; there is no network"
+                f"writable; {LASTS}; there is no network"
             )
         # .git stays read-only (its hooks and config run outside, later), so
         # the line says how a repository changes, not a list of what's locked
         return (
             "sandbox: on. The system is read-only, /tmp included; only the "
             f"workspace and this session's scratch folder, $TMPDIR ({tmp}), are "
-            "writable; git's own folder (.git) is read-only, so a git command "
-            "that changes a repository, such as a commit, runs outside the "
-            "sandbox; there is no network"
+            f"writable; {LASTS}; git's own folder (.git) is read-only, so a git "
+            "command that changes a repository, such as a commit, runs outside "
+            "the sandbox; there is no network"
         )
 
 

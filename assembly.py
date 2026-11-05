@@ -69,7 +69,9 @@ from prompt.instructions import PROJECT_FILE, read, system_prompt, users
 from memory.plugin import OwnFiles
 from paths import permissions_file
 from sessions.log import Log, fresh_log
-from sandbox.sandbox import Outside, Sandbox, Unsandboxed, private_folders
+from sandbox.sandbox import (
+    Outside, Sandbox, Scratch, Unsandboxed, private_folders,
+)
 
 
 
@@ -177,6 +179,7 @@ def make_session(
     web=None,
     judge_effort=None,
     box=None,
+    scratch=None,
 ):
     """A session on the chat profile, plus the hard cap if `limits` sets it.
 
@@ -205,6 +208,9 @@ def make_session(
     own keeps it too (the judge isn't told), and no call leaves it. The evals
     hand in theirs (dev/evalkit/: the exam room, the throwaway machine), tests a
     plain Sandbox; None for the mode's own.
+    `scratch`: the session's scratch folder (sandbox's Scratch) for the mode's
+    own sandbox, which the host keeps across the session's builds; None for
+    one of the sandbox's own.
     """
     if workspace is None:
         raise ValueError("a session needs a workspace")
@@ -226,7 +232,8 @@ def make_session(
         # inside, as the workspace's .git does
         protected = (PROJECT_FILE,) if instructions and instructions.project else ()
         sandbox = Sandbox(workspace, read_only=read_only,
-                          private=private_folders(), protected=protected)
+                          private=private_folders(), protected=protected,
+                          scratch=scratch)
     else:
         sandbox = Unsandboxed(workspace)
     # Where one call runs once its ask to leave the sandbox is approved: only
@@ -360,9 +367,16 @@ def host_sessions(paths, config, limits=None):
     """How the host makes a session (its `make_session`): host_session on
     `config()` as it stands; `limits` over the config's."""
     options = {"limits": limits} if limits else {}
+    # Each session's scratch folder, kept while the host runs: a session
+    # built again (a switch of mode, model or workspace) finds its files
+    scratches = {}
 
     def make(sid, info, log=None, ask=PARK):
-        return host_session(paths, sid, info, log, ask, config=config(), **options)
+        scratch = scratches.setdefault(sid, Scratch())
+        return host_session(
+            paths, sid, info, log, ask, config=config(), scratch=scratch,
+            **options,
+        )
 
     return make
 

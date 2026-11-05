@@ -75,8 +75,8 @@ def pick_box(sandbox, outside, outside_sandbox):
 def real_path(box, path):
     """Where a path the helper saw is on the machine: the same path, as the
     sandbox binds the workspace and the scratch folder at their own; None
-    for one in the scratch folder, kept only while the session is, which the
-    restart note doesn't look at."""
+    for one in the scratch folder, kept only until the host restarts, which
+    the restart note doesn't look at."""
     inside = Path(path)
     if not box.sandboxed or inside.is_relative_to(box.workspace):
         return path

@@ -3,6 +3,15 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.4.1
+
+One path, one place: a path means the same place in the sandbox and out. And a new README.
+
+- **`/tmp` is the machine's:** in the sandbox it is read-only, as the rest of the system is, where before a folder of the session's own stood in its place. A command that writes there now fails with "Read-only file system"; before, the file landed in that folder and went with the session.
+- **The session's scratch folder, `$TMPDIR`,** is writable and at the same path in the sandbox and out (`/tmp/agent-tmp-…`), so the sandboxed commands, the file tools and a command let out of the sandbox all mean one place by one path.
+- A long web page is saved in the scratch folder, and the result gives its real path.
+- **A new README:** ZERO's logo (its name on a dot-matrix panel, a pulse running through the E), a screenshot of the TUI, sections with the longer parts folded away, and a table for the MCP tools.
+
 ## 0.6.2.4
 
 ZERO as a worker: one door for every app, and plain commands for all of it.

@@ -214,7 +214,7 @@ def make_session(
     provider, _ = resolve(model)
     if limits["context_stop"] is None:
         limits["context_stop"] = provider.context_stop
-    # A sandbox of its own per session: its private /tmp starts empty, and a
+    # A sandbox of its own per session: its scratch folder starts empty, and a
     # session made later can't swap it out
     if box is not None:
         if spec.sandbox == "read-only" or not workspace_writes:

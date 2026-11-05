@@ -220,8 +220,8 @@ def fetch_describe(limits):
     return (
         "Fetch a web page or file over http(s) from this machine: HTML comes back "
         f"as Markdown, text, JSON and XML as they are. {size} come back; a "
-        "longer page is saved whole in this session's /tmp, at the path the "
-        "result gives. A local or LAN address "
+        "longer page is saved whole in this session's scratch folder "
+        "($TMPDIR), at the path the result gives. A local or LAN address "
         "(this machine or its network) is fetched only with local_network, which "
         "is asked about first. It runs outside the sandbox: the sandbox's "
         "commands have no network, this tool has."
@@ -509,13 +509,13 @@ def save_page(sandbox, url, text, ext):
     digest = hashlib.sha256(url.encode()).hexdigest()[:6]
     name = f"{stem}-{digest}{ext}"
     if sandbox is not None and getattr(sandbox, "sandboxed", False):
-        folder, shown = Path(sandbox.private_tmp()) / "web", "/tmp/web"
+        # The scratch folder is at the same path in the sandbox and out
+        folder = Path(sandbox.private_tmp()) / "web"
     else:
         folder = Path(pages_folder(sandbox))
-        shown = str(folder)
     folder.mkdir(parents=True, exist_ok=True)
     (folder / name).write_text(text, encoding="utf-8")
-    return f"{shown}/{name}"
+    return str(folder / name)
 
 
 # Outside a sandbox (auto+, bypassPermissions): a folder of the session's own

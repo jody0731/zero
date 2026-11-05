@@ -1,10 +1,11 @@
 """The bwrap sandbox every command runs in.
 
-Read-only system, one writable workspace, a private /tmp per session, no network,
-no desktop sockets, secrets hidden: Codex's Linux shape.
+Read-only system (the machine's /tmp included), one writable workspace, a
+scratch folder per session ($TMPDIR) at the same path in the box and out, no
+network, no desktop sockets, secrets hidden: Codex's Linux shape.
 readOnly's sandbox keeps the workspace read-only too, and so does every
 sandbox whose workspace is /: binding / writable would open the whole
-machine and cover the /dev, /proc and /tmp mounts. The file tools' helper runs
+machine and cover the /dev and /proc mounts. The file tools' helper runs
 through the same command (files/). A call whose ask to leave the
 sandbox was approved runs in Outside: bare, as the user (no root guard).
 ZERO's home (its settings and keys, its history, its socket) and keys are
@@ -106,11 +107,12 @@ class Sandbox:
         for path in self.covered():
             if path.exists():
                 args += ["--tmpfs", str(path)]
-        args += ["--bind", tmp, "/tmp"]
+        # At its own path, so a path means one place in the box and out
+        args += ["--bind", tmp, tmp]
         if self.read_only:
             # Already read-only under / ; bound again only to come back from
             # under a folder kept out of view. Never / itself, which would cover
-            # the /dev, /proc and /tmp mounts above
+            # the /dev, /proc and scratch mounts above
             if self.workspace != Path("/"):
                 args += ["--ro-bind", ws, ws]
         else:
@@ -146,10 +148,11 @@ class Sandbox:
         return args
 
     def private_tmp(self):
-        """This session's /tmp: a real folder, made on first use."""
+        """This session's scratch folder, its $TMPDIR: a real folder, made
+        on first use, at the same path in the sandbox and out."""
         if self.tmp is None:
             self.tmp = tempfile.mkdtemp(prefix="agent-tmp-")
-            # The private /tmp goes when the session's sandbox does
+            # The scratch folder goes when the session's sandbox does
             weakref.finalize(self, shutil.rmtree, self.tmp, True)
         return self.tmp
 
@@ -159,33 +162,35 @@ class Sandbox:
         env = harness_free_env()
         for name in ("DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK", "GPG_AGENT_INFO"):
             env.pop(name, None)
-        env["TMPDIR"] = "/tmp"
+        env["TMPDIR"] = self.private_tmp()
         return env
-
 
     def walls(self):
         """What this sandbox stops, in the words the model reads."""
         if self.read_only:
-            return "nothing is writable but /tmp, and there is no network"
+            return "nothing is writable but $TMPDIR, and there is no network"
         return (
-            "nothing outside the workspace and /tmp is writable, and there is no "
-            "network"
+            "nothing outside the workspace and $TMPDIR is writable, and there is "
+            "no network"
         )
 
     def line(self):
         """What the session's environment says of this box (the prompt)."""
+        tmp = self.private_tmp()
         if self.read_only:
             return (
-                "sandbox: on, read-only. Only /tmp is writable (private to this "
-                "session); there is no network"
+                "sandbox: on, read-only. The system is read-only, /tmp included; "
+                f"only this session's scratch folder, $TMPDIR ({tmp}), is "
+                "writable; there is no network"
             )
         # .git stays read-only (its hooks and config run outside, later), so
         # the line says how a repository changes, not a list of what's locked
         return (
-            "sandbox: on. The system is read-only; only the workspace and /tmp are "
-            "writable (/tmp is private to this session); git's own folder (.git) "
-            "is read-only, so a git command that changes a repository, such as a "
-            "commit, runs outside the sandbox; there is no network"
+            "sandbox: on. The system is read-only, /tmp included; only the "
+            f"workspace and this session's scratch folder, $TMPDIR ({tmp}), are "
+            "writable; git's own folder (.git) is read-only, so a git command "
+            "that changes a repository, such as a commit, runs outside the "
+            "sandbox; there is no network"
         )
 
 
@@ -212,8 +217,8 @@ class Unsandboxed:
 
 class Outside(Unsandboxed):
     """One call let out of the sandbox: bare, as the user, with what the user's
-    account can do (no root guard). Its /tmp is the machine's; $TMPDIR is the session's
-    sandboxed /tmp, so a file it writes there is the sandbox's to read."""
+    account can do (no root guard). Its $TMPDIR is the session's scratch
+    folder, at the path the sandbox's commands see it."""
 
     def __init__(self, workspace, sandbox=None):
         super().__init__(workspace)

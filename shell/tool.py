@@ -61,8 +61,7 @@ def describe(limits):
     outside_sandbox=(
         "boolean",
         "Run this one command outside the sandbox, as the user with the "
-        "network. It is asked about first. Outside, /tmp is the "
-        "machine's own; this session's /tmp is $TMPDIR there",
+        "network. It is asked about first",
     ),
     reason=("string", "With outside_sandbox, or for a job past the session's limit: "
             "why the task needs it"),

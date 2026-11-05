@@ -7,7 +7,7 @@ client where a DeepSeek key exists, `default_web`).
 from settings import Setting
 
 SETTINGS = (
-    # What the model reads of a page (the whole page goes to /tmp); the
+    # What the model reads of a page (the whole page is saved to a file); the
     # results a search returns, at most 50 (DeepSeek's own default is 10); the
     # time a fetch's or a search's every request may take
     Setting("web_chars", "Limits", "Characters a web fetch returns at most",

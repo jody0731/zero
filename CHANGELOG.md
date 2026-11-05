@@ -3,6 +3,19 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.3
+
+Connecting a model, from ZERO itself.
+
+- **Connect a model:** the first `zero` with no model opens a view for one: a provider from the catalog and its API
+  key, or a server of your own (its URL, a key if it takes one, a model it serves, its context window where the
+  server doesn't say). A one-token test call proves it before anything is saved; the first model connected becomes
+  your default.
+- **Models and keys** in `/settings`: connect another model, a new key, a test, remove a server.
+- `zero -p` with no model set says how to connect one.
+- With `ZERO_HOME` naming another home, the sandbox now hides `~/.zero` as well, so the commands ZERO runs never
+  see the usual home's keys or sessions.
+
 ## 0.6.2.2.1
 
 A fix release.

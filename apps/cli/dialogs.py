@@ -29,19 +29,21 @@ class TextView(Screen):
 
 
 class PromptView(ModalScreen):
-    """One line asked: a title, a workspace, a yes. Enter answers; Esc drops."""
+    """One line asked: a title, a workspace, a yes. Enter answers; Esc drops.
+    A secret one (an API key) shows dots for what is typed."""
 
     BINDINGS = [Binding("escape", "dismiss(None)", show=False)]
 
-    def __init__(self, label, text=""):
+    def __init__(self, label, text="", secret=False):
         super().__init__()
         self.label = label
         self.text = text
+        self.secret = secret
 
     def compose(self):
         with Vertical():
             yield Plain(self.label)
-            yield Input(value=self.text, id="answer")
+            yield Input(value=self.text, id="answer", password=self.secret)
 
     def on_mount(self):
         self.query_one("#answer").focus()

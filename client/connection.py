@@ -44,6 +44,10 @@ def connect(path, timeout=30):
     return conn
 
 
+# Seconds a connect may take: the host's test call waits up to a minute
+CONNECT_WAIT = 90
+
+
 def request(path, payload, timeout=30):
     try:
         with connect(path, timeout) as conn:
@@ -127,15 +131,15 @@ class Connection:
             self.ensure()
             self.checked = True
 
-    def verb(self, payload):
+    def verb(self, payload, timeout=30):
         self.ready()
         try:
-            reply = request(self.paths.socket, payload)
+            reply = request(self.paths.socket, payload, timeout)
         except NotRunning:
             if self.ensure is None:
                 raise
             self.ensure()
-            reply = request(self.paths.socket, payload)
+            reply = request(self.paths.socket, payload, timeout)
         if not reply["ok"]:
             raise ProtocolError(reply["error"])
         return reply
@@ -187,6 +191,35 @@ class Connection:
         """Every server the host can reach, with its models by the names a
         session takes, or why it lists none: the host's reply as it is."""
         return self.verb(build("models"))
+
+    def providers(self):
+        """Every model server the host knows, whether its key is there, the
+        default model and why a session on it couldn't start (None: it
+        can): the host's reply as it is."""
+        return self.verb(build("providers"))
+
+    def probe(self, name=None, url=None, key=None):
+        """A server's models, for a pick list: (the url that answered,
+        [{"id", "context"}])."""
+        fields = {k: v for k, v in (("name", name), ("url", url), ("key", key))
+                  if v is not None}
+        reply = self.verb(build("probe", **fields))
+        return reply["url"], reply["models"]
+
+    def connect(self, name, model, url=None, key=None, context=None,
+                title=None, default=None):
+        """A server's model tested, then saved (and the default if none is
+        set, or if asked): the host's reply. A local server may first load
+        the model, so the wait is long."""
+        fields = {"url": url, "key": key, "context": context, "title": title,
+                  "default": default}
+        given = {k: v for k, v in fields.items() if v is not None}
+        return self.verb(build("connect", name=name, model=model, **given),
+                         timeout=CONNECT_WAIT)
+
+    def disconnect(self, name):
+        """The server's key and the user's lines for it taken out."""
+        return self.verb(build("disconnect", name=name))
 
     def settings(self):
         """ZERO's settings, each with its value, and what is wrong with

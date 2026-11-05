@@ -12,16 +12,21 @@ from textual.widgets import Static
 import paths
 import settings
 from apps.cli import config, controller, keybindings
+from apps.cli.connect_screen import ServersView
 from apps.cli.dialogs import CaptureView, ChoiceView, PromptView
 from apps.cli.widgets import ERRORS, Plain
 from client import session_list
 
 
+# The row that opens the model servers and their keys
+MODELS = "models"
+
+
 class SettingsView(Screen):
-    """config.toml's settings, a row each, grouped, and a row that opens the
-    key bindings: the CLI's own first ([cli], config.py), then
-    ZERO's, which the host lists and writes. Each change is written at
-    once."""
+    """config.toml's settings, a row each, grouped, a row that opens the
+    model servers and their keys (connect_screen.py), and one that opens the
+    key bindings: the CLI's own first ([cli], config.py), then ZERO's,
+    which the host lists and writes. Each change is written at once."""
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", show=False),
@@ -39,8 +44,9 @@ class SettingsView(Screen):
         # wrong with config.toml, if anything
         self.values = {}
         self.error = None
-        # Each setting, then the key bindings (None)
-        self.rows = [*config.SETTINGS, None]
+        # Each setting, then the servers (MODELS), then the key bindings
+        # (None)
+        self.rows = [*config.SETTINGS, MODELS, None]
 
     def fetch(self):
         """ZERO's settings and their values, from the host."""
@@ -56,7 +62,7 @@ class SettingsView(Screen):
             self.values[setting.name] = row["value"]
             if setting.shown:
                 shown.append(setting)
-        self.rows = [*config.SETTINGS, *shown, None]
+        self.rows = [*config.SETTINGS, *shown, MODELS, None]
 
     def value(self, setting):
         if setting.name in config.BY_NAME:
@@ -80,6 +86,8 @@ class SettingsView(Screen):
         self.draw()
 
     def on_screen_resume(self):
+        # Back from the servers' view, where the default may have changed
+        self.fetch()
         self.draw()
 
     def draw(self):
@@ -88,12 +96,15 @@ class SettingsView(Screen):
         text = Text()
         group = None
         for index, setting in enumerate(self.rows):
-            heading = setting.group if setting else "Keys"
+            heading = ("Models" if setting == MODELS
+                       else setting.group if setting else "Keys")
             if heading != group:
                 group = heading
                 text.append(f"\n{heading}\n", style="dim")
             style = "reverse" if index == self.selected else ""
-            if setting is None:
+            if setting == MODELS:
+                label, changed, value = "Models and keys…", False, ""
+            elif setting is None:
                 label, changed = "Key bindings…", bool(mine["keys"])
                 value = f"{len(mine['keys'])} changed" if changed else "defaults"
             else:
@@ -114,6 +125,9 @@ class SettingsView(Screen):
                 "Fix the file by hand; until then ZERO runs on the defaults.",
             )
         setting = self.rows[self.selected]
+        if setting == MODELS:
+            return ("The model servers and their API keys: connect a model, "
+                    "a new key, a test, remove. Enter opens them.")
         if setting is None:
             return "Each action's keys: Enter opens them."
         default = controller.setting_text(setting, setting.default,
@@ -125,10 +139,13 @@ class SettingsView(Screen):
         self.draw()
 
     def action_change(self):
+        setting = self.rows[self.selected]
+        if setting == MODELS:
+            self.app.push_screen(ServersView(self.zero))
+            return
         if self.problem():
             self.notify("config.toml can't be read: fix it first", severity="error")
             return
-        setting = self.rows[self.selected]
         if setting is None:
             self.app.push_screen(KeysView(self.zero))
             return
@@ -198,7 +215,7 @@ class SettingsView(Screen):
 
     def action_reset(self):
         setting = self.rows[self.selected]
-        if setting is not None and not self.problem():
+        if setting not in (None, MODELS) and not self.problem():
             self.set(setting, setting.default)
 
 

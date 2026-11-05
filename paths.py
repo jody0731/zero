@@ -31,9 +31,18 @@ SOCKET = "zero.sock"
 UNIT = f"{NAME}-host"
 
 
+def usual_home():
+    """The home when nothing moves it."""
+    return Path.home() / f".{NAME}"
+
+
 def home():
+    """The home: ZERO_HOME's folder, made whole (a host started elsewhere,
+    as its systemd unit, is led to the same one), else the usual."""
     base = os.environ.get(HOME_ENV)
-    return Path(base) if base else Path.home() / f".{NAME}"
+    if not base:
+        return usual_home()
+    return Path(os.path.normpath(Path(base).expanduser().absolute()))
 
 
 def soul_file():
@@ -85,7 +94,7 @@ def run_folder(top):
 
 def unit_name(top):
     """The systemd unit a home's host runs as."""
-    if Path(top).absolute() == (Path.home() / f".{NAME}").absolute():
+    if Path(top).absolute() == usual_home().absolute():
         return UNIT
     tag = hashlib.sha256(str(top).encode()).hexdigest()[:8]
     return f"{UNIT}-{tag}"

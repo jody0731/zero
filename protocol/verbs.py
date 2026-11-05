@@ -28,6 +28,24 @@ A client sends one JSON object on one line and gets one line back:
         → {"ok": true, "grants": [{"id", "by", "scope", "grant", "what"}, ...]}
     {"verb": "forget", "session": "<id>", "grant": "<id>"}
         → {"ok": true, "forgot": "<id>"}
+    {"verb": "providers"}
+        → {"ok": true, "providers": [{"name", "title", "url", "key": "there" |
+           "none needed" | "missing", "needs_key", "own", "shipped", "context",
+           "models": {"<model>": its window or null}}, ...],
+           "default": "<model>" or null,
+           "ready": why a session on the default couldn't start, or null}
+    {"verb": "probe", "name": "<server>", "url": "http://…/v1", "key": "…"}
+        → {"ok": true, "url": "<the one that answered>",
+           "models": [{"id", "context"}, ...]}
+    (a typed url takes the typed key or none; a name alone, its own url and
+    stored key)
+    {"verb": "connect", "name": "<server>", "url": …, "key": …, "model": "…",
+     "context": 8192, "title": "…", "default": false}
+        → {"ok": true, "model": "<server>/<model>", "default": true}
+    (a one-token test call, then the key in keys.toml and the server in
+    models.toml; the first model connected becomes the default)
+    {"verb": "disconnect", "name": "<server>"}
+        → {"ok": true, "removed": "<server>", "default_unset": false}
     {"verb": "settings"}
         → {"ok": true, "settings": [{"name", "group", "label", "default", "kind",
            "choices", "least", "off", "shown", "value"}, ...],
@@ -50,7 +68,8 @@ most; the next record replaces it, and it is never logged).
 `watch_list` stays open too: the session list (archived ones left out), then
 the whole list again each time it changes.
 
-A component's verbs (jobs, stop_job, permissions, forget, models) are described here
+A component's verbs (jobs, stop_job, permissions, forget, models, providers,
+probe, connect, disconnect) are described here
 and handled in the component's own host part, as a tool is described in core's
 registry and runs in its own folder; so a client imports this, and never a
 component. Which verbs only look, so that ZERO's own commands may send them, is
@@ -80,6 +99,10 @@ VERBS = {
     "permissions": ("session",),
     "forget": ("session", "grant"),
     "models": (),
+    "providers": (),
+    "probe": ("name", "url", "key"),
+    "connect": ("name", "url", "key", "model", "context", "title", "default"),
+    "disconnect": ("name",),
     "settings": (),
     "set_setting": ("name", "value"),
     "shutdown": ("force", "reason"),

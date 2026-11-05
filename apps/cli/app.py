@@ -34,6 +34,7 @@ from textual.widgets import Static, TextArea
 import paths
 import settings
 from apps.cli import clipboard, config, controller, keybindings
+from apps.cli.connect_screen import ServersView
 from apps.cli.controller import SessionClient
 from apps.cli.dialogs import CaptureView, ChoiceView, PromptView, TextView
 from apps.cli.session_screen import SessionView
@@ -282,7 +283,27 @@ class Zero(SafeClicks, App):
         if self.show_list:
             self.wait_for_list()
             self.action_sessions()
+        if self.model is None:
+            self.offer_connect()
         self.set_interval(0.25, self.draw)
+        self.focus_input()
+
+    def offer_connect(self):
+        """"Connect a model" in front when new sessions' model can't start:
+        none set, its key missing, no window. A host that can't say leaves
+        it to the first message's refusal."""
+        try:
+            reply = self.connection.providers()
+        except ERRORS:
+            return
+        if reply.get("ready"):
+            self.push_screen(ServersView(self, first=True))
+
+    def connected(self, model):
+        """A model connected from "Connect a model": the session view is
+        back, and new sessions start on it."""
+        self.note(f"ZERO: connected {model}. Write your first message.")
+        self.draw()
         self.focus_input()
 
     def on_unmount(self):

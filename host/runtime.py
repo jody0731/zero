@@ -288,8 +288,9 @@ class Runtime(Sessions):
             model = message.model or self.model
             if not model:
                 raise Refused(
-                    "no model given, and no default model is set (model in "
-                    "config.toml, or /settings)"
+                    "no model is set yet: zero, the terminal, connects one "
+                    "(Connect a model; later /settings, Models and keys), or "
+                    "--model names one"
                 )
             sid = new_id()
             new = {

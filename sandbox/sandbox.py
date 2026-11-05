@@ -52,11 +52,16 @@ def leaves(args):
 def private_folders():
     """What every sandbox hides of ZERO's own, read when a session is made:
     its whole home (the keys, the servers, other sessions' logs, the
-    database, the socket), and the socket's folder where a home too deep for
-    a socket keeps it elsewhere."""
+    database, the socket), the socket's folder where a home too deep for a
+    socket keeps it elsewhere, and the usual home when ZERO runs on another,
+    whose files a second home may link to."""
     top = paths.home()
     run = paths.run_folder(top)
-    return [top] if top in run.parents else [top, run]
+    hidden = [top] if top in run.parents else [top, run]
+    usual = paths.usual_home()
+    if usual.absolute() != top.absolute():
+        hidden.append(usual)
+    return hidden
 
 
 # Its own user, process, IPC and host-name namespaces, no network, no

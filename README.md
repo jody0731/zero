@@ -40,22 +40,27 @@ Every app of ZERO's talks to the same host, which runs the sessions; for now the
 
 ### Connect a model
 
-For now, a model is set by hand in ZERO's home, `~/.zero/`:
+The first `zero` with no model opens **Connect a model**. Pick a provider and paste its API key, or choose **Your own
+server…** and give its URL, a key if it takes one, a model it serves and, where the server doesn't say, its context
+window. ZERO makes a one-token test call before it saves anything, and the first model connected becomes new
+sessions' default. Later, `/settings` → **Models and keys…** connects another model, takes a new key, tests a
+server or removes it.
+
+It all lands in ZERO's home, `~/.zero/`, where the files can be edited by hand too:
 
 ```toml
-# ~/.zero/config.toml: your default model, provider/model
+# ~/.zero/config.toml: new sessions' model, provider/model
 model = "deepseek/deepseek-flash"
 ```
 
 ```toml
-# ~/.zero/keys.toml (chmod 600): the provider's key
+# ~/.zero/keys.toml (mode 600): each provider's key
 [deepseek]
 api_key = "..."
 ```
 
-A server of your own goes in `~/.zero/models.toml`, under a name of your choosing:
-
 ```toml
+# ~/.zero/models.toml: a server of your own, under a name of your choosing
 [myserver]
 url = "http://localhost:8080/v1"
 context = 65536
@@ -74,7 +79,7 @@ zero host status     # the host: whether it runs and what keeps it busy
 ```
 
 Inside, `/help` lists the keys and `/` the commands; `/settings` sets the theme, new sessions' mode and model, the
-limits and the key bindings.
+limits, the models and keys, and the key bindings.
 
 ## Update
 

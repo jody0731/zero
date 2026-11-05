@@ -21,8 +21,8 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 import paths
-from apps.cli.dialogs import ChoiceView, PromptView
-from apps.cli.widgets import ERRORS, Plain
+from apps.tui.dialogs import ChoiceView, PromptView
+from apps.tui.widgets import ERRORS, Plain
 from client import session_list
 
 # The last row: a server the catalog doesn't know

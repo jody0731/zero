@@ -1,5 +1,5 @@
-"""The settings view, through the host's `settings` and `set_setting` verbs
-(ZERO's) and config.py (the CLI's own [cli] table), and the key
+"""The settings view, through the host's `setting/list` and `setting/set`
+messages (ZERO's) and config.py (the CLI's own [cli] table), and the key
 bindings view."""
 
 from rich.text import Text
@@ -11,10 +11,10 @@ from textual.widgets import Static
 
 import paths
 import settings
-from apps.cli import config, controller, keybindings
-from apps.cli.connect_screen import ServersView
-from apps.cli.dialogs import CaptureView, ChoiceView, PromptView
-from apps.cli.widgets import ERRORS, Plain
+from apps.tui import config, controller, keybindings
+from apps.tui.connect_screen import ServersView
+from apps.tui.dialogs import CaptureView, ChoiceView, PromptView
+from apps.tui.widgets import ERRORS, Plain
 from client import session_list
 
 

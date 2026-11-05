@@ -10,9 +10,10 @@ setting unless /settings picks one, or one of Textual's.
 
 What lines and keys mean is in controller.py, testable with no terminal; the
 views are their own files (session_screen, sessions_screen, settings_screen,
-dialogs, widgets). The session in view is followed with `watch`, the list with
-`watch_list`, each in a thread whose events reach the screen as messages; what
-is shown is reported back as `seen`, so any `zero` knows what is news.
+dialogs, widgets). The session in view is followed with `session/watch`, the
+list with `session/list` and `watch`, each in a thread whose events reach the
+screen as messages; what is shown is reported back with `session/seen`, so any
+`zero` knows what is news.
 """
 
 import shutil
@@ -33,14 +34,14 @@ from textual.widgets import Static, TextArea
 
 import paths
 import settings
-from apps.cli import clipboard, config, controller, keybindings
-from apps.cli.connect_screen import ServersView
-from apps.cli.controller import SessionClient
-from apps.cli.dialogs import CaptureView, ChoiceView, PromptView, TextView
-from apps.cli.session_screen import SessionView
-from apps.cli.sessions_screen import SessionsView
-from apps.cli.settings_screen import SettingsView
-from apps.cli.widgets import ERRORS, MessageBox, Plain, Transcript, message, placeholder
+from apps.tui import clipboard, config, controller, keybindings
+from apps.tui.connect_screen import ServersView
+from apps.tui.controller import SessionClient
+from apps.tui.dialogs import CaptureView, ChoiceView, PromptView, TextView
+from apps.tui.session_screen import SessionView
+from apps.tui.sessions_screen import SessionsView
+from apps.tui.settings_screen import SettingsView
+from apps.tui.widgets import ERRORS, MessageBox, Plain, Transcript, message, placeholder
 from client import render, session_list
 from client.follower import Follower
 from client.render import jobs_text
@@ -117,7 +118,7 @@ CaptureView Static { width: 60%; height: auto; border: round $text-warning;
 
 
 class ListWatch:
-    """Keeps the session list current from `watch_list`, across host restarts;
+    """Keeps the session list current from its watch, across host restarts;
     after a `bye` "stopped" it waits until `resume()`."""
 
     def __init__(self, connection, changed):

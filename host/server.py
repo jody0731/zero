@@ -4,11 +4,11 @@ runtime.
 It holds host.lock for its whole life, so whoever holds it owns the socket: it
 removes any socket left behind and listens on a Unix socket only the user can
 open (0600 in a 0700 folder): no port, no password. A client sends one JSON
-object on one line and gets one line back: the verbs and their replies are
-protocol/verbs.py's.
+object on one line and gets one line back: the messages and their replies
+are protocol/messages.py's.
 
 ZERO's own commands (a child of the host, or in its unit: host/peers.py) get
-the looking verbs only, never send, stop or a change: who may answer an ask
+the looking messages only, never a send, a stop or a change: who may answer an ask
 is the user's own client.
 
 The host leaves after `idle_minutes` with no turn, no message that could start
@@ -33,7 +33,7 @@ import settings
 from host import peers
 from host.parts import Refused
 from host.runtime import Message
-from protocol import verbs, version
+from protocol import messages, version
 
 # How long a stop waits for running turns
 DRAIN_SECONDS = 10
@@ -45,13 +45,17 @@ LIST_GATHER = 0.1
 # Seconds between two drafts on a watch: ten a second at most
 DRAFT_EVERY = 0.1
 BYES = ("stopped", "restart")
-# The verbs the kernel serves itself; a part adds its own (host/parts.py)
-SERVED = ("hello", "send", "stop", "continue", "list", "history", "watch",
-          "watch_list", "seen", "rename", "archive", "delete", "set",
-          "settings", "set_setting", "shutdown")
+# The messages the kernel serves itself; a part adds its own (host/parts.py)
+SERVED = ("host/hello", "host/stop", "session/send", "session/continue",
+          "session/stop", "session/list", "session/read", "session/watch",
+          "session/seen", "session/rename", "session/archive",
+          "session/unarchive", "session/delete", "session/set", "setting/list",
+          "setting/set")
 # Those of them that only look, which ZERO's own commands may send too
 # (peers.py); a part names its own in `looking`
-LOOKING = ("hello", "list", "history", "watch", "watch_list")
+LOOKING = ("host/hello", "session/list", "session/read", "session/watch")
+HOUSEKEEPING = ("session/seen", "session/rename", "session/archive",
+                "session/unarchive", "session/delete", "session/set")
 
 
 class AlreadyRunning(Exception):
@@ -213,16 +217,16 @@ class Host:
         conn.settimeout(10)
         try:
             request = json.loads(read_line(conn))
-            verb = request.get("verb") if isinstance(request, dict) else None
+            name = request.get("message") if isinstance(request, dict) else None
             # ZERO's own commands may look, never act
-            if (verb not in LOOKING and verb not in self.runtime.looking
+            if (name not in LOOKING and name not in self.runtime.looking
                     and self.peers.own(peers.peer_pid(conn))):
-                raise Refused(peers.refused(self.runtime.looking))
-            if isinstance(request, dict) and request.get("verb") == "watch":
+                raise Refused(peers.refused((*LOOKING, *self.runtime.looking)))
+            if name == "session/watch":
                 self.watch(conn, request)
                 return
-            if isinstance(request, dict) and request.get("verb") == "watch_list":
-                self.watch_list(conn)
+            if name == "session/list" and request.get("watch"):
+                self.watch_list(conn, request)
                 return
             reply = self.answer(request)
         except Refused as e:
@@ -240,12 +244,12 @@ class Host:
     def answer(self, request):
         if not isinstance(request, dict):
             return error("a request is a JSON object")
-        verb = request.get("verb")
-        if verb == "hello":
+        name = request.get("message")
+        if name == "host/hello":
             return self.hello(request)
-        if verb == "send":
+        if name == "session/send":
             return self.send(request)
-        if verb == "stop":
+        if name == "session/stop":
             sid = request.get("session")
             source = request.get("source")
             if not isinstance(sid, str) or not isinstance(source, str):
@@ -257,7 +261,7 @@ class Host:
                 return {"ok": True, **self.runtime.stop_turn(sid, msg_id, source)}
             except Refused as exc:
                 return error(str(exc))
-        if verb == "continue":
+        if name == "session/continue":
             sid, msg_id = request.get("session"), request.get("id")
             source = request.get("source")
             if not isinstance(sid, str) or not isinstance(source, str):
@@ -265,45 +269,40 @@ class Host:
             if not isinstance(msg_id, str) or not 0 < len(msg_id) <= 200:
                 return error("a continue needs an id: a string the sender picks")
             return {"ok": True, **self.runtime.continue_turn(sid, msg_id, source)}
-        if verb == "list":
-            archived = request.get("archived", False)
-            workspace = request.get("workspace")
-            if archived is not None and not isinstance(archived, bool):
-                return error("archived must be true, false or null")
-            if workspace is not None and not isinstance(workspace, str):
-                return error("workspace must be a string")
+        if name == "session/list":
+            archived, workspace = listed(request)
             return {"ok": True, "sessions": self.runtime.sessions(archived, workspace)}
-        if verb == "history":
+        if name == "session/read":
             before = request.get("before")
             if before is not None and type(before) is not int:
                 return error("before must be an integer")
             sid, after, limit = window(request)
             records, gap = self.runtime.history(sid, after, limit, before)
             return {"ok": True, "records": records, "gap": gap}
-        if verb in ("seen", "rename", "archive", "delete", "set"):
-            return self.housekeeping(verb, request)
-        if verb in self.runtime.verbs:
-            # A part's verb
+        if name in HOUSEKEEPING:
+            return self.housekeeping(name, request)
+        if name in self.runtime.messages:
+            # A part's message
             try:
-                return self.runtime.verbs[verb](request)
+                return self.runtime.messages[name](request)
             except Refused as exc:
                 return error(str(exc))
-        if verb == "settings":
+        if name == "setting/list":
             return self.settings()
-        if verb == "set_setting":
-            name = request.get("name")
-            if not isinstance(name, str):
-                return error("set_setting needs a setting's name, a string")
+        if name == "setting/set":
+            setting = request.get("name")
+            if not isinstance(setting, str):
+                return error("setting/set needs a setting's name, a string")
             config = self.config()
-            problem = config.set(name, request.get("value"))
+            problem = config.set(setting, request.get("value"))
             if problem:
                 return error(problem)
-            return {"ok": True, "set": {name: config.values[name]}}
-        if verb == "shutdown":
+            return {"ok": True, "set": {setting: config.values[setting]}}
+        if name == "host/stop":
             return self.shutdown(request)
-        served = {*SERVED, *self.runtime.verbs}
-        listed = ", ".join(v for v in verbs.VERBS if v in served)
-        return error(f"unknown verb {verb!r}; verbs: {listed}")
+        served = {*SERVED, *self.runtime.messages}
+        known = ", ".join(m for m in messages.MESSAGES if m in served)
+        return error(f"unknown message {name!r}; messages: {known}")
 
     def hello(self, request):
         theirs = request.get("protocol")
@@ -338,35 +337,31 @@ class Host:
         config = self.config()
         return {"ok": True, "settings": config.listing(), "error": config.error}
 
-    def housekeeping(self, verb, request):
-        """`seen`, `rename`, `archive`, `delete` and `set`."""
+    def housekeeping(self, name, request):
+        """A session's seen, rename, archive, unarchive, delete and set."""
         sid = request.get("session")
         if not isinstance(sid, str):
-            return error(f"{verb} needs a session string")
-        if verb == "seen":
+            return error(f"{name} needs a session string")
+        if name == "session/seen":
             seq = request.get("seq")
             if type(seq) is not int or seq < 0:
-                return error("seen needs a seq, a nonnegative integer")
+                return error("session/seen needs a seq, a nonnegative integer")
             self.runtime.seen(sid, seq)
-        elif verb == "rename":
+        elif name == "session/rename":
             text = request.get("title")
             if not isinstance(text, str):
-                return error("rename needs a title string")
+                return error("session/rename needs a title string")
             self.runtime.rename(sid, text)
-        elif verb == "archive":
-            archived = request.get("archived", True)
-            if not isinstance(archived, bool):
-                return error("archived must be true or false")
-            self.runtime.archive(sid, archived)
-        elif verb == "set":
+        elif name in ("session/archive", "session/unarchive"):
+            self.runtime.archive(sid, name == "session/archive")
+        elif name == "session/set":
             values = {
                 name: request.get(name)
                 for name in ("mode", "model", "workspace", "effort")
             }
             if any(v is not None and not isinstance(v, str) for v in values.values()):
-                return error(
-                    "set takes mode, model, workspace and effort, each a string"
-                )
+                return error("session/set takes mode, model, workspace and "
+                             "effort, each a string")
             return {"ok": True, **self.runtime.set_session(sid, **values)}
         else:
             return {"ok": True, "trash": self.runtime.delete(sid)}
@@ -378,7 +373,7 @@ class Host:
         force = request.get("force", False)
         reason = request.get("reason", "stopped")
         if not isinstance(force, bool) or reason not in BYES:
-            return error(f"shutdown takes force (boolean) and reason {BYES}")
+            return error(f"host/stop takes force (boolean) and reason {BYES}")
         busy = self.runtime.busy()
         if busy and (not force or reason == "restart"):
             return {"ok": True, "stopping": False, "busy": busy}
@@ -459,15 +454,20 @@ class Host:
         finally:
             self.runtime.unsubscribe(sid, token)
 
-    def watch_list(self, conn):
+    def watch_list(self, conn, request):
         """The list, then the whole list again whenever it changed, its changes
         gathered for a moment; it ends with a `bye` when the host stops."""
+        try:
+            archived, workspace = listed(request)
+        except Refused as exc:
+            self.emit(conn, error(str(exc)))
+            return
         conn.settimeout(None)
         sent = None
         version = self.runtime.list_version
         try:
             while True:
-                sessions = self.runtime.sessions(archived=False)
+                sessions = self.runtime.sessions(archived, workspace)
                 if sessions != sent:
                     self.emit(conn, {"sessions": sessions})
                     sent = sessions
@@ -493,13 +493,24 @@ class Host:
         conn.sendall((json.dumps(event, ensure_ascii=False) + "\n").encode())
 
 
+def listed(request):
+    """session/list's `archived` (False when left out) and `workspace`."""
+    archived = request.get("archived", False)
+    workspace = request.get("workspace")
+    if archived is not None and not isinstance(archived, bool):
+        raise Refused("archived must be true, false or null")
+    if workspace is not None and not isinstance(workspace, str):
+        raise Refused("workspace must be a string")
+    return archived, workspace
+
+
 def window(request, limit=50):
     """A request's session, `after` (a seq) and `limit` (None: all)."""
     sid = request.get("session")
     after = request.get("after", 0)
     limit = request.get("limit", limit)
     if not isinstance(sid, str):
-        raise Refused("this verb needs a session string")
+        raise Refused("this message needs a session string")
     if type(after) is not int or after < 0:
         raise Refused("after must be a nonnegative integer")
     if limit is not None and (type(limit) is not int or limit < 1):

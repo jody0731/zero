@@ -1,16 +1,23 @@
-"""ZERO's command: the terminal client, and the host when asked.
+"""ZERO's command line: the plain commands, and the words that start the full
+screen, `zero mcp serve` and the host, each an entry of its own.
 
 Usage:
     zero                     open this folder's latest session (at /: the last
                              one you worked in), or a new one on your first line
     zero new                 a new session, this folder its workspace
     zero -r                  open the session list
-    zero -p TEXT [--json] [--session ID] [--mode MODE] [--model NAME]
-                             for scripts: send, wait until the session settles,
-                             print the answer (or every event, as JSON lines)
+    zero -p TEXT [--json | --events] [--session ID] [--cd DIR] ...
+                             zero session send: send, wait until the session
+                             settles, print the answer (--json: one result
+                             object; --events: every event, as JSON lines)
+    zero session|job|grant|model|setting ...
+                             the plain commands, one for each of the
+                             protocol's messages (commands.py)
     zero host status         whether the host runs, and what keeps it busy
+                             (zero host hello the same; --json its reply)
     zero host stop [--force] stop it (asked first if busy)
     zero host [--model NAME] run the host in this terminal
+    zero mcp serve           ZERO as an MCP server on stdio, for other agents
     zero install [--bin DIR] put the zero command on the PATH (~/.local/bin)
     zero uninstall           remove the command
     zero update              an installed ZERO to its newest release
@@ -68,128 +75,21 @@ if __name__ == "__main__":
     # one, whose names (config, main) would hide ZERO's own
     sys.path[0] = str(Path(__file__).resolve().parents[2])
 
-import settings  # noqa: E402
-from apps.cli import config, update  # noqa: E402
-from client import launcher, render, session_list  # noqa: E402
+from apps.cli import commands, update  # noqa: E402
+# The readers live with the commands; tests and the evals reach them here
+from apps.cli.commands import (  # noqa: E402, F401
+    ending, find, history_text, list_sessions, print_turn, read_session, show,
+)
+from client import launcher  # noqa: E402
 from client.connection import (  # noqa: E402
     Connection, NoAnswer, NotRunning, ProtocolError,
 )
 from client.launcher import (  # noqa: E402
     Hung, busy_text, ensure_host, hello, host_pid,
 )
-from client.render import duration, jobs_text  # noqa: E402
 from paths import Paths  # noqa: E402
 
 NAME = "ZERO"
-
-
-def find(sessions, sid):
-    """A session by its id or the start of it; the newest with none given."""
-    if sid is None:
-        return sessions[0] if sessions else None
-    matches = [s for s in sessions if s["id"].startswith(sid)]
-    if len(matches) != 1:
-        found = "no session" if not matches else f"{len(matches)} sessions"
-        raise LookupError(f"{found} matching {sid!r}")
-    return matches[0]
-
-
-def read_session(host, sid=None):
-    """A session's row (its open ask included) and its whole log, from the
-    host. `host`: a Connection, or anything with sessions() and history()."""
-    info = find(host.sessions(), sid)
-    if info is None:
-        return None, []
-    return info, host.history(info["id"], limit=None)[0]
-
-
-def history_text(info, records, working=True):
-    lines = [
-        f"{info['id']}  {info['state']}  {info['mode']}  {info['model']}  "
-        f"{info['workspace']}",
-        info["title"], "",
-    ]
-    started = None
-    restarts = 0
-    for record in records:
-        clock = datetime.fromisoformat(record["time"]).strftime("%H:%M:%S")
-        if record["type"] == "session" and record.get("note"):
-            lines.append(f"--- {record['note']} ---")
-        elif record["type"] == "note" and record.get("kind") in (
-            "restarted", "upgraded"
-        ):
-            lines.append(f"--- {record['text']} ---")
-            restarts += record.get("kind") == "restarted"
-        elif record["type"] == "user":
-            if not record.get("steer"):
-                started, restarts = record["time"], 0
-            mark = " (steer)" if record.get("steer") else ""
-            # A background job's notice isn't the user's
-            who = "job" if record.get("source") == "job" else "you"
-            lines.append(f"{clock}  {who}{mark}  {record['text']}")
-        elif record["type"] == "ask":
-            why = render.reason(record["why"])
-            asked = f"asks: {record['command']}" + (f" ({why})" if why else "")
-            lines.append(f"{clock}  {NAME}  {asked}")
-        elif record["type"] == "answer":
-            reply = "approved" if record["yes"] else "replied; not run"
-            lines.append(f"{clock}  you  {reply}")
-        elif record["type"] == "turn_end":
-            lines.append(f"{clock}  {NAME}  {ending(record, started, restarts)}")
-    ask = info.get("ask")
-    if working and ask is not None:
-        age = waited(datetime.now().astimezone() - datetime.fromtimestamp(
-            ask["created"]
-        ).astimezone())
-        lines.append(f"          {NAME}  (waiting {age} for your answer)")
-    elif working and info["state"] in ("running", "waiting"):
-        lines.append(f"          {NAME}  (working on it)")
-    return "\n".join(lines)
-
-
-def waited(delta):
-    minutes = int(delta.total_seconds() // 60)
-    if minutes < 1:
-        return "under a minute"
-    if minutes < 120:
-        return f"{minutes} minute{'' if minutes == 1 else 's'}"
-    return f"{minutes // 60} hours"
-
-
-def show(host, sid=None):
-    """A session's questions and answers, from its log, then its jobs."""
-    info, records = read_session(host, sid)
-    if info is None:
-        return "No sessions yet."
-    text = history_text(info, records)
-    jobs = host.jobs(info["id"])
-    if jobs:
-        text += "\n\njobs:\n" + jobs_text(jobs)
-    return text
-
-
-def list_sessions(host):
-    lines = []
-    for info in host.sessions():
-        clock = datetime.fromtimestamp(info["updated"]).astimezone()
-        lines.append(
-            f"{info['id']}  {info['state']}  {info['mode']}  "
-            f"{clock:%Y-%m-%d %H:%M}  {info['workspace']}  {info['title']}"
-        )
-    return "\n".join(lines) if lines else "No sessions yet."
-
-
-def ending(record, started=None, restarts=0):
-    """The answer, or how the turn ended without one."""
-    if record["outcome"] == "answered":
-        return f"{record['answer']}  ({duration(record, started, restarts)})"
-    why = record.get("detail")
-    if record.get("error"):
-        why = record["error"].strip().splitlines()[-1]
-    text = f"({record['outcome']}: {why})" if why else f"({record['outcome']})"
-    if started and restarts:
-        text += f"  ({duration(record, started, restarts)})"
-    return text
 
 
 # ZERO's folder: the clone an update moves
@@ -229,27 +129,42 @@ def uninstall():
     print(f"Removed {launcher}. ZERO's home stays in {Paths().home}.")
 
 
-def host_status(paths):
+def host_status(paths, as_json=False):
+    """`zero host hello` (and `status`): whether the host runs, never
+    starting one; `as_json`, its hello as one object."""
     try:
         reply = hello(paths)
     except NoAnswer:
-        print(f"ZERO's host (pid {host_pid(paths)}) doesn't answer; stop it with: "
-              "zero host stop --force")
-        return 1
+        reply = None
+        said = (f"ZERO's host (pid {host_pid(paths)}) doesn't answer; stop it "
+                "with: zero host stop --force")
+    else:
+        said = "ZERO's host isn't running."
     if reply is None:
-        print("ZERO's host isn't running.")
+        print(json.dumps({"ok": False, "error": said}) if as_json else said)
         return 1
+    if as_json:
+        print(json.dumps(reply, ensure_ascii=False))
+        return 0
     started = datetime.fromtimestamp(reply["started"]).astimezone()
     print(f"ZERO's host is running (pid {reply['pid']}, since {started:%H:%M}, "
           f"build {reply['build']}): {busy_text(reply['busy'])}.")
     return 0
 
 
-def host_stop(paths, force=False, confirm=None, seconds=20):
+def host_stop(paths, force=False, confirm=None, seconds=20, as_json=False):
     """Stop the host cleanly, asking first while anything runs. `force`: for a
-    host that doesn't answer, SIGTERM and then SIGKILL."""
+    host that doesn't answer, SIGTERM and then SIGKILL. `as_json`: one
+    host/stop, its reply printed, nothing asked."""
     if force:
         return kill_host(paths)
+    if as_json:
+        try:
+            reply = launcher.shutdown(paths)
+        except NotRunning:
+            reply = {"ok": False, "error": "ZERO's host isn't running."}
+        print(json.dumps(reply, ensure_ascii=False))
+        return 0 if reply.get("stopping") else 1
     try:
         reply = launcher.shutdown(paths)
     except NoAnswer:
@@ -326,29 +241,62 @@ def run_host(model=None):
     os.execv(sys.executable, argv)
 
 
-# The host checks a mode's name: this command knows no modes of its own
-MODES_HELP = "the mode the session starts in (/mode in zero lists them)"
-COMMANDS = ("zero", "zero new", "zero -r", "zero -p TEXT", "zero host status|stop",
+# The other apps' own entries, each run in this process's place: the
+# command line imports none of them, nor they it
+TUI_SCRIPT = ROOT / "apps" / "tui" / "main.py"
+MCP_SCRIPT = ROOT / "apps" / "mcp" / "main.py"
+
+
+def run_tui(argv):
+    """`zero`, `zero new`, `zero -r`: the full screen, given the words as
+    they came."""
+    os.execv(sys.executable, [sys.executable, str(TUI_SCRIPT), *argv])
+
+
+def run_mcp():
+    """`zero mcp serve`: ZERO as an MCP server."""
+    os.execv(sys.executable, [sys.executable, str(MCP_SCRIPT)])
+
+
+COMMANDS = ("zero", "zero new", "zero -r", "zero -p TEXT", "zero session …",
+            "zero job …", "zero grant …", "zero model …", "zero setting …",
+            "zero host hello|stop|status|run", "zero mcp serve",
             "zero install|uninstall", "zero update")
-OWN = ("new", "host", "install", "uninstall", "update")
+OWN = ("host", "mcp", "install", "uninstall", "update")
+# The full screen's word; its flags are its own (apps/tui/main.py)
+TUI_WORDS = ("new",)
 
 
 def parser_for(argv):
-    """(parser, args): `args.command` is one of OWN or None (a bare `zero`,
-    `-r` or `-p`)."""
+    """(parser, args): `args.command` is one of OWN, "family" (commands.py's
+    families), "tui" (`zero new`) or None (a bare `zero`, `-r` or `-p`)."""
+    if argv and argv[0] in TUI_WORDS:
+        parser = argparse.ArgumentParser(prog="zero")
+        args = argparse.Namespace(command="tui", p=None, words=[])
+        return parser, args
+    if argv and argv[0] in commands.FAMILIES:
+        parser = commands.parser()
+        args = parser.parse_args(argv)
+        args.command = "family"
+        return parser, args
     if argv and argv[0] in OWN:
         parser = argparse.ArgumentParser(prog=f"zero {argv[0]}")
-        if argv[0] == "new":
-            parser.add_argument("--mode", help=MODES_HELP)
-            parser.add_argument("--model")
-        elif argv[0] == "host":
+        if argv[0] == "host":
             parser.add_argument("action", nargs="?", default="run",
-                                choices=("run", "status", "stop"))
+                                choices=("run", "hello", "status", "stop"))
             parser.add_argument("--model", help="run: new sessions' default model")
             parser.add_argument(
                 "--force", action="store_true",
                 help="stop: SIGTERM, then SIGKILL, for a host that hangs",
             )
+            parser.add_argument("--json", action="store_true",
+                                help="hello, status, stop: the reply as one "
+                                     "JSON object")
+        elif argv[0] == "mcp":
+            # The server side alone for now; list, get, add and remove (the
+            # servers ZERO itself uses) come with the toolbox
+            parser.add_argument("action", choices=("serve",),
+                                help="serve: ZERO as an MCP server on stdio")
         elif argv[0] == "install":
             parser.add_argument("--bin", metavar="DIR",
                                 help="where the launcher goes (~/.local/bin)")
@@ -362,85 +310,18 @@ def parser_for(argv):
     )
     parser.add_argument("-r", action="store_true", help="open the session list")
     parser.add_argument("-p", metavar="TEXT",
-                        help="send TEXT, wait until the session settles, print "
-                             "the answer (for scripts)")
-    parser.add_argument("--json", action="store_true",
-                        help="with -p: print every event as a JSON line")
-    parser.add_argument("--session", metavar="ID",
-                        help="with -p: this session (its id or the start of "
-                             "it), not a new one")
-    parser.add_argument("--mode", help=MODES_HELP)
-    parser.add_argument("--model")
+                        help="zero session send TEXT: send, wait until the "
+                             "session settles, print the answer (for scripts); "
+                             "- reads stdin")
+    commands.send_flags(parser)
     parser.add_argument("words", nargs="*", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     args.command = None
     return parser, args
 
 
-def print_turn(connection, args, workspace, out=print):
-    """`zero -p`: send, follow the session until it settles (Pi's
-    `agent_settled`: a queued message or a job's notice may start another
-    turn after one ends), print the answer. Exits 0 answered, 1 not, 2 when a
-    question waits (printed, with how to answer it)."""
-    sid, after, reply_to = None, 0, None
-    if args.session is not None:
-        info = find(connection.sessions(), args.session)
-        sid = info["id"]
-        records, _ = connection.history(sid, limit=1)
-        after = records[-1]["seq"] if records else 0
-        # A reply to the waiting question, marked for it, as its box sends one
-        if info.get("ask") is not None:
-            reply_to = info["ask"]["id"]
-    reply = connection.send(args.p, session=sid, mode=args.mode, model=args.model,
-                            workspace=workspace, reply_to=reply_to)
-    sid = reply["session"]
-    last = None
-    with connection.watch(sid, after=after) as stream:
-        for event in stream:
-            if args.json:
-                out(json.dumps(event, ensure_ascii=False))
-            record = event.get("record", {})
-            if record.get("type") == "turn_end":
-                last = record
-            settled = event.get("settled")
-            if settled is None:
-                continue
-            ask = settled.get("ask")
-            if ask is not None:
-                if not args.json:
-                    out(render.ask_line(ask))
-                    out(f"Answer with: zero -p [TEXT] --session {sid}")
-                return 2
-            if last is None:
-                if not args.json:
-                    out("(nothing ran)")
-                return 1
-            if not args.json:
-                out(ending(last))
-            return 0 if last["outcome"] == "answered" else 1
-    raise NotRunning("ZERO's watch ended before the session settled")
-
-
-def interactive(connection, args, workspace, older):
-    """Which session a bare `zero` opens: at /, the last one
-    the user worked in; elsewhere that folder's latest, or a new one made on
-    the first message. `zero new` a new one; `-r` the list."""
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
-        raise LookupError("zero needs a terminal; scripts use: zero -p [TEXT]")
-    greeting = connection.hello()
-    defaults = {name: greeting.get(name)
-                for name in ("mode", "model", "modes", "default_model")}
-    session, show_list = None, False
-    if args.command != "new":
-        live = connection.sessions(archived=False)
-        session, show_list = session_list.opening(workspace, greeting.get("last"), live)
-        show_list = show_list or args.r
-    from apps.cli.app import terminal
-
-    return terminal(
-        connection, workspace, session=session, mode=args.mode, model=args.model,
-        defaults=defaults, show_list=show_list, older=older,
-    )
+def argv_of(argv):
+    return sys.argv[1:] if argv is None else argv
 
 
 def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
@@ -448,7 +329,7 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
     """`start_command`, `start_popen`, `unit` and `systemd` are for tests: the
     host's argv, how a detached one is spawned, a throwaway unit name, and
     whether to use systemd (None: ask it)."""
-    parser, args = parser_for(sys.argv[1:] if argv is None else argv)
+    parser, args = parser_for(argv_of(argv))
     if args.command is None and args.words:
         # A stray word would start a session: it is refused
         print(f"zero: unknown command {' '.join(args.words)!r}. Commands: "
@@ -464,37 +345,28 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
     if args.command == "uninstall":
         uninstall()
         return 0
+    if args.command == "mcp":
+        return run_mcp()
+    if args.command == "tui" or (args.command is None and args.p is None):
+        return run_tui(argv_of(argv))
     paths = Paths()
-    notes = []
-    # The CLI's own settings under [cli], once, before any host reads the file
-    config.move()
-
-    def report(text):
-        notes.append(text)
-        print(text, file=sys.stderr)
-
     options = {"command": start_command, "popen": start_popen, "systemd": systemd,
-               "report": report}
+               "report": lambda text: print(text, file=sys.stderr)}
     if unit is not None:
         options["unit"] = unit
     connection = Connection(paths, ensure=lambda: ensure_host(paths, **options))
-    workspace = str(Path.cwd().resolve())
     try:
         if args.command == "host":
-            if args.action == "status":
-                return host_status(paths)
+            if args.action in ("hello", "status"):
+                return host_status(paths, args.json)
             if args.action == "stop":
-                return host_stop(paths, force=args.force)
+                return host_stop(paths, force=args.force, as_json=args.json)
             run_host(args.model)
-        elif args.command is None and args.p is not None:
-            return print_turn(connection, args, workspace)
+        elif args.command == "family":
+            return commands.run(argv_of(argv), connection)
         else:
-            return interactive(
-                connection, args, workspace,
-                older=lambda: any("replaced once it is idle" in n for n in notes),
-            )
-    except (NotRunning, ProtocolError, LookupError, Hung,
-            settings.SettingsError) as error:
+            return print_turn(connection, args, commands.workspace_of(args.cd))
+    except (NotRunning, ProtocolError, LookupError, Hung) as error:
         print(error, file=sys.stderr)
         return 1
     except OSError as error:

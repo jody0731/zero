@@ -1,5 +1,5 @@
 """Connecting a model: a server's models asked for, a one-token test call,
-and the server, its key and the user's default saved (model/host.py's verbs).
+and the server, its key and the user's default saved (model/host.py's messages).
 
 A server is asked through the OpenAI chat API's standard doors: /v1/models
 for its models (with each one's window where the server says: vLLM's
@@ -221,7 +221,7 @@ def catalog():
     return providers.load(providers.CATALOG, providers.CATALOG)
 
 
-# ------------------------------------------------------------- the verbs
+# ---------------------------------------------------------- the messages
 
 
 def full_name(name, model):

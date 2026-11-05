@@ -1,5 +1,5 @@
 """The jobs' part in the host (host/parts.py): their rows, their notices,
-check-ins, and the `jobs` and `stop_job` verbs.
+check-ins, and the `job/list` and `job/stop` messages.
 
 process.py runs a job's process; this keeps what the session's state needs.
 A job's end, a check-in and a loss each reach its session as a `job` message in
@@ -103,7 +103,7 @@ class SessionJobs:
 
 class Jobs(Part):
     name = "jobs"
-    looking = ("jobs",)
+    looking = ("job/list",)
     schema = SCHEMA
     tables = ("jobs",)
 
@@ -125,21 +125,21 @@ class Jobs(Part):
         self.folder = runtime.paths.jobs
         self.wake = runtime.wake
 
-    def verbs(self):
-        return {"jobs": self.jobs_verb, "stop_job": self.stop_job_verb}
+    def messages(self):
+        return {"job/list": self.list_message, "job/stop": self.stop_message}
 
-    def jobs_verb(self, request):
-        """A session's jobs, ended ones too (`zero show`); or every running
+    def list_message(self, request):
+        """A session's jobs, ended ones too; or every running
         one."""
         sid = request.get("session")
         if sid is not None and not isinstance(sid, str):
             raise Refused("session must be a string")
         return {"ok": True, "jobs": self.rows(sid)}
 
-    def stop_job_verb(self, request):
+    def stop_message(self, request):
         job = request.get("job")
         if not isinstance(job, str):
-            raise Refused("stop_job needs the job's id, a string")
+            raise Refused("job/stop needs the job's id, a string")
         return {"ok": True, "stopped": self.stop_job(job, by="user")}
 
     def rows(self, sid=None):

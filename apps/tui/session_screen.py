@@ -7,8 +7,8 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 
-from apps.cli import controller
-from apps.cli.widgets import MessageBox, Plain, Transcript, placeholder
+from apps.tui import controller
+from apps.tui.widgets import MessageBox, Plain, Transcript, placeholder
 
 
 class SessionView(Screen):

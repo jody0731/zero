@@ -36,7 +36,10 @@ Nothing starts at login.
 
 ## Use
 
-Every app of ZERO's talks to the same host, which runs the sessions; for now there is one, the terminal (`zero`).
+Every app of ZERO's talks to the same host, which runs the sessions, through one protocol: the terminal (`zero`),
+the plain commands, and `zero mcp serve` for other agents. The protocol is JSON lines over the host's socket, its
+messages named noun/verb (`session/send`, `job/stop`), each published with its fields and reply as JSON Schema in
+[protocol/schema.json](protocol/schema.json), so an app in any language can be built on it.
 
 ### Connect a model
 
@@ -80,6 +83,38 @@ zero host status     # the host: whether it runs and what keeps it busy
 
 Inside, `/help` lists the keys and `/` the commands; `/settings` sets the theme, new sessions' mode and model, the
 limits, the models and keys, and the key bindings.
+
+### Plain commands
+
+Everything a caller does has a command, named as its message: a family, then the action.
+
+```bash
+zero session send "a task" --cd ~/project --json   # one result object when it settles
+zero session list                                  # read, watch, stop, continue, rename, archive, delete, set
+zero job list                                      # job stop JOB
+zero grant list ID                                 # grant forget ID GRANT
+zero model provider list                           # probe, connect, disconnect
+zero setting set max_steps 80                      # setting list
+```
+
+A session or a job is named by its id or the start of it. A long text can come from stdin (`-`); a key only does
+(`--key-stdin`), never as an argument. `--json` prints the host's reply as one JSON object; `session send --json`
+prints the session, its outcome, the answer, a waiting question, the tokens and the seconds. The exit status is 0
+when it worked, 1 when not, 2 when a question waits: answer it with `zero session send TEXT --session ID`, or pick
+one of its choices with `--choice yes|session|saved|no`. `zero -p TEXT` is short for `zero session send TEXT`.
+
+### For other agents
+
+`zero mcp serve` serves ZERO as an MCP server on stdio. In Claude Code:
+
+```bash
+claude mcp add zero -- zero mcp serve
+```
+
+Its tools: `zero_start` (a task in a folder, in a mode; the session's id at once), `zero_wait` (the result when it
+settles), `zero_reply` (an answer to a waiting question, or a follow-up) and `zero_stop`. The mode decides who
+answers ZERO's questions: in `default` the calling agent does, with `zero_reply`; in `auto` and `auto+` ZERO's judge
+does.
 
 ## Update
 

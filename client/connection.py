@@ -1,5 +1,5 @@
 """JSON-line requests and a closeable, long-lived watch stream; each request
-built from the protocol's verbs (protocol/verbs.py).
+built from the protocol's messages (protocol/messages.py).
 
 A connection that fails or drops before its reply is NotRunning: the caller may
 start a host and send the same request again, with the same message id, which
@@ -12,7 +12,7 @@ import os
 import socket
 import uuid
 
-from protocol.verbs import request as build
+from protocol.messages import request as build
 
 
 class NotRunning(Exception):
@@ -68,15 +68,15 @@ def request(path, payload, timeout=30):
 
 
 class Watch:
-    """A stream of events: a session's (`watch`), or the session list's
-    (`watch_list`, with `payload` given)."""
+    """A stream of events: a session's (`session/watch`), or the session
+    list's (`session/list` with `watch`, `payload` given)."""
 
     def __init__(self, path, session=None, after=0, payload=None):
         self.conn = connect(path)
         self.stream = None
         # The reason the host gave when it closed this watch, if it did
         self.bye = None
-        payload = payload or build("watch", session=session, after=after)
+        payload = payload or build("session/watch", session=session, after=after)
         try:
             self.conn.sendall((json.dumps(payload) + "\n").encode())
             self.conn.settimeout(None)
@@ -131,7 +131,7 @@ class Connection:
             self.ensure()
             self.checked = True
 
-    def verb(self, payload, timeout=30):
+    def call(self, payload, timeout=30):
         self.ready()
         try:
             reply = request(self.paths.socket, payload, timeout)
@@ -152,19 +152,19 @@ class Connection:
         one of the open ask's choices, picked at its box."""
         msg_id = str(uuid.uuid4())
         request = build(
-            "send", id=msg_id, text=text, session=session, mode=mode,
+            "session/send", id=msg_id, text=text, session=session, mode=mode,
             model=model, source=self.source, reply_to=reply_to,
             workspace=workspace, when_busy=when_busy,
         )
         if choice is not None:
             request["choice"] = choice
-        return {**self.verb(request), "id": msg_id}
+        return {**self.call(request), "id": msg_id}
 
     def go_on(self, session):
-        """`continue`: a turn that ended without an answer goes on."""
+        """`session/continue`: a turn that ended without an answer goes on."""
         msg_id = str(uuid.uuid4())
-        return {**self.verb(build(
-            "continue", id=msg_id, session=session, source=self.source,
+        return {**self.call(build(
+            "session/continue", id=msg_id, session=session, source=self.source,
         )), "id": msg_id}
 
     def set(self, session, mode=None, model=None, workspace=None, effort=None):
@@ -172,38 +172,38 @@ class Connection:
         turn."""
         given = {"mode": mode, "model": model, "workspace": workspace,
                  "effort": effort}
-        return self.verb(build("set", session=session, **{
+        return self.call(build("session/set", session=session, **{
             name: value for name, value in given.items() if value is not None
         }))
 
     def permissions(self, session):
         """The grants that hold in a session."""
-        return self.verb(build("permissions", session=session))["grants"]
+        return self.call(build("grant/list", session=session))["grants"]
 
     def forget(self, session, grant):
         """Take a grant back."""
-        return self.verb(build("forget", session=session, grant=grant))
+        return self.call(build("grant/forget", session=session, grant=grant))
 
     def hello(self):
-        return self.verb(build("hello"))
+        return self.call(build("host/hello"))
 
     def models(self):
         """Every server the host can reach, with its models by the names a
         session takes, or why it lists none: the host's reply as it is."""
-        return self.verb(build("models"))
+        return self.call(build("model/list"))
 
     def providers(self):
         """Every model server the host knows, whether its key is there, the
         default model and why a session on it couldn't start (None: it
         can): the host's reply as it is."""
-        return self.verb(build("providers"))
+        return self.call(build("model/provider/list"))
 
     def probe(self, name=None, url=None, key=None):
         """A server's models, for a pick list: (the url that answered,
         [{"id", "context"}])."""
         fields = {k: v for k, v in (("name", name), ("url", url), ("key", key))
                   if v is not None}
-        reply = self.verb(build("probe", **fields))
+        reply = self.call(build("model/provider/probe", **fields))
         return reply["url"], reply["models"]
 
     def connect(self, name, model, url=None, key=None, context=None,
@@ -214,68 +214,74 @@ class Connection:
         fields = {"url": url, "key": key, "context": context, "title": title,
                   "default": default}
         given = {k: v for k, v in fields.items() if v is not None}
-        return self.verb(build("connect", name=name, model=model, **given),
-                         timeout=CONNECT_WAIT)
+        request = build("model/provider/connect", name=name, model=model, **given)
+        return self.call(request, timeout=CONNECT_WAIT)
 
     def disconnect(self, name):
         """The server's key and the user's lines for it taken out."""
-        return self.verb(build("disconnect", name=name))
+        return self.call(build("model/provider/disconnect", name=name))
 
     def settings(self):
         """ZERO's settings, each with its value, and what is wrong with
         config.toml (None if nothing): the host's to read and write."""
-        reply = self.verb(build("settings"))
+        reply = self.call(build("setting/list"))
         return reply["settings"], reply["error"]
 
     def set_setting(self, name, value):
         """Write one of ZERO's settings, through the host."""
-        return self.verb(build("set_setting", name=name, value=value))
+        return self.call(build("setting/set", name=name, value=value))
 
     def seen(self, session, seq):
-        return self.verb(build("seen", session=session, seq=seq))
+        return self.call(build("session/seen", session=session, seq=seq))
 
     def rename(self, session, title):
-        return self.verb(build("rename", session=session, title=title))
+        return self.call(build("session/rename", session=session, title=title))
 
     def archive(self, session, archived=True):
-        return self.verb(build("archive", session=session, archived=archived))
+        name = "session/archive" if archived else "session/unarchive"
+        return self.call(build(name, session=session))
 
     def delete(self, session):
         """Where the session's files went: the desktop's trash or ZERO's."""
-        return self.verb(build("delete", session=session))["trash"]
+        return self.call(build("session/delete", session=session))["trash"]
 
     def stop(self, session):
-        return self.verb(build(
-            "stop", id=str(uuid.uuid4()), session=session, source=self.source,
+        return self.call(build(
+            "session/stop", id=str(uuid.uuid4()), session=session, source=self.source,
         ))
 
     def sessions(self, archived=None, workspace=None):
         """Every session; or only the archived ones (True) or the others
         (False); or only those whose workspace is exactly that folder."""
-        return self.verb(build(
-            "list", archived=archived, workspace=workspace,
+        return self.call(build(
+            "session/list", archived=archived, workspace=workspace,
         ))["sessions"]
 
     def history(self, session, after=0, limit=None, before=None):
         """(records, gap): all the records after the seq (and before
         `before`), or the newest `limit` of them."""
         # A limit of null asks for them all; left out, the host's window (50)
-        reply = self.verb(build(
-            "history", session=session, after=after, limit=limit, before=before,
+        reply = self.call(build(
+            "session/read", session=session, after=after, limit=limit, before=before,
         ))
         return reply["records"], reply["gap"]
 
     def jobs(self, session=None):
         """A session's jobs, ended ones too; with none, every running job."""
         fields = {} if session is None else {"session": session}
-        return self.verb(build("jobs", **fields))["jobs"]
+        return self.call(build("job/list", **fields))["jobs"]
 
     def watch(self, session, after=0):
-        return self.stream(build("watch", session=session, after=after))
+        return self.stream(build("session/watch", session=session, after=after))
 
-    def watch_list(self):
+    def watch_list(self, archived=False, workspace=None):
         """The session list, then the whole list again at each change."""
-        return self.stream(build("watch_list"))
+        return self.stream(build("session/list", watch=True, archived=archived,
+                                 workspace=workspace))
+
+    def stop_job(self, job):
+        """Whether the job was running and is stopped now."""
+        return self.call(build("job/stop", job=job))
 
     def stream(self, payload):
         self.ready()

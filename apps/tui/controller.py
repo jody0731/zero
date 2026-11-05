@@ -12,7 +12,7 @@ import os
 import time
 from pathlib import Path
 
-from apps.cli import keybindings
+from apps.tui import keybindings
 from client.session_list import brief
 from client.session_state import SessionState
 

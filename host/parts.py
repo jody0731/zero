@@ -3,10 +3,9 @@ permissions/host.py).
 
 The assembly makes the parts and host/main.py hands them to the runtime, which
 attaches each one, so the kernel names no component. A part may bring a table
-in the one database, verbs (described in protocol/verbs.py; those that only
-look named in `looking`), something to start
-and stop with the host, what keeps the host up, a session's share of it, and
-the reply step. Every hook does nothing until a part says otherwise, as core's
+in the one database, messages (described in protocol/messages.py; those
+that only look named in `looking`), something to start and stop with the
+host, what keeps the host up, a session's share of it, and the reply step. Every hook does nothing until a part says otherwise, as core's
 plugins do. Refused is the host's no, from the kernel or a part.
 """
 
@@ -22,7 +21,7 @@ class Part:
     schema = ""
     # Its tables with a `session` column: a deleted session's rows go too
     tables = ()
-    # Its verbs that only look, which ZERO's own commands may send too
+    # Its messages that only look, which ZERO's own commands may send too
     # (host/peers.py)
     looking = ()
 
@@ -30,8 +29,8 @@ class Part:
         """The runtime it is part of, once its store is open."""
         self.runtime = runtime
 
-    def verbs(self):
-        """Its verbs: name → handler(request), which returns the reply or
+    def messages(self):
+        """Its messages: name → handler(request), which returns the reply or
         raises the runtime's Refused."""
         return {}
 

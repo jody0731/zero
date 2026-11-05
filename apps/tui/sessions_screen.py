@@ -9,8 +9,8 @@ from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Input, Static
 
-from apps.cli import controller
-from apps.cli.widgets import ERRORS, Plain
+from apps.tui import controller
+from apps.tui.widgets import ERRORS, Plain
 from client import render, session_list
 
 

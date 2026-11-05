@@ -3,6 +3,23 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.4
+
+ZERO as a worker: one door for every app, and plain commands for all of it.
+
+- **One protocol:** every app reaches the host through the same messages, now named noun/verb (`session/send`,
+  `job/stop`, `model/provider/connect`) and published as JSON Schema in `protocol/schema.json`.
+- **Plain commands** for everything a caller does, named as its messages: `zero session …`, `zero job …`,
+  `zero grant …`, `zero model …`, `zero setting …`, `zero host hello|stop`. `--json` prints one JSON object; a key
+  comes only from stdin (`--key-stdin`).
+- `zero -p` (short for `zero session send`) takes `--cd`, `--when-busy`, `--choice` and `--no-wait`; `--json` now
+  prints one result object (session, outcome, answer, waiting question, tokens, seconds) and `--events` every event.
+- **`zero mcp serve`:** ZERO as an MCP server for other agents (`claude mcp add zero -- zero mcp serve`), with
+  `zero_start`, `zero_wait`, `zero_reply` and `zero_stop`. A new requirement, `mcp`.
+- A host still on the old protocol is replaced once it is idle, as a host on older code is.
+- The full screen is an app of its own (`apps/tui/`); `zero` starts it, `zero mcp serve` and the host each from
+  their own entry, so no app loads another.
+
 ## 0.6.2.3
 
 Connecting a model, from ZERO itself.

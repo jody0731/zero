@@ -1,6 +1,6 @@
 """Find ZERO's host, or start one: the host on demand.
 
-`hello` with a short timeout says whether a host runs. When none does, the
+`host/hello` with a short timeout says whether a host runs. When none does, the
 client takes start.lock, says hello again (another terminal may have just
 started one) and only then starts it: as a transient systemd user unit named
 after its home (`zero-host` for ~/.zero), where the user's systemd answers,
@@ -8,7 +8,9 @@ else as a detached process. It
 polls until the host answers. A host that takes the connection but never
 answers is reported with its pid, never replaced by a second one. A host with
 another build (the code changed since it started) is restarted when it is
-idle, and only said to run older code while it is busy.
+idle, and only said to run older code while it is busy; so is a host of
+protocol 1, which names a request's message in "verb", as an installed ZERO
+runs until its first update past it.
 """
 
 import fcntl
@@ -19,12 +21,15 @@ import time
 from pathlib import Path
 
 from client.connection import NoAnswer, NotRunning, ProtocolError, request
-from protocol import verbs, version
+from protocol import messages, version
 
 # One hello's wait; a host still starting gets as long as a start
 PROBE_SECONDS = 2
 START_SECONDS = 10
 POLL_SECONDS = 0.05
+# Protocol 1's hello and restart, for a host that runs it still
+OLD_HELLO = {"verb": "hello"}
+OLD_RESTART = {"verb": "shutdown", "reason": "restart"}
 # The host's own entry, so a client never loads the host's code
 SCRIPT = Path(__file__).resolve().parents[1] / "host" / "main.py"
 
@@ -36,10 +41,14 @@ class Hung(Exception):
 def hello(paths, timeout=PROBE_SECONDS):
     """The running host's hello, or None when no host answers the socket.
     Raises NoAnswer for a host that took the connection and said nothing."""
+    payload = messages.request("host/hello", protocol=version.PROTOCOL)
     try:
-        reply = request(
-            paths.socket, verbs.request("hello", protocol=version.PROTOCOL), timeout
-        )
+        reply = request(paths.socket, payload, timeout)
+        if not reply.get("ok") and "protocol" not in reply:
+            # A protocol 1 host knows no "message"; its own hello tells
+            old = request(paths.socket, OLD_HELLO, timeout)
+            if old.get("ok"):
+                return {**old, "protocol": old.get("protocol", 1)}
     except NoAnswer:
         raise
     except NotRunning:
@@ -113,25 +122,32 @@ def ensure_host(paths, unit=None, command=None, popen=subprocess.Popen,
 
 
 def shutdown(paths, timeout=5, **fields):
-    """Ask the host to stop (`force`, `reason`: the shutdown verb's): its
+    """Ask the host to stop (`force`, `reason`: host/stop's fields): its
     reply, stopping or what keeps it busy."""
-    return request(paths.socket, verbs.request("shutdown", **fields), timeout)
+    return request(paths.socket, messages.request("host/stop", **fields), timeout)
 
 
 def current(paths, reply, report, seconds):
     """True if the host runs this code, or is busy and stays for now; False
     once an idle host of another build has gone, so a fresh one starts."""
-    if reply["protocol"] != version.PROTOCOL:
+    old = reply["protocol"] < version.PROTOCOL
+    if reply["protocol"] != version.PROTOCOL and (not old or reply.get("busy")):
         raise ProtocolError(
             f"ZERO's host speaks protocol {reply['protocol']}, this zero "
-            f"{version.PROTOCOL}: restart it with zero host stop"
+            f"{version.PROTOCOL}"
+            + (": it is replaced once it is idle, or stop it now with "
+               "zero host stop --force" if old else
+               ": restart it with zero host stop --force")
         )
     if reply["build"] == version.build():
         return True
     if reply.get("busy"):
         report("ZERO's host runs older code; it is replaced once it is idle.")
         return True
-    stopping = shutdown(paths, PROBE_SECONDS, reason="restart")
+    if old:
+        stopping = request(paths.socket, OLD_RESTART, PROBE_SECONDS)
+    else:
+        stopping = shutdown(paths, PROBE_SECONDS, reason="restart")
     if not stopping.get("stopping"):
         # It got busy in the meantime
         report("ZERO's host runs older code; it is replaced once it is idle.")

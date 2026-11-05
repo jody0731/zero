@@ -1,14 +1,15 @@
-"""What `hello` tells a client: the protocol it speaks and the code it runs.
+"""What `host/hello` tells a client: the protocol it speaks and the code it runs.
 
-The protocol is a number: adding a verb, a field or an event keeps it, removing
-one or changing its meaning bumps it. The build is a hash of ZERO's own source,
-taken when a process starts, so a client can tell a host that runs older code.
+The protocol is a number: adding a message, a field or an event keeps it,
+removing one or changing its meaning bumps it. The build is a hash of ZERO's
+own source, taken when a process starts, so a client can tell a host that runs
+older code.
 """
 
 import hashlib
 from pathlib import Path
 
-PROTOCOL = 1
+PROTOCOL = 2
 # ZERO's folder
 ROOT = Path(__file__).resolve().parents[1]
 

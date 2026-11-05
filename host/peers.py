@@ -27,9 +27,9 @@ UNSET = object()
 
 
 def refused(looking=()):
-    """The no one of ZERO's own commands gets; `looking`: the parts' verbs
-    that only look, named after the kernel's."""
-    named = ", ".join(("list", "history", "watch", *looking))
+    """The no one of ZERO's own commands gets; `looking`: the messages that
+    only look, the kernel's and the parts'."""
+    named = ", ".join(looking)
     return (
         f"ZERO's own commands can look at sessions over this socket ({named}) "
         "but not send, answer, stop or change anything: that comes from the "

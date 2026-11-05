@@ -1,12 +1,12 @@
-"""The model's part in the host (host/parts.py): the `models` verb, which
-asks every server ZERO can reach for its models, so any face lists them
-from the host (the CLI's /model menu today); and connecting one
-(connect.py): `providers` (every server and whether its key is there),
-`probe` (one server's models, for a face's pick list), `connect` (a test
-call, then saved) and `disconnect`. Each is whole in one request: the host
-keeps nothing between a face's steps, so a plain command could send it as
-well. Only `models` and `providers` look; the rest are the user's own face's
-alone, since they send a key or change the user's files.
+"""The model's part in the host (host/parts.py): `model/list`, which asks
+every server ZERO can reach for its models, so any face lists them from the
+host (the full screen's /model menu today); and connecting one (connect.py),
+under `model/provider/`: `list` (every server and whether its key is there),
+`probe` (one server's models, for a face's pick list), `connect` (a test call,
+then saved) and `disconnect`. Each is whole in one request: the host keeps
+nothing between a face's steps, so a plain command sends the same. Only
+`model/list` and `model/provider/list` look; the rest are the user's own
+face's alone, since they send a key or change the user's files.
 
 A server is reachable when it needs no key or its key is there (providers.py);
 the others aren't asked. Each is asked through the OpenAI chat API's
@@ -28,7 +28,7 @@ LIST_SECONDS = 3
 
 class ModelList(Part):
     name = "models"
-    looking = ("models", "providers")
+    looking = ("model/list", "model/provider/list")
 
     def __init__(self, config=None):
         # config.toml (settings.Config), where the default goes; the host's
@@ -40,10 +40,12 @@ class ModelList(Part):
         if self.config is None:
             self.config = runtime.config
 
-    def verbs(self):
-        return {"models": self.models_verb, "providers": self.providers_verb,
-                "probe": self.probe_verb, "connect": self.connect_verb,
-                "disconnect": self.disconnect_verb}
+    def messages(self):
+        return {"model/list": self.models_message,
+                "model/provider/list": self.providers_message,
+                "model/provider/probe": self.probe_message,
+                "model/provider/connect": self.connect_message,
+                "model/provider/disconnect": self.disconnect_message}
 
     def default(self):
         """New sessions' model, as the host has it."""
@@ -54,7 +56,7 @@ class ModelList(Part):
     def writable(self):
         return self.config if hasattr(self.config, "set") else None
 
-    def providers_verb(self, request):
+    def providers_message(self, request):
         try:
             listed = connect.rows()
         except providers.ProviderError as e:
@@ -63,13 +65,13 @@ class ModelList(Part):
         return {"ok": True, "providers": listed, "default": model,
                 "ready": connect.ready(model)}
 
-    def probe_verb(self, request):
+    def probe_message(self, request):
         try:
             return {"ok": True, **connect.probe_request(request)}
         except (connect.ConnectError, providers.ProviderError) as e:
             return {"ok": False, "error": str(e)}
 
-    def connect_verb(self, request):
+    def connect_message(self, request):
         try:
             model = connect.connect(request)
         except (connect.ConnectError, providers.ProviderError, OSError) as e:
@@ -85,7 +87,7 @@ class ModelList(Part):
             made_default = True
         return {"ok": True, "model": model, "default": made_default}
 
-    def disconnect_verb(self, request):
+    def disconnect_message(self, request):
         name = request.get("name")
         config = self.writable()
         try:
@@ -98,7 +100,7 @@ class ModelList(Part):
             config.set("model", None)
         return {"ok": True, "removed": name, "default_unset": unset}
 
-    def models_verb(self, request):
+    def models_message(self, request):
         try:
             table = providers.table()
         except providers.ProviderError as e:

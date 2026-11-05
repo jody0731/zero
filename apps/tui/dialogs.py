@@ -7,8 +7,8 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Input, OptionList, Static
 
-from apps.cli import keybindings
-from apps.cli.widgets import Plain
+from apps.tui import keybindings
+from apps.tui.widgets import Plain
 
 
 class TextView(Screen):

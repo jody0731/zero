@@ -32,7 +32,7 @@ The host keeps what the user has seen of each session, and the list's
 listeners hear each change to it (sessions.py).
 
 The runtime names no component: the assembly hands in how a session is
-made, the modes, and the parts (host/parts.py), which add their tables, verbs,
+made, the modes, and the parts (host/parts.py), which add their tables, messages,
 reply step and share of each session.
 """
 
@@ -185,15 +185,15 @@ class Runtime(Sessions):
         self.list_version = 0
         self.list_changed = threading.Condition()
         self.store.on_change = self.changed_list
-        # The components' parts by name, the verbs they add, and those of
+        # The components' parts by name, the messages they add, and those of
         # them that only look
         self.parts = {}
-        self.verbs = {}
+        self.messages = {}
         self.looking = ()
         for part in parts:
             part.attach(self)
             self.parts[part.name] = part
-            self.verbs.update(part.verbs())
+            self.messages.update(part.messages())
             self.looking += tuple(part.looking)
 
     @property

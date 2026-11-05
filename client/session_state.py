@@ -2,7 +2,7 @@
 does and since when, the open ask, the reply streaming in, a failed model
 call's retry, what a stop gave back and the latest answer; and sending it a
 line (a new turn, a steer or a follow-up, or the reply to its ask). Every face
-borrows it; what its keys do is the face's own (apps/cli/controller.py).
+borrows it; what its keys do is the face's own (apps/tui/controller.py).
 """
 
 import threading

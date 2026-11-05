@@ -7,7 +7,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.widgets import Markdown, Static, TextArea
 
-from apps.cli import clipboard, keybindings
+from apps.tui import clipboard, keybindings
 from client import render
 from client.connection import NotRunning, ProtocolError
 from client.render import duration, outcome_of, who

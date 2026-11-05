@@ -1,5 +1,5 @@
 """The permissions' part in the host (host/parts.py): the reply step, and the
-`permissions` and `forget` verbs.
+`grant/list` and `grant/forget` messages.
 
 The reply step runs when a reply reaches a parked ask. One of the ask's
 choices picked at the box is the answer; words are read by the consent check
@@ -23,7 +23,7 @@ TURN_HOLDS = (
 
 class PermissionsHost(Part):
     name = "permissions"
-    looking = ("permissions",)
+    looking = ("grant/list",)
 
     def __init__(self, make_consent, saved_permissions=None):
         """`make_consent(model)` builds the consent check for a session's
@@ -35,21 +35,21 @@ class PermissionsHost(Part):
         # One consent check per model: model name → Consent
         self.consents = {}
 
-    def verbs(self):
-        return {"permissions": self.permissions_verb, "forget": self.forget_verb}
+    def messages(self):
+        return {"grant/list": self.list_message, "grant/forget": self.forget_message}
 
-    def permissions_verb(self, request):
+    def list_message(self, request):
         sid = request.get("session")
         if not isinstance(sid, str):
-            raise Refused("permissions needs a session string")
+            raise Refused("grant/list needs a session string")
         return {"ok": True, "grants": self.permissions(sid)}
 
-    def forget_verb(self, request):
+    def forget_message(self, request):
         sid, grant = request.get("session"), request.get("grant")
         if not isinstance(sid, str):
-            raise Refused("forget needs a session string")
+            raise Refused("grant/forget needs a session string")
         if not isinstance(grant, str):
-            raise Refused("forget needs the grant's id, a string")
+            raise Refused("grant/forget needs the grant's id, a string")
         return {"ok": True, **self.forget(sid, grant)}
 
     def reply(self, sid, ask, payload):

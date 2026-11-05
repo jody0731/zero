@@ -1,0 +1,1275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zero-protocol-2",
+  "title": "Z.E.R.O. protocol 2",
+  "description": "One JSON object a line over the host's Unix socket (~/.zero/run/zero.sock): a request, then its reply; session/watch and session/list with watch stream events. Each request names its message in `message`.",
+  "x-protocol": 2,
+  "oneOf": [
+    {
+      "$ref": "#/$defs/host.hello"
+    },
+    {
+      "$ref": "#/$defs/host.stop"
+    },
+    {
+      "$ref": "#/$defs/session.send"
+    },
+    {
+      "$ref": "#/$defs/session.continue"
+    },
+    {
+      "$ref": "#/$defs/session.stop"
+    },
+    {
+      "$ref": "#/$defs/session.list"
+    },
+    {
+      "$ref": "#/$defs/session.read"
+    },
+    {
+      "$ref": "#/$defs/session.watch"
+    },
+    {
+      "$ref": "#/$defs/session.seen"
+    },
+    {
+      "$ref": "#/$defs/session.rename"
+    },
+    {
+      "$ref": "#/$defs/session.archive"
+    },
+    {
+      "$ref": "#/$defs/session.unarchive"
+    },
+    {
+      "$ref": "#/$defs/session.delete"
+    },
+    {
+      "$ref": "#/$defs/session.set"
+    },
+    {
+      "$ref": "#/$defs/job.list"
+    },
+    {
+      "$ref": "#/$defs/job.stop"
+    },
+    {
+      "$ref": "#/$defs/grant.list"
+    },
+    {
+      "$ref": "#/$defs/grant.forget"
+    },
+    {
+      "$ref": "#/$defs/model.list"
+    },
+    {
+      "$ref": "#/$defs/model.provider.list"
+    },
+    {
+      "$ref": "#/$defs/model.provider.probe"
+    },
+    {
+      "$ref": "#/$defs/model.provider.connect"
+    },
+    {
+      "$ref": "#/$defs/model.provider.disconnect"
+    },
+    {
+      "$ref": "#/$defs/setting.list"
+    },
+    {
+      "$ref": "#/$defs/setting.set"
+    }
+  ],
+  "$defs": {
+    "error": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ]
+    },
+    "host.hello": {
+      "type": "object",
+      "description": "The host's versions and what keeps it busy; a client's first look.",
+      "properties": {
+        "message": {
+          "const": "host/hello"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the client's protocol; the host refuses another"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "host.hello.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "protocol": {
+          "type": "integer"
+        },
+        "build": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "started": {
+          "type": "number"
+        },
+        "busy": {
+          "type": "object"
+        },
+        "last": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "a session's id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "host.stop": {
+      "type": "object",
+      "description": "Stop the host; while anything runs it says what, unless forced.",
+      "properties": {
+        "message": {
+          "const": "host/stop"
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "reason": {
+          "enum": [
+            "stopped",
+            "restart"
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "host.stop.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "stopping": {
+          "type": "boolean"
+        },
+        "busy": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.send": {
+      "type": "object",
+      "description": "A message to a session, or to a new one: a turn starts, or it steers or queues behind the running one, or it answers the open ask.",
+      "properties": {
+        "message": {
+          "const": "session/send"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "text": {
+          "type": "string"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "a session's id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the open ask's id: this text answers it"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's folder"
+        },
+        "when_busy": {
+          "enum": [
+            "steer",
+            "queue"
+          ]
+        },
+        "choice": {
+          "enum": [
+            "yes",
+            "session",
+            "saved",
+            "no"
+          ],
+          "description": "one of the open ask's choices, as picked at its box"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "text",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "session.send.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "admitted": {
+          "type": "boolean"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "disposition": {
+          "enum": [
+            "started",
+            "steered",
+            "queued",
+            "reply"
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.continue": {
+      "type": "object",
+      "description": "A turn that ended without an answer goes on, with no new message.",
+      "properties": {
+        "message": {
+          "const": "session/continue"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "session",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "session.continue.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "admitted": {
+          "type": "boolean"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "disposition": {
+          "enum": [
+            "started",
+            "steered",
+            "queued",
+            "reply"
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.stop": {
+      "type": "object",
+      "description": "Stop a session's running turn; what it hadn't taken comes back.",
+      "properties": {
+        "message": {
+          "const": "session/stop"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "session",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "session.stop.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "stopped": {
+          "type": "boolean"
+        },
+        "withdrawn": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.list": {
+      "type": "object",
+      "description": "The sessions, each with its open ask; with `watch`, the list again at each change (archived ones left out).",
+      "properties": {
+        "message": {
+          "const": "session/list"
+        },
+        "archived": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "only the archived (true), the others (false), or all (null)"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "only this folder's"
+        },
+        "watch": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "session.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "one row a session"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.list.event": {
+      "type": "object",
+      "description": "one event a line, until a bye",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "the whole list"
+        },
+        "bye": {
+          "type": "string"
+        }
+      }
+    },
+    "session.read": {
+      "type": "object",
+      "description": "A session's records: those after a seq, or the newest `limit` (null: all), before `before`.",
+      "properties": {
+        "message": {
+          "const": "session/read"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "after": {
+          "type": "integer"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "before": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "session.read.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "the log's records"
+        },
+        "gap": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.watch": {
+      "type": "object",
+      "description": "A session's records after a seq, then each new one as it comes.",
+      "properties": {
+        "message": {
+          "const": "session/watch"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "after": {
+          "type": "integer"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "session.watch.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.watch.event": {
+      "type": "object",
+      "description": "one event a line, until a bye",
+      "properties": {
+        "record": {
+          "type": "object"
+        },
+        "settled": {
+          "type": "object"
+        },
+        "draft": {
+          "type": "object"
+        },
+        "withdrawn": {
+          "type": "object"
+        },
+        "gap": {
+          "type": "integer"
+        },
+        "bye": {
+          "type": "string"
+        }
+      }
+    },
+    "session.seen": {
+      "type": "object",
+      "description": "Mark a session read up to a seq, for the lists' news marks.",
+      "properties": {
+        "message": {
+          "const": "session/seen"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "message",
+        "session",
+        "seq"
+      ],
+      "additionalProperties": false
+    },
+    "session.seen.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.rename": {
+      "type": "object",
+      "description": "Give a session a title.",
+      "properties": {
+        "message": {
+          "const": "session/rename"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "session",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "session.rename.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.archive": {
+      "type": "object",
+      "description": "Archive a session: out of the list, kept.",
+      "properties": {
+        "message": {
+          "const": "session/archive"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "session.archive.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.unarchive": {
+      "type": "object",
+      "description": "Bring an archived session back to the list.",
+      "properties": {
+        "message": {
+          "const": "session/unarchive"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "session.unarchive.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.delete": {
+      "type": "object",
+      "description": "Delete a session: its files to the desktop's trash or ZERO's.",
+      "properties": {
+        "message": {
+          "const": "session/delete"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "session.delete.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "trash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.set": {
+      "type": "object",
+      "description": "Change a session's mode, model, workspace or effort from its next turn.",
+      "properties": {
+        "message": {
+          "const": "session/set"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "workspace": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "session.set.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "set": {
+          "type": "object"
+        },
+        "next_turn": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "job.list": {
+      "type": "object",
+      "description": "A session's background jobs, ended ones too; with none, every running job.",
+      "properties": {
+        "message": {
+          "const": "job/list"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "job.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "one row a job, its state in words in `said`"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "job.stop": {
+      "type": "object",
+      "description": "Stop a background job.",
+      "properties": {
+        "message": {
+          "const": "job/stop"
+        },
+        "job": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "job"
+      ],
+      "additionalProperties": false
+    },
+    "job.stop.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "stopped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "grant.list": {
+      "type": "object",
+      "description": "The grants that hold in a session: what an ask's \"don't ask again\" allowed.",
+      "properties": {
+        "message": {
+          "const": "grant/list"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "grant.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "id, by, scope, grant, what"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "grant.forget": {
+      "type": "object",
+      "description": "Take a grant back.",
+      "properties": {
+        "message": {
+          "const": "grant/forget"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "grant": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "session",
+        "grant"
+      ],
+      "additionalProperties": false
+    },
+    "grant.forget.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "forgot": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.list": {
+      "type": "object",
+      "description": "Every server the host can reach, with its models by the names a session takes, or why it lists none.",
+      "properties": {
+        "message": {
+          "const": "model/list"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "model.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "one row a server"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.provider.list": {
+      "type": "object",
+      "description": "Every model server the host knows, whether its key is there, the default model, and why a session on it couldn't start (null: it can).",
+      "properties": {
+        "message": {
+          "const": "model/provider/list"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "model.provider.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "name, title, url, key, needs_key, own, shipped, context, models"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ready": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.provider.probe": {
+      "type": "object",
+      "description": "A server's models, for a pick list. A typed url takes the typed key or none; a name alone, its own url and stored key.",
+      "properties": {
+        "message": {
+          "const": "model/provider/probe"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "model.provider.probe.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "url": {
+          "type": "string"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "id, context"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.provider.connect": {
+      "type": "object",
+      "description": "A server's model tested with a one-token call, then saved: the key in keys.toml, the server in models.toml; the first model connected becomes the default.",
+      "properties": {
+        "message": {
+          "const": "model/provider/connect"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "context": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title": {
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message",
+        "name",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "model.provider.connect.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "model": {
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.provider.disconnect": {
+      "type": "object",
+      "description": "A server's key and the user's lines for it taken out.",
+      "properties": {
+        "message": {
+          "const": "model/provider/disconnect"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "model.provider.disconnect.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "removed": {
+          "type": "string"
+        },
+        "default_unset": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "setting.list": {
+      "type": "object",
+      "description": "ZERO's settings, each with its value, and what is wrong with config.toml (null: nothing).",
+      "properties": {
+        "message": {
+          "const": "setting/list"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "setting.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "settings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "name, group, label, default, kind, choices, least, off, shown, value"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "setting.set": {
+      "type": "object",
+      "description": "Write one of ZERO's settings to config.toml (a face's own table, the full screen's [cli], is the face's).",
+      "properties": {
+        "message": {
+          "const": "setting/set"
+        },
+        "name": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": [
+        "message",
+        "name",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "setting.set.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "set": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    }
+  }
+}

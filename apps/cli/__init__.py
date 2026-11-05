@@ -1,6 +1,6 @@
-"""The CLI, `zero`: main.py (the command), app.py (the full-screen app, on
-Textual), its screens (session_screen, sessions_screen, settings_screen),
-widgets and dialogs; controller.py (what lines and keys mean, testable with
-no terminal), keybindings.py, clipboard.py and config.py (the [cli] table).
-It reaches ZERO only through client/; nothing outside it imports Textual.
+"""The command line, `zero`: main.py reads the words and runs what they name.
+The plain commands (commands.py) and install, uninstall and update (update.py)
+run in its process; the full screen (apps/tui/), `zero mcp serve` (apps/mcp/)
+and the host (host/main.py) are execs of their own entries, so the command line
+imports none of them. It reaches ZERO only through client/.
 """

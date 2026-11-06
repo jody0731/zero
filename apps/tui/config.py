@@ -25,14 +25,14 @@ TEXTUAL_THEMES = (
     "solarized-dark", "solarized-light", "tokyo-night",
 )
 SETTINGS = (
-    Setting("theme", "Look", "Theme", "auto", "choice",
+    Setting("theme", "TUI", "Theme", "auto", "choice",
             choices=("auto", "dark", "light", *TEXTUAL_THEMES)),
     # On (as Claude Code's and Codex's full screens): ZERO selects and
     # Ctrl+C copies, never on release; Shift+drag is the terminal's own
     # selection, and a click on a detached widget is dropped (Textual #6643).
     # Off: the terminal selects and no click reaches Textual. Read when zero
     # opens
-    Setting("mouse", "Look", "The mouse in ZERO (off: the terminal selects)",
+    Setting("mouse", "TUI", "The mouse in ZERO (off: the terminal selects)",
             "on", "choice", choices=("off", "on")),
 )
 BY_NAME = {setting.name: setting for setting in SETTINGS}

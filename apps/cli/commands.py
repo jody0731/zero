@@ -2,11 +2,13 @@
 agent, each sending one of the protocol's messages (protocol/messages.py).
 A message only a screen needs has no command; NO_COMMAND says why.
 
-    zero session send TEXT [--session ID] [--cd DIR] [--json | --events]
+    zero session send TEXT [--session ID] [--cd DIR] [--effort E]
+        [--json | --events]
     zero session list [--archived | --all] [--cd DIR] [--watch]
     zero session read ID · watch ID · stop ID · continue ID
     zero session rename ID TITLE · archive ID · unarchive ID · delete ID
     zero session set ID [--mode M] [--model M] [--cd DIR] [--effort E]
+        [--judge-model M] [--judge-effort E]
     zero job list [--session ID] · job stop JOB
     zero grant list ID · grant forget ID GRANT
     zero model list · model provider list · probe NAME · connect NAME
@@ -82,12 +84,18 @@ def read_session(host, sid=None):
     return info, host.history(info["id"], limit=None)[0]
 
 
-def history_text(info, records, working=True):
+def history_text(info, records, working=True, runs_with=None):
+    """A session's transcript as text: its row, what its next turn runs
+    with (`runs_with`, the host's word, where given) and its records."""
     lines = [
         f"{info['id']}  {info['state']}  {info['mode']}  {info['model']}  "
         f"{info['workspace']}",
         info["title"], "",
     ]
+    if runs_with:
+        judge = runs_with.get("judge_model") or "the session's model"
+        lines.insert(1, f"thinking {runs_with.get('effort')} · judge {judge}, "
+                        f"thinking {runs_with.get('judge_effort')}")
     started = None
     restarts = 0
     for record in records:
@@ -223,7 +231,8 @@ def print_turn(connection, args, workspace, out=print):
         if info.get("ask") is not None:
             reply_to = info["ask"]["id"]
     options = {"session": sid, "mode": args.mode, "model": args.model,
-               "workspace": workspace, "reply_to": reply_to}
+               "workspace": workspace, "reply_to": reply_to,
+               "effort": getattr(args, "effort", None)}
     if getattr(args, "when_busy", None):
         options["when_busy"] = args.when_busy
     if getattr(args, "choice", None):
@@ -274,6 +283,8 @@ def send_flags(parser):
                              "a new one")
     parser.add_argument("--mode", help=MODES_HELP)
     parser.add_argument("--model")
+    parser.add_argument("--effort", help="a new session's thinking effort: "
+                                         "off, low, high or max")
     parser.add_argument("--cd", metavar="DIR",
                         help="a new session's workspace (this folder)")
     parser.add_argument("--when-busy", choices=("steer", "queue"),
@@ -353,13 +364,17 @@ def parser(prog="zero"):
         session_arg(action)
         json_flag(action)
         action.set_defaults(handler=housekeeping_command)
-    change = actions.add_parser("set", help="mode, model, workspace or effort, "
-                                            "from the next turn")
+    change = actions.add_parser("set", help="mode, model, workspace, effort or "
+                                            "judge, from the next turn")
     session_arg(change)
     change.add_argument("--mode", help=MODES_HELP)
     change.add_argument("--model")
     change.add_argument("--cd", metavar="DIR", help="the workspace")
     change.add_argument("--effort", help=EFFORTS_HELP)
+    change.add_argument("--judge-model", metavar="M",
+                        help='the judge\'s model ("": the session\'s own)')
+    change.add_argument("--judge-effort", metavar="E",
+                        help="the judge's thinking effort: off, low, high or max")
     json_flag(change)
     change.set_defaults(handler=set_command)
 
@@ -508,10 +523,10 @@ def list_command(connection, args, out):
 
 def read_command(connection, args, out):
     info = find(connection.sessions(), args.id)
-    records, gap = connection.history(info["id"], after=args.after,
-                                      limit=args.limit, before=args.before)
-    reply = {"ok": True, "records": records, "gap": gap}
-    return done(args, out, reply, history_text(info, records))
+    reply = connection.read(info["id"], after=args.after, limit=args.limit,
+                            before=args.before)
+    text = history_text(info, reply["records"], runs_with=reply.get("runs_with"))
+    return done(args, out, reply, text)
 
 
 def watch_command(connection, args, out):
@@ -546,11 +561,16 @@ def housekeeping_command(connection, args, out):
 
 def set_command(connection, args, out):
     given = {"mode": args.mode, "model": args.model, "effort": args.effort,
-             "workspace": workspace_of(args.cd) if args.cd else None}
+             "workspace": workspace_of(args.cd) if args.cd else None,
+             "judge_model": args.judge_model, "judge_effort": args.judge_effort}
     if not any(value is not None for value in given.values()):
-        raise ValueError("session set takes --mode, --model, --cd or --effort")
+        raise ValueError("session set takes --mode, --model, --cd, --effort, "
+                         "--judge-model or --judge-effort")
     reply = connection.set(session_id(connection, args.id), **given)
-    said = ", ".join(f"{k} {v}" for k, v in reply.get("set", {}).items())
+    # A judge model of None is the session's own again
+    own = "the session's own"
+    said = ", ".join(f"{k} {own if v is None else v}"
+                     for k, v in reply.get("set", {}).items())
     when = " from its next turn" if reply.get("next_turn") else ""
     return done(args, out, reply, f"Set {said}{when}.")
 

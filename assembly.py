@@ -78,7 +78,7 @@ from sandbox.sandbox import (
 # The settings view's order: each part declares its own settings (SETTINGS),
 # and the view lists them as here
 ORDER = (
-    "mode", "model", "judge_model", "effort", "judge_effort", "max_steps",
+    "mode", "model", "effort", "judge_model", "judge_effort", "max_steps",
     "step_grant", "max_jobs", "bash_timeout", "output_limit", "read_chars",
     "web_chars", "web_results", "web_timeout", "max_seconds", "context_stop",
     "model_timeout", "judge_timeout", "judge_retries", "judge_output_chars",
@@ -190,7 +190,8 @@ def make_session(
     (tests).
     `saved_permissions`: the user's file of saved permissions (the host
     passes paths.permissions_file()); None for none, as in the evals.
-    `judge_*`: the auto modes' judge; by default the agent's own model.
+    `judge_*`: the auto modes' judge; `judge_model` None is the agent's own
+    model, whatever it is switched to.
     `instructions`: what leads the system prompt (prompt/instructions.py:
     SOUL.md, the user's ZERO.md, the project's) and whether the memory tool
     may change it; None for nothing (tests).
@@ -271,6 +272,10 @@ def make_session(
         "workspace": str(sandbox.workspace),
         "instructions": found.record() if found is not None else None,
         "out_of_view": [str(p) for p in getattr(sandbox, "covered", list)()],
+        # The judge as the user left it, whatever the mode; and what it runs
+        # with in this one (None: no judge in this mode)
+        "judge_model": judge_model,
+        "judge_effort": judge_effort,
         "judge": (
             {"model": judge.model, "effort": judge.effort} if judge else None
         ),
@@ -305,12 +310,12 @@ def make_session(
 
 
 def made_with(records):
-    """The limits, the judge (its model and its effort) and the
-    effort a session's log says it runs with, so a session built again (a
-    restart, a switch) keeps them whatever config.toml says now: ({}, None,
-    None) for a new one. Not the
-    context stop: the log has the one its model's provider gave, and a switch
-    may change the model."""
+    """The limits, the judge (judge_model and judge_effort, history's
+    chosen_judge) and the effort a session's log says it runs with, so a
+    session built again (a restart, a switch) keeps them whatever config.toml
+    says now: ({}, None, None) for a new one, and a judge of None where the
+    log says nothing of it. Not the context stop: the log has the one its
+    model's provider gave, and a switch may change the model."""
     if not records or records[0].get("type") != "session":
         return {}, None, None
     logged = history.settings_now(records)
@@ -318,7 +323,7 @@ def made_with(records):
         name: logged[name] for name in LIMITS
         if name in logged and name != "context_stop"
     }
-    return limits, logged.get("judge"), logged.get("effort")
+    return limits, history.chosen_judge(logged), logged.get("effort")
 
 
 def host_session(paths, sid, info, log=None, ask=PARK, config=None, **options):
@@ -327,13 +332,20 @@ def host_session(paths, sid, info, log=None, ask=PARK, config=None, **options):
     workspace of / stays read-only). The user's SOUL.md, ZERO.md and saved
     permissions come from ZERO's config folder, with the project's ZERO.md;
     its limits, judge and effort from `config` (config.toml's settings) when
-    it is made, and from its log after that (made_with); an effort in `info`
-    is a switch's (/effort). `options` go to make_session and win over
-    these."""
+    it is made, and from its log after that (made_with); an effort or a judge
+    in `info` is a switch's (/model, the settings view), or a new session's
+    first message's. `options` go to make_session and win over these."""
     log = log if log is not None else Log(paths.sessions / f"{sid}.jsonl")
     config = config or {}
     limits, judge, effort = made_with(log.records())
-    judge = judge or {}
+    if judge is None:
+        judge = {
+            "judge_model": config.get("judge_model"),
+            "judge_effort": config.get(
+                "judge_effort", settings.DEFAULTS["judge_effort"]
+            ),
+        }
+    judge.update({name: info[name] for name in judge if name in info})
     limits = {
         **{name: config[name] for name in LIMITS if name in config},
         **limits,
@@ -342,12 +354,9 @@ def host_session(paths, sid, info, log=None, ask=PARK, config=None, **options):
     options = {
         "workspace": Path(info["workspace"]),
         "saved_permissions": permissions_file(),
-        "judge_model": judge.get("model") or config.get("judge_model"),
-        # A session keeps its judge's thinking as it keeps its model: a log
-        # without one runs on the API's default
-        "judge_effort": (
-            judge.get("effort") if judge else config.get("judge_effort")
-        ),
+        # A session keeps its judge as it keeps its model
+        "judge_model": judge["judge_model"],
+        "judge_effort": judge["judge_effort"],
         "effort": (
             info.get("effort") or effort
             or config.get("effort", settings.DEFAULTS["effort"])

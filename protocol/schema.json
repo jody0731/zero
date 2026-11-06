@@ -269,6 +269,17 @@
           "type": "string",
           "description": "who sends it: a client's own name"
         },
+        "effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's thinking effort: off, low, high or max"
+        },
         "reply_to": {
           "anyOf": [
             {
@@ -516,7 +527,7 @@
     },
     "session.read": {
       "type": "object",
-      "description": "A session's records: those after a seq, or the newest `limit` (null: all), before `before`.",
+      "description": "A session's records: those after a seq, or the newest `limit` (null: all; 0: none), before `before`; and what its next turn runs with.",
       "properties": {
         "message": {
           "const": "session/read"
@@ -570,6 +581,10 @@
         },
         "gap": {
           "type": "integer"
+        },
+        "runs_with": {
+          "type": "object",
+          "description": "what its next turn runs with: mode, model, workspace, effort, judge_model (null: the session's model) and judge_effort"
         }
       },
       "required": [
@@ -801,7 +816,7 @@
     },
     "session.set": {
       "type": "object",
-      "description": "Change a session's mode, model, workspace or effort from its next turn.",
+      "description": "Change a session's mode, model, workspace, effort or judge from its next turn.",
       "properties": {
         "message": {
           "const": "session/set"
@@ -820,6 +835,13 @@
           "type": "string"
         },
         "effort": {
+          "type": "string"
+        },
+        "judge_model": {
+          "type": "string",
+          "description": "empty: the session's own model"
+        },
+        "judge_effort": {
           "type": "string"
         }
       },

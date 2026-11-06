@@ -19,6 +19,17 @@ from sessions import upgrade
 from sessions.lock import Busy
 
 TITLE_LENGTH = 60
+# What a session's row holds of what it runs with; the rest is in its log
+COLUMNS = ("mode", "model", "workspace")
+
+
+def known_effort(name, effort):
+    """`effort` if it is one of the setting's choices; else refused."""
+    efforts = settings.BY_NAME[name].choices
+    if effort not in efforts:
+        what = "judge effort" if name == "judge_effort" else "effort"
+        raise Refused(f"unknown {what} {effort!r}; efforts: {efforts}")
+    return effort
 
 
 def title(text):
@@ -42,10 +53,11 @@ class Sessions:
         return records, gap
 
     def set_session(self, sid, mode=None, model=None, workspace=None,
-                    effort=None):
+                    effort=None, judge_model=None, judge_effort=None):
         """Change what a session runs with. Its next turn takes it; a
-        turn running or waiting for an answer keeps its own. Returns what was
-        set, and whether a turn now holds the old values."""
+        turn running or waiting for an answer keeps its own. `judge_model`
+        "": the session's own model again. Returns what was set, and whether
+        a turn now holds the old values."""
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
         fields = {}
@@ -63,22 +75,46 @@ class Sessions:
                 raise Refused(f"no folder {workspace}")
             fields["workspace"] = str(path.resolve())
         if effort is not None:
-            efforts = settings.BY_NAME["effort"].choices
-            if effort not in efforts:
-                raise Refused(f"unknown effort {effort!r}; efforts: {efforts}")
-            fields["effort"] = effort
+            fields["effort"] = known_effort("effort", effort)
+        if judge_model is not None:
+            if not isinstance(judge_model, str):
+                raise Refused("a judge model is a model's name, or empty for "
+                              "the session's own")
+            fields["judge_model"] = judge_model.strip() or None
+        if judge_effort is not None:
+            fields["judge_effort"] = known_effort("judge_effort", judge_effort)
         if not fields:
             raise Refused(
-                "nothing to set: give a mode, a model, a workspace or an effort"
+                "nothing to set: give a mode, a model, a workspace, an effort, "
+                "or the judge's model or effort"
             )
-        # The session's row has no effort: its switch and its log hold it
-        columns = {k: v for k, v in fields.items() if k != "effort"}
+        # The session's row has no effort or judge: its switch and its log
+        # hold them
+        columns = {k: v for k, v in fields.items() if k in COLUMNS}
         with self.lock:
             switch = json.loads(self.store.session(sid)["switch"] or "{}")
             self.store.update_session(
                 sid, **columns, switch=json.dumps({**switch, **fields})
             )
         return {"set": fields, "next_turn": bool(self.pending(sid))}
+
+    def runs_with(self, sid):
+        """What the session's next turn runs with: its mode, model and
+        workspace (its row), its effort and judge (its log, then a switch
+        still to come). What the log doesn't name yet is config.toml's."""
+        row = self.store.session(sid)
+        if row is None:
+            raise Refused(f"no session {sid!r}")
+        config = self.config()
+        now = {
+            "effort": config["effort"],
+            "judge_model": config["judge_model"],
+            "judge_effort": config["judge_effort"],
+            **history.running_with(self.log(sid).records()),
+            **json.loads(row["switch"] or "{}"),
+        }
+        now.update({name: row[name] for name in COLUMNS})
+        return {name: now[name] for name in history.SWITCHABLE}
 
     def pending(self, sid, row=None):
         """What a running or waiting turn holds from before a `set`: those

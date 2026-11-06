@@ -47,7 +47,7 @@ from client.follower import Follower
 from client.render import jobs_text
 
 
-# Records a switch shows at most; /history pages back by as many
+# Records a switch shows at most; a scroll to the top pages back by as many
 WINDOW = 50
 # ZERO's themes: a blue-black ground; cyan is ZERO (its mark, the
 # input, what's new), amber only what needs you (an ask, a waiting command, the
@@ -573,15 +573,8 @@ class Zero(SafeClicks, App):
                 if rest:
                     self.switch(model=rest)
                 else:
-                    choices = controller.model_choices(
-                        self.defaults.get("model"), self.lists.sessions,
-                        self.served_models(),
-                    )
-                    self.push_screen(
-                        ChoiceView("Model, from the next turn", choices,
-                                   self.now("model")),
-                        lambda model: model and self.switch(model=model),
-                    )
+                    # The model and its thinking, as in /settings
+                    self.push_screen(SettingsView(self, place="model"))
             elif name == "/cd":
                 here = self.now("workspace") or self.cwd
                 if rest:
@@ -599,8 +592,6 @@ class Zero(SafeClicks, App):
                 self.transcript.sent("/continue", reply.get("id"))
                 self.client.running = True
                 self.client.doing("thinking")
-            elif name == "/history":
-                self.history()
             elif name == "/rename":
                 if rest:
                     self.connection.rename(sid, rest)
@@ -615,15 +606,6 @@ class Zero(SafeClicks, App):
                           else "Back in the list.")
             elif name == "/delete":
                 self.confirm_delete(sid)
-            elif name == "/effort":
-                if rest:
-                    self.switch(effort=rest.strip())
-                else:
-                    self.push_screen(
-                        ChoiceView("The agent's thinking, from the next turn",
-                                   self.choices_of("effort")),
-                        lambda effort: effort and self.switch(effort=effort),
-                    )
             elif name == "/copy":
                 if self.client.last_reply:
                     self.copy(self.client.last_reply)
@@ -671,14 +653,14 @@ class Zero(SafeClicks, App):
                     values["mode"] = controller.mode_named(values["mode"], self.modes())
                 for name, value in values.items():
                     setattr(self.client, name, value)
-                said = ", ".join(f"{name} {value}" for name, value in values.items())
-                self.notify(f"This session will start with {said}.")
+                said = controller.switched_text(values)
+                self.notify(f"This session will start with {said[:1].lower()}"
+                            f"{said[1:]}.")
             else:
                 reply = self.connection.set(sid, **values)
-                said = ", ".join(f"{name} {value}"
-                                 for name, value in reply["set"].items())
+                said = controller.switched_text(reply["set"])
                 when = "from the next turn" if reply["next_turn"] else "from now"
-                self.notify(f"{said[0].upper()}{said[1:]}, {when}.")
+                self.notify(f"{said}, {when}.")
                 self.lists.resume()
         except Exception as error:
             self.failed(error)
@@ -689,16 +671,13 @@ class Zero(SafeClicks, App):
             self.switch(mode=controller.next_mode(self.now("mode")))
 
     def on_transcript_at_top(self, message):
-        self.history(keep_place=True)
+        self.history()
 
-    def history(self, keep_place=False):
-        """Earlier records, put in above what shows: by /history, which goes
-        to them, or by a scroll to the top (`keep_place`), which stays on
-        what showed while they come in above it."""
+    def history(self):
+        """Earlier records, put in above what shows when a scroll reaches the
+        top, which stays on what showed while they come in above it."""
         sid = self.client.session
         if self.oldest is None or self.oldest <= 1:
-            if not keep_place:
-                self.note("Nothing earlier.")
             return
         if getattr(self, "loading", False):
             return
@@ -722,14 +701,11 @@ class Zero(SafeClicks, App):
             self.oldest = records[0]["seq"]
 
         def settle():
-            if keep_place:
-                # The same distance from the end as before: the same view
-                transcript.following = False
-                transcript.held = max(0, transcript.max_scroll_y - below)
-                transcript.scroll_to(y=transcript.held, animate=False,
-                                     immediate=True, release_anchor=False)
-            else:
-                transcript.scroll_home(animate=False)
+            # The same distance from the end as before: the same view
+            transcript.following = False
+            transcript.held = max(0, transcript.max_scroll_y - below)
+            transcript.scroll_to(y=transcript.held, animate=False,
+                                 immediate=True, release_anchor=False)
             self.loading = False
 
         transcript.call_after_refresh(settle)
@@ -782,10 +758,19 @@ class Zero(SafeClicks, App):
         """The host's own model, where config.toml names none."""
         return self.defaults.get("default_model")
 
-    def choices_of(self, name):
-        """One of ZERO's settings' choices, as the host lists them."""
-        listed, _ = self.connection.settings()
-        return next(row["choices"] for row in listed if row["name"] == name)
+    def runs_with(self):
+        """What the session in view runs with from its next turn: the host's
+        word for a made one; for one not made yet, what it will be made with
+        where the user chose it (the rest is the defaults')."""
+        if self.client.session is not None:
+            return self.connection.runs_with(self.client.session)
+        chosen = {
+            "mode": self.client.mode or self.defaults.get("mode"),
+            "model": (self.client.model or self.defaults.get("model")
+                      or self.default_model()),
+            "effort": self.client.effort,
+        }
+        return {name: value for name, value in chosen.items() if value}
 
     def key(self, id):
         """The first of an action's keys, as the views' hints name it."""

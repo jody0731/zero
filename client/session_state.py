@@ -21,6 +21,8 @@ class SessionState:
         self.mode = mode
         self.model = model
         self.workspace = workspace
+        # A new session's thinking effort; None: the host's default
+        self.effort = None
         self.running = False
         # The open ask's `ask` record, from the log
         self.ask = None
@@ -116,6 +118,8 @@ class SessionState:
                 "session": self.session, "mode": self.mode, "model": self.model,
                 "reply_to": reply_to, "workspace": self.workspace,
             }
+            if self.session is None and self.effort is not None:
+                options["effort"] = self.effort
             if follow_up:
                 options["when_busy"] = "queue"
             if choice is not None and reply_to is not None:

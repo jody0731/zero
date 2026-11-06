@@ -15,11 +15,11 @@ EFFORTS = ("off", "low", "high", "max")
 SETTINGS = (
     # The user's default: none until they connect a model; ZERO's code has
     # none of its own
-    Setting("model", "New sessions", "Model", None, "model",
+    Setting("model", "Default", "Model", None, "model",
             off="none set"),
     # The agent's own calls only; the consent check stays on the API's
     # default. DeepSeek's thinking; other providers get nothing
-    Setting("effort", "New sessions", "The agent's thinking (DeepSeek)", "high",
+    Setting("effort", "Default", "Thinking effort", "high",
             "choice", choices=EFFORTS),
     # Silence, not the whole call: before the first token and between
     # tokens

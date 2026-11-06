@@ -11,7 +11,7 @@ approver, is its own part (judge/).
 from settings import Setting
 
 SETTINGS = (
-    Setting("mode", "New sessions", "Mode", "default", "mode"),
+    Setting("mode", "Default", "Mode", "default", "mode"),
     Setting("consent_timeout", "Host",
             "Seconds the consent check may stay silent", 30, "number",
             shown=False),

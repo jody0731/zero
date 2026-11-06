@@ -145,17 +145,20 @@ class Connection:
         return reply
 
     def send(self, text, session=None, mode=None, model=None, reply_to=None,
-             workspace=None, when_busy="steer", choice=None):
+             workspace=None, when_busy="steer", choice=None, effort=None):
         """`reply_to`: the open ask's id, for a line typed at its prompt.
-        `workspace`: a new session's folder. `when_busy`: "queue" makes a
-        follow-up that waits for the running turn's answer. `choice`:
-        one of the open ask's choices, picked at its box."""
+        `workspace` and `effort`: a new session's folder and thinking.
+        `when_busy`: "queue" makes a follow-up that waits for the running
+        turn's answer. `choice`: one of the open ask's choices, picked at its
+        box."""
         msg_id = str(uuid.uuid4())
         request = build(
             "session/send", id=msg_id, text=text, session=session, mode=mode,
             model=model, source=self.source, reply_to=reply_to,
             workspace=workspace, when_busy=when_busy,
         )
+        if effort is not None:
+            request["effort"] = effort
         if choice is not None:
             request["choice"] = choice
         return {**self.call(request), "id": msg_id}
@@ -167,11 +170,13 @@ class Connection:
             "session/continue", id=msg_id, session=session, source=self.source,
         )), "id": msg_id}
 
-    def set(self, session, mode=None, model=None, workspace=None, effort=None):
-        """Change a session's mode, model, workspace or effort from its next
-        turn."""
+    def set(self, session, mode=None, model=None, workspace=None, effort=None,
+            judge_model=None, judge_effort=None):
+        """Change a session's mode, model, workspace, effort or judge from its
+        next turn; a `judge_model` of "" is the session's own model again."""
         given = {"mode": mode, "model": model, "workspace": workspace,
-                 "effort": effort}
+                 "effort": effort, "judge_model": judge_model,
+                 "judge_effort": judge_effort}
         return self.call(build("session/set", session=session, **{
             name: value for name, value in given.items() if value is not None
         }))
@@ -257,14 +262,24 @@ class Connection:
             "session/list", archived=archived, workspace=workspace,
         ))["sessions"]
 
-    def history(self, session, after=0, limit=None, before=None):
-        """(records, gap): all the records after the seq (and before
-        `before`), or the newest `limit` of them."""
+    def read(self, session, after=0, limit=None, before=None):
+        """`session/read`'s whole reply: the records after the seq (and
+        before `before`), or the newest `limit` of them, the gap before
+        them, and what the session's next turn runs with (`runs_with`)."""
         # A limit of null asks for them all; left out, the host's window (50)
-        reply = self.call(build(
+        return self.call(build(
             "session/read", session=session, after=after, limit=limit, before=before,
         ))
+
+    def history(self, session, after=0, limit=None, before=None):
+        """(records, gap), as `read` gives them."""
+        reply = self.read(session, after, limit, before)
         return reply["records"], reply["gap"]
+
+    def runs_with(self, session):
+        """What the session's next turn runs with: its mode, model, workspace,
+        effort, judge_model (None: the session's own) and judge_effort."""
+        return self.read(session, limit=0)["runs_with"]
 
     def jobs(self, session=None):
         """A session's jobs, ended ones too; with none, every running job."""

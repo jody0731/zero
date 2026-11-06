@@ -127,7 +127,8 @@ class Store:
         """Put a message in the inbox. Returns (admitted, session id).
 
         `new_session`: the row of a session this message starts (title, source,
-        model, mode), created in the same transaction. A message whose id is
+        model, mode, workspace, and a switch its first turn takes), created in
+        the same transaction. A message whose id is
         already in the inbox isn't admitted again; its session is returned.
         """
         now = time.time()
@@ -140,8 +141,8 @@ class Store:
             if new_session:
                 db.execute(
                     "INSERT INTO sessions (id, title, source, model, mode, "
-                    "workspace, state, created, updated) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, ?)",
+                    "workspace, switch, state, created, updated) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)",
                     (
                         session,
                         new_session["title"],
@@ -149,6 +150,7 @@ class Store:
                         new_session["model"],
                         new_session["mode"],
                         new_session.get("workspace", "/"),
+                        new_session.get("switch"),
                         now,
                         now,
                     ),

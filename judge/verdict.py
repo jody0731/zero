@@ -8,6 +8,10 @@ as untrusted evidence, as Codex's guardian reads tool output: it tells the judge
 what is there, never what the user wants. Each output is cut in the middle, and
 only the latest commands show theirs.
 
+It writes its reason first, then a second look at the reason (where it
+could be wrong, checked against the conversation), then its decision: a
+decision written first is the reason's premise, not its conclusion.
+
 It answers allow or deny; it never asks the user (auto+ runs on its own, and
 asking the user when the goal is unclear is the agent's part). It has the
 user's third answer too where the call offers a grant ("session":
@@ -81,9 +85,16 @@ the offer names run without your review for the rest of this conversation.
 The assistant sees your reason when you deny. Keep it to one or two sentences.
 
 Answer with JSON only:
-{{"decision": "allow", "session" or "deny", "reason": "...", "side_effects": "..."}}
-side_effects: what the command does beyond the goal, or "" if nothing.
-""".strip()
+""".strip() + (
+    # The decision last, after the reason and a second look at it
+    '\n{{"reason": "...", "side_effects": "...", "second_look": "...", '
+    '"decision": "allow", "session" or "deny"}}\n'
+    'side_effects: what the command does beyond the goal, or "" if nothing.\n'
+    "second_look: where your reason and side_effects could be wrong, checked "
+    "against the conversation."
+)
+# The answer's fields in the order the judge writes them
+FIELDS = ("reason", "side_effects", "second_look", "decision")
 
 # Strict structured output (Ollama): the reply can only be this shape. Providers
 # without it get plain JSON mode; the prompt carries the shape either way
@@ -95,11 +106,12 @@ RESPONSE_FORMAT = {
         "schema": {
             "type": "object",
             "properties": {
-                "decision": {"type": "string", "enum": list(DECISIONS)},
                 "reason": {"type": "string"},
                 "side_effects": {"type": "string"},
+                "second_look": {"type": "string"},
+                "decision": {"type": "string", "enum": list(DECISIONS)},
             },
-            "required": ["decision", "reason", "side_effects"],
+            "required": list(FIELDS),
         },
     },
 }
@@ -124,7 +136,8 @@ def as_json_lines(history):
 
 
 def parse(content):
-    """{decision, reason, side_effects} from the reply, or VerdictError."""
+    """{decision, reason, side_effects, second_look} from the reply, or
+    VerdictError."""
     content = content or ""
     try:
         data = json.loads(content)
@@ -153,10 +166,13 @@ def parse(content):
     effects = effects.strip()
     if NOTHING.match(effects):
         effects = ""
+    # Kept for whoever reads the verdict; the decision stands without it
+    look = data.get("second_look")
     return {
         "decision": data["decision"],
         "reason": reason.strip(),
         "side_effects": effects,
+        "second_look": look.strip() if isinstance(look, str) else "",
     }
 
 

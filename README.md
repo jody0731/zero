@@ -27,7 +27,7 @@
 
 - **Any model:** any server that speaks the OpenAI chat API. ZERO ships a catalog (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter, Ollama) and takes servers of your own; no model is built in.
 - **Many sessions:** each with its own workspace and history, opened, switched, renamed or archived from any terminal.
-- **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes.
+- **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
 - **One host:** it runs every session. Turns, background jobs and waiting questions go on after the terminal closes, and every app reaches the host the same way.
 - **It trusts the model:** what the model reads states facts, never guardrails; the limits live in code; it is built for the models to come.
 
@@ -92,7 +92,7 @@ zero -r              # the session list
 zero -p "a question" # one question, for scripts
 ```
 
-Inside, `/help` lists the keys and `/` the commands; `/settings` sets the theme, new sessions' mode and model, the limits, the models and keys, and the key bindings.
+Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's model and its thinking; `/settings` sets this session, what new sessions start with, the theme, the models and keys and the key bindings, and in **Dev** the judge, the limits and the host.
 
 ### CLI
 

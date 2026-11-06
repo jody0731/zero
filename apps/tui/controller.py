@@ -27,7 +27,6 @@ MODE_CYCLE = ("default", "auto", "auto+", "readOnly")
 COMMANDS = {
     "/new": "a new session (asks for its workspace)",
     "/continue": "go on with a turn that ended without an answer",
-    "/history": "earlier records of this session",
     "/sessions": "the session list (also Ctrl+O)",
     "/rename": "rename this session: /rename TITLE",
     "/archive": "archive this session (or bring it back)",
@@ -37,11 +36,11 @@ COMMANDS = {
     "/permissions": "what runs without asking (a plan's calls aside); "
                     "/permissions forget N takes one back",
     "/mode": "the mode, from the next turn: /mode NAME, or pick (Shift+Tab cycles)",
-    "/model": "the model, from the next turn: /model NAME, or pick",
+    "/model": "the model and its thinking, from the next turn: /model NAME, "
+              "or pick",
     "/cd": "the folder its commands run in, from the next turn: /cd FOLDER",
-    "/effort": "the agent's thinking, from the next turn: /effort off, low, high "
-               "or max, or pick",
-    "/settings": "theme, new sessions' mode and models, limits, keys",
+    "/settings": "this session, new sessions' defaults, the TUI, models and "
+                 "keys, key bindings, Dev",
     "/init": "ZERO looks over you and this machine and fills in its ZERO.md",
     "/help": "keys and commands",
     "/quit": "leave; turns and jobs go on in ZERO",
@@ -56,9 +55,10 @@ INIT = (
 )
 HELP = """Sending: a new turn, or a steer while one runs; a \\ just before the
 send key starts a new line too. A follow-up waits for the answer. /mode, /model
-and /cd change the session from its next turn; /settings sets the theme, what
-new sessions start with, the limits and these keybindings. Click a command to unfold
-it; drag over text and Ctrl+C copies it (Shift+drag: the terminal's own
+and /cd change the session from its next turn; /settings sets this session, what
+new sessions start with, the theme and these keybindings, and in Dev the judge
+and the limits. Scrolling to the top brings earlier records. Click a command to
+unfold it; drag over text and Ctrl+C copies it (Shift+drag: the terminal's own
 selection); Ctrl+V pastes, Ctrl+A selects the input. The mouse wheel scrolls.
 Leaving, turns and jobs go on. Esc leaves a view."""
 
@@ -281,12 +281,19 @@ def resolve_workspace(text, cwd):
     return str(path.resolve())
 
 
-# What the settings view says under each group: when a change counts
+# What the settings views say under each section: when a change counts
 WHEN = {
-    "Look": "Applies at once; auto follows the desktop's dark or light setting.",
-    "New sessions": (
-        "For sessions made from now; /mode and /model change the session in "
-        "view. The judge decides the asks in auto and auto+."
+    "Current session": "Applies from this session's next turn, as /mode and "
+                       "/model do.",
+    "Default": (
+        "For sessions made from now: a session keeps what it was made with; "
+        "/mode and /model change the session in view."
+    ),
+    "TUI": "Applies at once; auto follows the desktop's dark or light setting.",
+    "Judge": (
+        "The judge answers the asks in auto and auto+: its reason, a second "
+        "look at it, then its decision. This session's rows apply from its "
+        "next turn; the default's to sessions made from now."
     ),
     "Limits": (
         "For sessions made from now: a session keeps the limits it was made "
@@ -294,14 +301,35 @@ WHEN = {
     ),
     "Host": "Counts at the host's next look, within a second.",
 }
+# A line more for a setting whose effect depends on the server
+NOTES = {
+    "effort": "Sent to DeepSeek; other servers get none.",
+    "judge_effort": "Sent to DeepSeek; other servers get none.",
+}
+# How a switch names what it changed, in a notice
+SWITCHED = {"effort": "thinking effort", "judge_model": "the judge's model",
+            "judge_effort": "the judge's thinking"}
+
+
+def switched_text(changes):
+    """What a switch set, in words: "Mode auto, the judge's model the
+    session's own"."""
+    said = []
+    for name, value in changes.items():
+        if name == "judge_model" and not value:
+            value = "the session's own"
+        said.append(f"{SWITCHED.get(name, name)} {value}")
+    text = ", ".join(said)
+    return text[:1].upper() + text[1:]
 
 
 def setting_text(setting, value, default_model=None):
     """A setting's value as the settings view shows it."""
     if value is None:
-        if setting.name == "model" and default_model:
+        if setting.name in ("model", "judge_model") and default_model:
             return f"{setting.off} ({default_model})"
-        return setting.off
+        # An effort the session was made without: none was sent
+        return setting.off or "the API's default"
     if isinstance(value, float):
         return f"{value:g}"
     return str(value)

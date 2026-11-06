@@ -17,17 +17,38 @@ class OldLog(ValueError):
 
 
 # What the user may change between a session's turns, each logged as a
-# `switch` note: its `to` values and the session's settings from then on
-SWITCHABLE = ("mode", "model", "workspace", "effort")
+# switch: its `to` values and the session's settings from then on. A change
+# to what the agent knows of itself (SEEN) is a `switch` note the model reads;
+# the judge's alone is a `switch` record it doesn't
+SEEN = ("mode", "model", "workspace", "effort")
+SWITCHABLE = (*SEEN, "judge_model", "judge_effort")
 
 
 def is_switch(record):
+    if record["type"] == "switch":
+        return True
     return record["type"] == "note" and record.get("kind") == "switch"
 
 
+def chosen_judge(settings):
+    """The judge a session's settings hold, as the user left it: its model
+    (None: the session's own) and its effort. A log written before the judge
+    was the session's own setting has only the judge it ran with, kept as it
+    was; None when it says nothing (no judge in its mode)."""
+    if "judge_model" in settings:
+        return {"judge_model": settings["judge_model"],
+                "judge_effort": settings.get("judge_effort")}
+    ran = settings.get("judge")
+    if ran:
+        return {"judge_model": ran.get("model"), "judge_effort": ran.get("effort")}
+    return None
+
+
 def running_with(records):
-    """The mode, model, workspace and effort the log runs with: its header's,
-    then each switch's; {} before the first turn."""
+    """The mode, model, workspace, effort and judge the log runs with: its
+    header's, then each switch's; {} before the first turn. The judge's two
+    come from the settings it runs with now, and are missing where those say
+    nothing of them."""
     if not records or records[0].get("type") != "session":
         return {}
     head = records[0]
@@ -40,6 +61,7 @@ def running_with(records):
     for record in records:
         if is_switch(record):
             now.update(record["to"])
+    now.update(chosen_judge(settings_now(records)) or {})
     return now
 
 

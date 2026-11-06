@@ -3,6 +3,20 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.6
+
+The settings in sections, `/model` with the thinking, and a judge that decides last.
+
+- **The settings view in sections:** Current session (its mode, model and thinking effort, from its next turn), Default (what new sessions start with; was New sessions), TUI (the theme and the mouse; was Look), Models and keys…, Key bindings…, and **Dev…**, a view of its own: the judge (for this session and by default), the limits and the host.
+- **The lists scroll with the selection,** in the settings views and the key bindings; before, ↑ and ↓ could move it off screen.
+- **`/model`** opens the session's model and its thinking effort; `/model NAME` still switches the model alone. **`/effort` is gone** (it's in `/model`), and so is **`/history`**: scrolling to the top brings earlier records.
+- **The judge decides last:** it writes its reason, then a second look at the reason (where it could be wrong, checked against the conversation), then its decision. Each verdict keeps its second look.
+- **The judge's thinking is off by default.** A session made before keeps the judge it was made with.
+- **A session's judge can change mid-session,** from its next turn: Dev's rows for this session, or `zero session set ID --judge-model M --judge-effort E` (`--judge-model ""`: the session's own model). The change is logged, and shows in the transcript, but isn't a note the model reads.
+- **A judge with no model of its own follows the session's model**, after `/model` too; before, it stayed on the model the session was made with.
+- **A thinking effort chosen before a session's first message now counts:** it goes with that message (`zero -p TEXT --effort off`, `zero session send --effort`).
+- The protocol (still 2): `session/set` takes `judge_model` and `judge_effort`, `session/send` a new session's `effort`, and `session/read`'s reply says what the session's next turn runs with (`runs_with`; `limit` 0 reads no records). `zero session read` shows it.
+
 ## 0.6.2.4.3
 
 A fix release.

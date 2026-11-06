@@ -134,11 +134,24 @@ def permissions_text(grants):
     return "\n".join(lines)
 
 
+# The judge's settings, as a switch line names them
+SWITCH_NAMES = {"judge_model": "judge", "judge_effort": "judge's thinking"}
+
+
 def switch_text(record):
-    """A switch note as the transcript shows it: "mode: default → auto"."""
+    """A switch as the transcript shows it: "mode: default → auto"; the
+    judge's too, which the model doesn't read."""
     before = record.get("from", {})
+
+    def said(name, value):
+        # The judge's model, unset, is the session's own
+        if name == "judge_model" and not value:
+            return "the session's model"
+        return value
+
     return " · ".join(
-        f"{name}: {before.get(name, '?')} → {value}"
+        f"{SWITCH_NAMES.get(name, name)}: {said(name, before.get(name, '?'))} "
+        f"→ {said(name, value)}"
         for name, value in record.get("to", {}).items()
     )
 
@@ -186,6 +199,8 @@ class Renderer:
         if kind == "note":
             self.restarts += record.get("kind") == "restarted"
             return [record["text"]]
+        if kind == "switch":
+            return [f"({switch_text(record)})"]
         if kind == "turn_end":
             elapsed = duration(record, self.started, self.restarts)
             if record["outcome"] == "answered":

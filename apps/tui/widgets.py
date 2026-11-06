@@ -267,6 +267,9 @@ class Transcript(VerticalScroll):
             if record.get("kind") == "switch":
                 return [Plain(f"◈ {render.switch_text(record)}", classes="note")]
             return [Plain(f"◈ {record['text']}", classes="note")]
+        if kind == "switch":
+            # The judge's: the model doesn't read it, the user sees it
+            return [Plain(f"◈ {render.switch_text(record)}", classes="note")]
         if kind == "turn_end":
             # An answer needs no line of its own; a turn that ended without
             # one says how

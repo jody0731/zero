@@ -54,7 +54,7 @@ from sessions import upgrade
 from sessions.log import Log, fresh_log
 from sessions.lock import Busy, SessionLock
 from host.parts import Refused
-from host.sessions import Sessions, title
+from host.sessions import Sessions, known_effort, title
 from host.store import Store, UnknownSession
 
 FAILED = ("crashed", "cut_off", "failed")
@@ -73,6 +73,8 @@ class Message:
     session: str | None = None
     mode: str | None = None
     model: str | None = None
+    # A new session's thinking effort; None: config.toml's
+    effort: str | None = None
     # Who sent it: each caller names itself (the CLI, terminal-<pid>)
     source: str = field(kw_only=True)
     # The ask this message replies to: the client marks a line typed at an
@@ -300,6 +302,11 @@ class Runtime(Sessions):
                 "mode": mode,
                 "workspace": str(Path(workspace).resolve()),
             }
+            if message.effort is not None:
+                # Its first turn builds it with the effort, as a switch would
+                new["switch"] = json.dumps(
+                    {"effort": known_effort("effort", message.effort)}
+                )
         payload = {"text": message.text, **(extra or {})}
         if message.reply_to is not None:
             payload["reply_to"] = message.reply_to
@@ -718,8 +725,9 @@ class Runtime(Sessions):
 
     def harness_for_turn(self, sid, log, records, begun):
         """The harness a turn runs on. A new turn takes what the user set
-        since the last one (mode, model, workspace), logged as a switch
-        note the model reads; a begun one (parked, or cut off by a restart)
+        since the last one (mode, model, workspace, effort, the judge),
+        logged as a switch, a note the model reads when it names what the
+        agent knows of itself; a begun one (parked, or cut off by a restart)
         keeps what it started with."""
         info = self.store.session(sid)
         switch = json.loads(info["switch"] or "{}")
@@ -731,19 +739,27 @@ class Runtime(Sessions):
         if not switch:
             return self.harness(sid, log)
         self.live.pop(sid, None)
-        # The effort has no column of its own: the switch carries it
+        # The effort and the judge have no column of their own: the switch
+        # carries them
         session = self.harness(sid, log, info={**info, **switch})
         changes = {
             name: (logged.get(name), new) for name, new in switch.items()
             if logged.get(name) != new
         }
         if changes and records:
-            session.write(
-                "note", kind="switch", text=switch_note(changes, session),
-                **{"from": {name: old for name, (old, _) in changes.items()}},
-                to={name: new for name, (_, new) in changes.items()},
-                settings=session.fresh_settings,
-            )
+            moved = {
+                "from": {name: old for name, (old, _) in changes.items()},
+                "to": {name: new for name, (_, new) in changes.items()},
+                "settings": session.fresh_settings,
+            }
+            seen = {k: v for k, v in changes.items() if k in history.SEEN}
+            if seen:
+                # The model reads what changed of what it knows of itself
+                session.write("note", kind="switch",
+                              text=switch_note(seen, session), **moved)
+            else:
+                # The judge alone: nothing the agent knows changed
+                session.write("switch", **moved)
             session.settings = session.fresh_settings
         self.store.update_session(sid, switch=None)
         return session

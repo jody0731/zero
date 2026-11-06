@@ -105,6 +105,8 @@ MESSAGES = {
         {
             "id": MESSAGE_ID, "text": STRING, "session": maybe(SESSION),
             "mode": maybe(STRING), "model": maybe(STRING), "source": SOURCE,
+            "effort": {**maybe(STRING), "description": "a new session's "
+                       "thinking effort: off, low, high or max"},
             "reply_to": {**maybe(STRING), "description": "the open ask's id: "
                          "this text answers it"},
             "workspace": {**maybe(STRING), "description": "a new session's "
@@ -142,11 +144,16 @@ MESSAGES = {
     ),
     "session/read": message(
         "A session's records: those after a seq, or the newest `limit` "
-        "(null: all), before `before`.",
+        "(null: all; 0: none), before `before`; and what its next turn runs "
+        "with.",
         {"session": SESSION, "after": INTEGER, "limit": maybe(INTEGER),
          "before": maybe(INTEGER)},
         required=("session",),
-        reply={"records": rows("the log's records"), "gap": INTEGER},
+        reply={"records": rows("the log's records"), "gap": INTEGER,
+               "runs_with": {**OBJECT, "description": "what its next turn runs "
+                             "with: mode, model, workspace, effort, "
+                             "judge_model (null: the session's model) and "
+                             "judge_effort"}},
     ),
     "session/watch": message(
         "A session's records after a seq, then each new one as it comes.",
@@ -179,10 +186,13 @@ MESSAGES = {
         reply={"trash": STRING},
     ),
     "session/set": message(
-        "Change a session's mode, model, workspace or effort from its next "
-        "turn.",
+        "Change a session's mode, model, workspace, effort or judge from its "
+        "next turn.",
         {"session": SESSION, "mode": STRING, "model": STRING,
-         "workspace": STRING, "effort": STRING},
+         "workspace": STRING, "effort": STRING,
+         "judge_model": {**STRING, "description": "empty: the session's own "
+                         "model"},
+         "judge_effort": STRING},
         required=("session",),
         reply={"set": OBJECT, "next_turn": BOOLEAN},
     ),

@@ -30,6 +30,7 @@ import time
 import traceback
 
 import settings
+from core import history
 from host import peers
 from host.parts import Refused
 from host.runtime import Message
@@ -278,7 +279,8 @@ class Host:
                 return error("before must be an integer")
             sid, after, limit = window(request)
             records, gap = self.runtime.history(sid, after, limit, before)
-            return {"ok": True, "records": records, "gap": gap}
+            return {"ok": True, "records": records, "gap": gap,
+                    "runs_with": self.runtime.runs_with(sid)}
         if name in HOUSEKEEPING:
             return self.housekeeping(name, request)
         if name in self.runtime.messages:
@@ -355,13 +357,10 @@ class Host:
         elif name in ("session/archive", "session/unarchive"):
             self.runtime.archive(sid, name == "session/archive")
         elif name == "session/set":
-            values = {
-                name: request.get(name)
-                for name in ("mode", "model", "workspace", "effort")
-            }
+            values = {name: request.get(name) for name in history.SWITCHABLE}
             if any(v is not None and not isinstance(v, str) for v in values.values()):
-                return error("session/set takes mode, model, workspace and "
-                             "effort, each a string")
+                return error("session/set takes mode, model, workspace, effort, "
+                             "judge_model and judge_effort, each a string")
             return {"ok": True, **self.runtime.set_session(sid, **values)}
         else:
             return {"ok": True, "trash": self.runtime.delete(sid)}
@@ -386,7 +385,8 @@ class Host:
             return error("a message needs an id: a string the sender picks")
         if not isinstance(text, str):
             return error("a message needs its text, a string")
-        names = ("session", "mode", "model", "reply_to", "workspace", "choice")
+        names = ("session", "mode", "model", "effort", "reply_to", "workspace",
+                 "choice")
         fields = {name: request.get(name) for name in names}
         fields["when_busy"] = request.get("when_busy") or "steer"
         fields["source"] = request.get("source")
@@ -505,7 +505,8 @@ def listed(request):
 
 
 def window(request, limit=50):
-    """A request's session, `after` (a seq) and `limit` (None: all)."""
+    """A request's session, `after` (a seq) and `limit` (None: all; 0: none,
+    for what a reply says beside the records)."""
     sid = request.get("session")
     after = request.get("after", 0)
     limit = request.get("limit", limit)
@@ -513,8 +514,8 @@ def window(request, limit=50):
         raise Refused("this message needs a session string")
     if type(after) is not int or after < 0:
         raise Refused("after must be a nonnegative integer")
-    if limit is not None and (type(limit) is not int or limit < 1):
-        raise Refused("limit must be a positive integer")
+    if limit is not None and (type(limit) is not int or limit < 0):
+        raise Refused("limit must be a nonnegative integer")
     return sid, after, limit
 
 

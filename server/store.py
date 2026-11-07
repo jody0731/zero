@@ -4,7 +4,8 @@ History lives in the session logs (sessions/log.py); this holds the inbox, the
 session list and the asks waiting for a reply, and the server services' tables
 (jobs/store.py). Every change is one transaction, committed before the caller
 goes on, so a message that got its ack is on disk. The database is born with
-its whole schema. `on_change` hears each committed
+its whole schema; a column renamed since a database was made is renamed in
+place when it opens (`RENAMED_COLUMNS`). `on_change` hears each committed
 transaction: the server's live session list.
 """
 
@@ -27,8 +28,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     workspace TEXT NOT NULL,
     -- idle, running, waiting, failed
     state TEXT NOT NULL,
-    created REAL NOT NULL,
-    updated REAL NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
     -- The newest record the user has seen, and when they last looked
     seen_seq INTEGER NOT NULL DEFAULT 0,
     seen_at REAL,
@@ -51,8 +52,8 @@ CREATE TABLE IF NOT EXISTS inbox (
     payload TEXT NOT NULL,
     -- queued, delivered (its turn is running), done
     status TEXT NOT NULL,
-    created REAL NOT NULL,
-    resumes INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    resume_count INTEGER NOT NULL DEFAULT 0,
     -- 1 when a clean stop cut its turn off: the resume uses no try
     clean_stop INTEGER NOT NULL DEFAULT 0
 );
@@ -69,14 +70,23 @@ CREATE TABLE IF NOT EXISTS asks (
     why TEXT NOT NULL,
     -- open, approved, cancelled
     status TEXT NOT NULL,
-    created REAL NOT NULL,
-    closed REAL,
+    created_at REAL NOT NULL,
+    closed_at REAL,
     -- The reply's inbox id and source
     reply TEXT,
     source TEXT
 );
 CREATE INDEX IF NOT EXISTS asks_open ON asks (session, status);
 """
+# Columns renamed since a database was made (0.6.2.8.1: a time ends in _at, a
+# count says so): table → {old name: new name}, renamed in place on opening
+RENAMED_COLUMNS = {
+    "sessions": {"created": "created_at", "updated": "updated_at"},
+    "inbox": {"created": "created_at", "resumes": "resume_count"},
+    "asks": {"created": "created_at", "closed": "closed_at"},
+}
+# Beside the database, a copy of it as it was before a rename
+BACKUP_SUFFIX = ".before-renames-"
 # A user message that waits for the turn's answer instead of steering it
 FOLLOW_UP = "json_extract(payload, '$.follow_up') IS NOT NULL"
 # A notice: any message but a user's and a stop (a job's, jobs/service.py)
@@ -87,9 +97,38 @@ class UnknownSession(Exception):
     pass
 
 
+def renames_due(db, renamed_columns):
+    """[(table, old, new)] for each old column a table still has, its new name
+    not there yet."""
+    due = []
+    for table, renames in renamed_columns.items():
+        have = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        due += [(table, old, new) for old, new in renames.items()
+                if old in have and new not in have]
+    return due
+
+
+def rename_columns(db, path, renamed_columns):
+    """Rename what is due in one transaction, after a copy of the database
+    as it was is kept beside it (`BACKUP_SUFFIX` and the time)."""
+    due = renames_due(db, renamed_columns)
+    if not due:
+        return
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = sqlite3.connect(path.with_name(f"{path.name}{BACKUP_SUFFIX}{stamp}"))
+    with backup:
+        db.backup(backup)
+    backup.close()
+    db.execute("BEGIN IMMEDIATE")
+    for table, old, new in due:
+        db.execute(f'ALTER TABLE {table} RENAME COLUMN "{old}" TO "{new}"')
+    db.execute("COMMIT")
+
+
 class Store:
-    def __init__(self, path, schemas=()):
-        """`schemas`: the server services' tables, made with the kernel's."""
+    def __init__(self, path, schemas=(), renamed_columns=()):
+        """`schemas`: the server services' tables, made with the kernel's;
+        `renamed_columns`: their RENAMED_COLUMNS, renamed with the kernel's."""
         path.parent.mkdir(parents=True, exist_ok=True)
         # One connection shared by the runtime's threads, one transaction at a time
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
@@ -100,6 +139,11 @@ class Store:
             # Each commit reaches the disk: an acked message survives a power cut
             self.db.execute("PRAGMA synchronous = FULL")
             self.db.execute("PRAGMA foreign_keys = ON")
+            rename_columns(self.db, path, {
+                **RENAMED_COLUMNS,
+                **{table: renames for each in renamed_columns
+                   for table, renames in each.items()},
+            })
             self.db.executescript(SCHEMA)
             for schema in schemas:
                 self.db.executescript(schema)
@@ -141,7 +185,7 @@ class Store:
             if new_session:
                 db.execute(
                     "INSERT INTO sessions (id, title, source, model, mode, "
-                    "workspace, switch, state, created, updated) "
+                    "workspace, switch, state, created_at, updated_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)",
                     (
                         session,
@@ -161,7 +205,7 @@ class Store:
                 raise UnknownSession(session)
             db.execute(
                 "INSERT INTO inbox (id, session, kind, source, payload, status, "
-                "created) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
+                "created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
                 (msg_id, session, kind, source, json.dumps(payload), now),
             )
         return True, session
@@ -182,11 +226,11 @@ class Store:
         `counted` False: a clean stop's turn, whose mark the resume clears."""
         with self.transaction() as db:
             db.execute(
-                "UPDATE inbox SET resumes = resumes + ?, clean_stop = 0, "
+                "UPDATE inbox SET resume_count = resume_count + ?, clean_stop = 0, "
                 "status = 'queued' WHERE arrival = ?", (int(counted), arrival),
             )
             db.execute(
-                "UPDATE sessions SET state = 'idle', updated = ? WHERE id = ?",
+                "UPDATE sessions SET state = 'idle', updated_at = ? WHERE id = ?",
                 (time.time(), session),
             )
 
@@ -196,7 +240,7 @@ class Store:
                 "UPDATE inbox SET status = ? WHERE arrival = ?", (status, arrival)
             )
             db.execute(
-                "UPDATE sessions SET state = ?, updated = ? WHERE id = ?",
+                "UPDATE sessions SET state = ?, updated_at = ? WHERE id = ?",
                 (state, time.time(), session),
             )
 
@@ -276,16 +320,16 @@ class Store:
     def park(self, session, ask, turn):
         """A turn parked on `ask` (its log record): the ask open, the session
         waiting. Kept once: the boot repair may write it again."""
-        created = datetime.fromisoformat(ask["time"]).timestamp()
+        created_at = datetime.fromisoformat(ask["time"]).timestamp()
         with self.transaction() as db:
             db.execute(
                 "INSERT OR IGNORE INTO asks (id, session, call, turn, tool, command, "
-                "why, status, created) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+                "why, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
                 (ask["ask"], session, ask["call"], turn, ask["tool"],
-                 str(ask["command"]), ask["why"], created),
+                 str(ask["command"]), ask["why"], created_at),
             )
             db.execute(
-                "UPDATE sessions SET state = 'waiting', updated = ? WHERE id = ?",
+                "UPDATE sessions SET state = 'waiting', updated_at = ? WHERE id = ?",
                 (time.time(), session),
             )
 
@@ -295,13 +339,13 @@ class Store:
         now = time.time()
         with self.transaction() as db:
             db.execute(
-                "UPDATE asks SET status = ?, closed = ?, reply = ?, source = ? "
+                "UPDATE asks SET status = ?, closed_at = ?, reply = ?, source = ? "
                 "WHERE id = ?",
                 ("approved" if yes else "cancelled", now, reply, source, ask),
             )
             db.execute("UPDATE inbox SET status = 'done' WHERE id = ?", (reply,))
             db.execute(
-                "UPDATE sessions SET state = 'running', updated = ? WHERE id = "
+                "UPDATE sessions SET state = 'running', updated_at = ? WHERE id = "
                 "(SELECT session FROM asks WHERE id = ?)", (now, ask),
             )
 
@@ -316,14 +360,14 @@ class Store:
         """The session's ask waiting for a reply, or None."""
         rows = self.query(
             "SELECT * FROM asks WHERE session = ? AND status = 'open' "
-            "ORDER BY created DESC LIMIT 1", session,
+            "ORDER BY created_at DESC LIMIT 1", session,
         )
         return rows[0] if rows else None
 
     def set_state(self, session, state):
         with self.transaction() as db:
             db.execute(
-                "UPDATE sessions SET state = ?, updated = ? WHERE id = ?",
+                "UPDATE sessions SET state = ?, updated_at = ? WHERE id = ?",
                 (state, time.time(), session),
             )
 
@@ -332,7 +376,7 @@ class Store:
         its row and its notice commit together; kept once by its id."""
         db.execute(
             "INSERT OR IGNORE INTO inbox (id, session, kind, source, payload, "
-            "status, created) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
+            "status, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
             (msg_id, session, source, source, json.dumps(payload), time.time()),
         )
 
@@ -361,7 +405,7 @@ class Store:
         """Every session, the most recently active first."""
         return self.query(
             "SELECT * FROM sessions ORDER BY (state = 'waiting') DESC, "
-            "updated DESC, created DESC"
+            "updated_at DESC, created_at DESC"
         )
 
     # What the user has seen, and housekeeping

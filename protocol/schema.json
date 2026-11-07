@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "zero-protocol-3",
-  "title": "Z.E.R.O. protocol 3",
+  "$id": "zero-protocol-4",
+  "title": "Z.E.R.O. protocol 4",
   "description": "One JSON object a line over the server's Unix socket (~/.zero/run/zero.sock): a request, then its reply; session/watch and session/list with watch stream events. Each request names its message in `message`.",
-  "x-protocol": 3,
+  "x-protocol": 4,
   "oneOf": [
     {
       "$ref": "#/$defs/server.hello"

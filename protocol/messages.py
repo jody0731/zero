@@ -4,8 +4,8 @@ Every face goes through it: the full screen, the plain commands (each mirrors
 one message), other agents (through `zero mcp serve`) and apps to come, in any
 language. A client sends one JSON object on one line and gets one line back:
 
-    {"message": "server/hello", "protocol": 2}
-        → {"ok": true, "protocol": 2, "build": "<hash>", "pid": 1234, ...}
+    {"message": "server/hello", "protocol": 4}
+        → {"ok": true, "protocol": 4, "build": "<hash>", "pid": 1234, ...}
     {"message": "session/send", "id": "<uuid>", "text": "...",
      "source": "cli", "workspace": "/a/folder", "when_busy": "steer"}
         → {"ok": true, "admitted": true, "session": "<id>",

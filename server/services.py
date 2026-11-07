@@ -20,6 +20,9 @@ class Service:
     name = ""
     # SQL creating its tables, run when the store opens
     schema = ""
+    # Its tables' columns renamed since a database was made: table → {old
+    # name: new name}, renamed in place when the store opens
+    renamed_columns = {}
     # Its tables with a `session` column: a deleted session's rows go too
     tables = ()
     # Its messages that only look, which ZERO's own commands may send too

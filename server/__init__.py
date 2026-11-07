@@ -1,8 +1,8 @@
 """The server kernel: the one process that runs every live session.
 
 runtime.py: messages in, turns run, records out, crash repair, parked asks,
-watchers, stop. sessions.py: the session list and what the user does to a
-session (read, set, rename, archive, seen, delete). store.py: the one
+watchers, stop. session_actions.py: the session list and what the user does
+to a session (read, set, rename, archive, mark seen, delete). store.py: the one
 database (sessions, inbox, asks). server.py: the socket and its messages.
 services.py: what a component's server service may add (jobs/service.py,
 permissions/service.py): its table, its messages, its reply step. The kernel imports

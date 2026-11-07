@@ -61,17 +61,17 @@ def moved_status(id, timeout):
 
 def state_text(row, now):
     if row["state"] == "running":
-        text = f"running {minutes(now - row['started'])}"
-        if row["due"] is not None:
-            left = row["due"] - now
+        text = f"running {minutes(now - row['started_at'])}"
+        if row["due_at"] is not None:
+            left = row["due_at"] - now
             if left >= 0:
                 text += f", expected to end in about {minutes(left)}"
             else:
                 text += f", {minutes(-left)} past its estimate"
         return text
-    took = minutes((row["ended"] or now) - row["started"])
+    took = minutes((row["ended_at"] or now) - row["started_at"])
     if row["state"] == "ended":
-        return f"ended: exit code {row['code']} after {took}"
+        return f"ended: exit code {row['exit_code']} after {took}"
     if row["state"] == "stopped":
         return f"stopped by the {row['stopped_by']} after {took}"
     return f"lost when ZERO stopped, after {took}"
@@ -94,7 +94,7 @@ def lost_notice(row, last, now, crashed):
         "when ZERO or the machine went down" if crashed
         else "when ZERO was stopped"
     )
-    ran = minutes(now - row["started"])
+    ran = minutes(now - row["started_at"])
     return (
         f"[Background job {row['id']} was cut off {how}, after running "
         f"{'at least ' if crashed else ''}{ran}. Its outcome is unknown. "
@@ -104,8 +104,8 @@ def lost_notice(row, last, now, crashed):
 
 
 def checkin_notice(row, last, now):
-    ran = minutes(now - row["started"])
-    if row["due"] is None:
+    ran = minutes(now - row["started_at"])
+    if row["due_at"] is None:
         where = f"has run {ran} with no estimate"
     else:
         where = f"has run {ran} and is past its estimate"

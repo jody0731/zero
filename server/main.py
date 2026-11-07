@@ -34,7 +34,7 @@ def build_runtime(paths, make_session=None, config=None, limits=None,
     (assembly.services); `options` to the Runtime."""
     config = config or (lambda: settings.DEFAULTS)
     if make_session is None:
-        make_session = assembly.server_sessions(paths, config, limits)
+        make_session = assembly.server_session_maker(paths, config, limits)
     services = assembly.services(config, make_consent, saved_permissions, tick)
     return Runtime(paths, make_session, tuple(assembly.MODES), services=services,
                    config=config, **options)

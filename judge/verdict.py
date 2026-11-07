@@ -186,7 +186,7 @@ class Judge:
         self.timeout = timeout
         # Tries after a reply that isn't a verdict (judge_retries)
         self.retries = retries
-        # Its thinking (judge_effort); None sends nothing, so the
+        # Its thinking (judge_thinking_effort); None sends nothing, so the
         # API's default holds
         self.effort = effort
         # What it sees of output (judge_output_chars and judge_outputs);

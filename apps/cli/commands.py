@@ -128,7 +128,7 @@ def history_text(info, records, working=True, runs_with=None):
     ask = info.get("ask")
     if working and ask is not None:
         age = waited(datetime.now().astimezone() - datetime.fromtimestamp(
-            ask["created"]
+            ask["created_at"]
         ).astimezone())
         lines.append(f"          {NAME}  (waiting {age} for your answer)")
     elif working and info["state"] in ("running", "waiting"):
@@ -160,7 +160,7 @@ def show(server, sid=None):
 def list_sessions(server, sessions=None):
     lines = []
     for info in server.sessions() if sessions is None else sessions:
-        clock = datetime.fromtimestamp(info["updated"]).astimezone()
+        clock = datetime.fromtimestamp(info["updated_at"]).astimezone()
         mark = "  (a question waits)" if info.get("ask") else ""
         lines.append(
             f"{info['id']}  {info['state']}  {info['mode']}  "

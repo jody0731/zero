@@ -3,6 +3,21 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.8.1
+
+A fix release: the names 0.6.2.8 missed.
+
+- **The state database's times end in `_at`:** the first start after the update renames
+  `state/state.sqlite`'s columns in place. A copy of the database as it was is kept beside it first
+  (`state.sqlite.before-renames-<time>`). Going back to 0.6.2.8 needs that copy.
+  - Sessions: `created_at`, `updated_at`. The inbox: `created_at`, `resume_count`. Asks: `created_at`,
+    `closed_at`.
+  - Jobs: `exit_code`, `started_at`, `ended_at`, `due_at`, `next_checkin_at`, `checkin_count`, `read_bytes`.
+- The rows `session/list` and `job/list` send carry the same names, so the protocol is 4. A client of 4
+  restarts an idle server of 3, as before, and names a busy one.
+- Texts that still said the old names now say the new ones; one failure message the model reads no longer
+  names ZERO's machinery ("the file operation in the sandbox failed").
+
 ## 0.6.2.8
 
 Every name says what it is. Your files keep working: old names still read, and nothing is rewritten until you

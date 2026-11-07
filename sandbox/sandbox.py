@@ -51,7 +51,7 @@ OUTSIDE = "It runs outside the sandbox, with the user's permissions and the netw
 def outside_crossing(args):
     """What a call that asks to run outside the sandbox crosses (the
     `outside_sandbox` the shell and the file tools offer), or None: the
-    tools' `crosses` (core/tools.py)."""
+    tools' `crossing` (core/tools.py)."""
     if args.get("outside_sandbox") is not True:
         return None
     return {"rule": "outside_sandbox", "fact": OUTSIDE, "why": args.get("reason")}

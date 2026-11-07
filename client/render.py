@@ -55,7 +55,7 @@ def divider(title, workspace, width=80):
 
 
 def jobs_text(jobs, sessions=False):
-    """The server's job rows, each with its state in words (`said`)."""
+    """The server's job rows, each with its state in words (`state_text`)."""
     return "\n".join(
         f"  {row['id']}  {row['session'] + '  ' if sessions else ''}"
         f"{row['state_text']}  {row['command']}"

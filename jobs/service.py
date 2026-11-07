@@ -21,7 +21,7 @@ from pathlib import Path
 from server.services import Service, Refused
 from jobs import SETTINGS, process
 from jobs import tool as jobtools
-from jobs.store import SCHEMA, JobStore
+from jobs.store import RENAMED_COLUMNS, SCHEMA, JobStore
 
 # Running jobs before another one asks, for a session whose limits name none
 MAX_JOBS = {s.name: s.default for s in SETTINGS}["max_jobs"]
@@ -86,16 +86,16 @@ class SessionJobs:
         return self.service.stop_job(id, by="model")
 
     def set_estimate(self, id, minutes):
-        due = self.service.clock() + minutes * 60
-        self.service.store.update_job(id, due=due, checkin=due)
+        due_at = self.service.clock() + minutes * 60
+        self.service.store.update_job(id, due_at=due_at, next_checkin_at=due_at)
 
     def look(self, id):
         """Its output since the model's last look; a look that sees the end takes
         the place of the end's notice."""
         row = self.service.store.job(id)
         files = self.service.files(id)
-        text, dropped = files.read(row["read"])
-        self.service.store.update_job(id, read=files.size)
+        text, dropped = files.read(row["read_bytes"])
+        self.service.store.update_job(id, read_bytes=files.size)
         if row["state"] != "running":
             self.service.store.withdraw(f"job:{id}:end")
         return text, dropped
@@ -105,6 +105,7 @@ class JobsService(Service):
     name = "jobs"
     looking_messages = ("job/list",)
     schema = SCHEMA
+    renamed_columns = RENAMED_COLUMNS
     tables = ("jobs",)
 
     def __init__(self, tick=2.0, clock=time.time):
@@ -144,7 +145,7 @@ class JobsService(Service):
 
     def rows(self, sid=None):
         """A session's jobs, ended ones too, or every running one; each with
-        its state in words (`said`), as the model reads it, so a client needs
+        its state in words (`state_text`), as the model reads it, so a client needs
         no harness code to say it."""
         rows = self.running_jobs() if sid is None else self.store.jobs(sid)
         now = time.time()
@@ -189,7 +190,7 @@ class JobsService(Service):
 
     def last_output(self, row):
         """The output the model hasn't looked at, for a notice."""
-        return self.files(row["id"]).read(row["read"])[0]
+        return self.files(row["id"]).read(row["read_bytes"])[0]
 
     def start(self, sid, proc, command, expect_minutes=None, ran=0.0):
         """Record a running process as a job and start its pump. `ran`: how
@@ -198,10 +199,11 @@ class JobsService(Service):
         check-in count from now, when it became a job."""
         id = process.new_id()
         now = self.clock()
-        due = now + expect_minutes * 60 if expect_minutes else None
-        checkin = due if due is not None else now + jobtools.FIRST_CHECKIN
-        self.store.add_job(id, sid, command, proc.pid, now - ran, due, checkin,
-                           pid_start(proc.pid))
+        due_at = now + expect_minutes * 60 if expect_minutes else None
+        next_checkin_at = (due_at if due_at is not None
+                           else now + jobtools.FIRST_CHECKIN)
+        self.store.add_job(id, sid, command, proc.pid, now - ran, due_at,
+                           next_checkin_at, pid_start(proc.pid))
         job = process.Job(id, proc, self.files(id), self.ended)
         with self.lock:
             self.live[id] = job
@@ -221,16 +223,17 @@ class JobsService(Service):
         if job.stopped_by == "model":
             # The model stopped it itself, so it already knows
             self.store.settle_job(
-                job.id, state="stopped", code=code, ended=now, stopped_by="model"
+                job.id, state="stopped", exit_code=code, ended_at=now,
+                stopped_by="model",
             )
             return
         state = "stopped" if job.stopped_by else "ended"
-        settled = {**row, "state": state, "code": code, "ended": now,
+        settled = {**row, "state": state, "exit_code": code, "ended_at": now,
                    "stopped_by": job.stopped_by}
         text = jobtools.ended_notice(settled, self.last_output(row), now)
         self.store.settle_job(
-            job.id, notice=(f"job:{job.id}:end", text), state=state, code=code,
-            ended=now, stopped_by=job.stopped_by,
+            job.id, notice=(f"job:{job.id}:end", text), state=state,
+            exit_code=code, ended_at=now, stopped_by=job.stopped_by,
         )
         self.wake()
 
@@ -249,14 +252,15 @@ class JobsService(Service):
         now = self.clock()
         woke = False
         for row in self.running_jobs():
-            if row["checkin"] > now:
+            if row["next_checkin_at"] > now:
                 continue
-            count = row["checkins"] + 1
+            count = row["checkin_count"] + 1
             text = jobtools.checkin_notice(row, self.last_output(row), now)
             notice = (f"job:{row['id']}:checkin:{count}", text)
-            following = now + (now - row["started"])
+            following = now + (now - row["started_at"])
             woke |= self.store.settle_job(
-                row["id"], notice=notice, checkins=count, checkin=following
+                row["id"], notice=notice, checkin_count=count,
+                next_checkin_at=following,
             )
         if woke:
             self.wake()
@@ -279,7 +283,7 @@ class JobsService(Service):
             text = jobtools.lost_notice(row, self.last_output(row), now, crashed=True)
             self.store.settle_job(
                 row["id"], notice=(f"job:{row['id']}:lost", text), state="lost",
-                ended=now,
+                ended_at=now,
             )
         self.stopping.clear()
         self.ticker = threading.Thread(target=self.run_ticker, name="jobs",
@@ -296,7 +300,8 @@ class JobsService(Service):
             row = self.store.job(job.id)
             text = jobtools.lost_notice(row, self.last_output(row), now, crashed=False)
             self.store.settle_job(
-                job.id, notice=(f"job:{job.id}:lost", text), state="lost", ended=now
+                job.id, notice=(f"job:{job.id}:lost", text), state="lost",
+                ended_at=now,
             )
             job.stopped_by = "shutdown"
             job.stop_flag.set()

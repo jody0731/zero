@@ -29,7 +29,8 @@ LONG_LINE_CHARS = 2000
 MAX_FILE_BYTES = 10 << 20
 # A NUL byte in this much of a file's start makes it binary
 BINARY_PROBE_BYTES = 8192
-HELPER_SECONDS = 30
+# How long a read or write in the sandbox may run
+SANDBOXED_IO_SECONDS = 30
 SANDBOXED_IO_SOURCE = Path(sandboxed_io.__file__).read_text()
 # The system's own interpreter, not the venv's: the sandbox may hide the venv
 # (the evals hide the whole repository); sandboxed_io needs only the stdlib
@@ -51,13 +52,15 @@ def run_sandboxed_io(box, request):
         text=True,
         env=box.env(),
         cwd=box.workspace,
-        timeout=HELPER_SECONDS,
+        timeout=SANDBOXED_IO_SECONDS,
     )
     try:
         return json.loads(done.stdout)
     except json.JSONDecodeError:
         tail = done.stderr.strip()[-300:] or f"exit code {done.returncode}"
-        raise SandboxedIOError(f"the file helper failed: {tail}") from None
+        raise SandboxedIOError(
+            f"the file operation in the sandbox failed: {tail}"
+        ) from None
 
 
 def pick_box(sandbox, outside, outside_sandbox):

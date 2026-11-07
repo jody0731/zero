@@ -18,8 +18,8 @@ class OldLog(ValueError):
 
 # What the user may change between a session's turns, each logged as a
 # switch: its `to` values and the session's settings from then on. A change
-# to what the agent knows of itself (SEEN) is a `switch` note the model reads;
-# the judge's alone is a `switch` record it doesn't
+# to what the agent knows of itself (MODEL_VISIBLE) is a `switch` note the
+# model reads; the judge's alone is a `switch` record it doesn't
 MODEL_VISIBLE = ("mode", "model", "workspace", "thinking_effort")
 SWITCHABLE = (*MODEL_VISIBLE, "judge_model", "judge_thinking_effort")
 # Two settings a log written before 0.6.2.8 names otherwise

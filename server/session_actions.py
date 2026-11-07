@@ -147,7 +147,7 @@ class SessionActions:
             ask = asks.get(row["id"])
             row["ask"] = None if ask is None else {
                 "id": ask["id"], "tool": ask["tool"], "command": ask["command"],
-                "why": ask["why"], "created": ask["created"],
+                "why": ask["why"], "created_at": ask["created_at"],
             }
             row["archived"] = bool(row["archived"])
             row["unseen"] = row["end_seq"] > row["seen_seq"]

@@ -29,7 +29,7 @@ it; a stop gives the turn's untaken steers and follow-ups back to their sender;
 `continue` takes a turn that ended without an answer on with a harness note;
 `settled` tells a session's watchers that nothing more will happen on its own.
 The server keeps what the user has seen of each session, and the list's
-listeners hear each change to it (sessions.py).
+listeners hear each change to it (session_actions.py).
 
 The runtime names no component: the assembly hands in how a session is
 made, the modes, and the services (server/services.py), which add their
@@ -163,7 +163,8 @@ class Runtime(SessionActions):
         if mode and mode not in self.modes:
             raise ValueError(f"unknown mode {mode!r}; modes: {self.modes}")
         self.store = Store(
-            paths.db, [service.schema for service in services if service.schema]
+            paths.db, [service.schema for service in services if service.schema],
+            [service.renamed_columns for service in services],
         )
         self.config = config or (lambda: settings.DEFAULTS)
         self.make_session = make_session
@@ -461,7 +462,7 @@ class Runtime(SessionActions):
             elif row["clean_stop"]:
                 # A clean stop cut it off: it resumes without using a try
                 self.store.resume(row["arrival"], sid, counted=False)
-            elif row["resumes"] < MAX_RESUMES:
+            elif row["resume_count"] < MAX_RESUMES:
                 self.store.resume(row["arrival"], sid)
             else:
                 self.repair_end(log, pending, row, "failed", "cut off after 3 resumes")

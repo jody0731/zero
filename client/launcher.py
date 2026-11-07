@@ -8,9 +8,10 @@ else as a detached process. It
 polls until the server answers. A server that takes the connection but never
 answers is reported with its pid, never replaced by a second one. A server with
 another build (the code changed since it started) is restarted when it is
-idle, and only said to run older code while it is busy; so is a server of
-protocol 1, which names a request's message in "verb", as an installed ZERO
-runs until its first update past it.
+idle, and only said to run older code while it is busy; so is a server of an
+older protocol, as an installed ZERO runs until its first update past it:
+protocol 1 names a request's message in "verb", 2 knows host/hello, 3 refuses
+a hello naming another protocol and answers one naming none.
 """
 
 import fcntl
@@ -49,7 +50,13 @@ def hello(paths, timeout=PROBE_SECONDS):
     payload = messages.request("server/hello", protocol=version.PROTOCOL)
     try:
         reply = request(paths.socket, payload, timeout)
-        if not reply.get("ok") and "protocol" not in reply:
+        if not reply.get("ok") and reply.get("protocol", version.PROTOCOL) < (
+                version.PROTOCOL):
+            # An older server of protocol 3 or later refuses a hello naming
+            # another protocol; one naming none gets its whole reply
+            reply = request(paths.socket, messages.request("server/hello"),
+                            timeout)
+        elif not reply.get("ok") and "protocol" not in reply:
             # An older server knows no server/hello; its own hello tells
             for old_hello, number in ((HOST_HELLO, 2), (OLD_HELLO, 1)):
                 old = request(paths.socket, old_hello, timeout)

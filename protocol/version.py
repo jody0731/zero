@@ -9,7 +9,7 @@ older code.
 import hashlib
 from pathlib import Path
 
-PROTOCOL = 3
+PROTOCOL = 4
 # ZERO's folder
 ROOT = Path(__file__).resolve().parents[1]
 

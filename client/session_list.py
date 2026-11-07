@@ -21,8 +21,8 @@ def needs_you(sessions, current=None):
             asks.append(row)
         elif row.get("unseen"):
             news.append(row)
-    asks.sort(key=lambda row: row["ask"]["created"])
-    news.sort(key=lambda row: row["updated"])
+    asks.sort(key=lambda row: row["ask"]["created_at"])
+    news.sort(key=lambda row: row["updated_at"])
     return asks + news
 
 
@@ -54,11 +54,11 @@ def groups(sessions, typed=""):
     ]
     waiting = sorted(
         (row for row in rows if row.get("ask") is not None),
-        key=lambda row: row["ask"]["created"],
+        key=lambda row: row["ask"]["created_at"],
     )
     rest = sorted(
         (row for row in rows if row.get("ask") is None),
-        key=lambda row: -row["updated"],
+        key=lambda row: -row["updated_at"],
     )
     return waiting, rest
 
@@ -76,7 +76,7 @@ def session_to_open(cwd, last, sessions):
     here = [row for row in live if row["workspace"] == cwd]
     if not here:
         return None, False
-    return max(here, key=lambda row: row["updated"])["id"], False
+    return max(here, key=lambda row: row["updated_at"])["id"], False
 
 
 def tilde_path(path, home=None):
@@ -112,12 +112,12 @@ def row_state(row, now=None):
     """A list row's state and how long: 'waiting 12 min', 'running 40 s'."""
     now = time.time() if now is None else now
     if row.get("ask") is not None:
-        return f"waiting {ago(now - row['ask']['created'])}"
+        return f"waiting {ago(now - row['ask']['created_at'])}"
     state = row["state"]
     if state in ("idle", "failed"):
         word = "done" if row.get("unseen") else state
-        return f"{word} {ago(now - row['updated'])} ago"
-    return f"{state} {ago(now - row['updated'])}"
+        return f"{word} {ago(now - row['updated_at'])} ago"
+    return f"{state} {ago(now - row['updated_at'])}"
 
 
 def row_mark(row):

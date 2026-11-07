@@ -1,11 +1,12 @@
 """The assembly: where ZERO is put together.
 
 Each component declares its own settings, tools and hooks; this collects
-them: every component's SETTINGS, in the settings view's ORDER; the tools, by
-importing their modules in the order the model reads them; the hooks a
-session loads in its mode, and their order (`chat`); a session and its tool
-context (`make_session`); and what server/main.py hands the server kernel: how it
-makes a session (`server_sessions`, `server_session`) and the components' services
+them: every component's SETTINGS, in the settings view's order
+(`SETTINGS_ORDER`); the tools, by importing their modules in the order the
+model reads them; the hooks a session loads in its mode, and their order
+(`session_hooks`); a session and its tool context (`make_session`); and what
+server/main.py hands the server kernel: how it makes a session
+(`server_session_maker`, `server_session`) and the components' services
 (`services`).
 
 A mode (permissions/modes.py) picks the sandbox and who decides an ask. The
@@ -16,7 +17,7 @@ max_seconds. Wherever anything asks, the soft caps load (limits/steps.py): a
 turn past `max_steps` (50) asks to go on, as an 11th running job does. Who
 ZERO and the user are comes from SOUL.md and ZERO.md (prompt/), never
 from here.
-`chat` is a function, not a list, because hooks keep state per session.
+`session_hooks` is a function, not a list, because hooks keep state per session.
 Order in the list matters for system-prompt text, and for a note one hook
 sets before another reads it (the permissions memory's `granted`, read by
 the repeat guard); it never changes how decisions combine (core/hooks.py).
@@ -376,7 +377,7 @@ def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options)
     )
 
 
-def server_sessions(paths, config, limits=None):
+def server_session_maker(paths, config, limits=None):
     """How the server makes a session (its `make_session`): server_session on
     `config()` as it stands; `limits` over the config's."""
     options = {"limits": limits} if limits else {}

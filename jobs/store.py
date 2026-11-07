@@ -16,21 +16,28 @@ CREATE TABLE IF NOT EXISTS jobs (
     pid_start TEXT,
     -- running, ended, stopped, lost
     state TEXT NOT NULL,
-    code INTEGER,
-    started REAL NOT NULL,
-    ended REAL,
+    exit_code INTEGER,
+    started_at REAL NOT NULL,
+    ended_at REAL,
     -- When the model's estimate runs out; NULL with none
-    due REAL,
+    due_at REAL,
     -- When it next checks in, while it runs
-    checkin REAL NOT NULL,
-    checkins INTEGER NOT NULL DEFAULT 0,
+    next_checkin_at REAL NOT NULL,
+    checkin_count INTEGER NOT NULL DEFAULT 0,
     -- How far into its output the model has looked
-    read INTEGER NOT NULL DEFAULT 0,
+    read_bytes INTEGER NOT NULL DEFAULT 0,
     -- model or user
     stopped_by TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_running ON jobs (state, session);
 """
+# Columns renamed since a database was made (0.6.2.8.1), renamed in place when
+# the server's store opens (server/store.py)
+RENAMED_COLUMNS = {
+    "jobs": {"code": "exit_code", "started": "started_at", "ended": "ended_at",
+             "due": "due_at", "checkin": "next_checkin_at",
+             "checkins": "checkin_count", "read": "read_bytes"},
+}
 
 
 class JobStore:
@@ -39,13 +46,15 @@ class JobStore:
     def __init__(self, store):
         self.store = store
 
-    def add_job(self, id, session, command, pid, started, due, checkin,
-                pid_start=None):
+    def add_job(self, id, session, command, pid, started_at, due_at,
+                next_checkin_at, pid_start=None):
         with self.store.transaction() as db:
             db.execute(
                 "INSERT INTO jobs (id, session, command, pid, pid_start, state, "
-                "started, due, checkin) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)",
-                (id, session, command, pid, pid_start, started, due, checkin),
+                "started_at, due_at, next_checkin_at) "
+                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)",
+                (id, session, command, pid, pid_start, started_at, due_at,
+                 next_checkin_at),
             )
 
     def job(self, id):
@@ -61,7 +70,7 @@ class JobStore:
             args.append(session)
         if running:
             sql += " AND state = 'running'"
-        return self.store.query(sql + " ORDER BY started", *args)
+        return self.store.query(sql + " ORDER BY started_at", *args)
 
     def update_job(self, id, **fields):
         names = ", ".join(f"{name} = ?" for name in fields)

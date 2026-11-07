@@ -7,7 +7,7 @@ can talk it into a yes. It decides one thing: is the reply an unconditional yes
 to running exactly this command, now? Anything else (a no, a question, a
 condition, a change, hesitation) is not, and goes to the agent as a message. No
 words are matched in code: "y" goes through it too. An error or a timeout is not
-a yes. Who calls it: the reply step of a host that parks turns (host.py).
+a yes. Who calls it: the reply step of a server that parks turns (service.py).
 """
 
 import json
@@ -89,7 +89,7 @@ OFFERS = {
 }
 
 
-def chosen(verdict, ask):
+def chosen_answer(verdict, ask):
     """What a verdict on the user's words picks of the ask's answers: the
     grant the words ask for, if the ask offers it, else a plain yes; None
     when the words aren't a yes."""
@@ -118,7 +118,7 @@ class Consent:
 
     def __init__(self, model):
         self.model = model.name
-        self.api_name = model.api_name
+        self.served_name = model.served_name
         # Seconds the check may stay silent (complete's `silence`)
         self.timeout = model.timeout
         self.client = model.client
@@ -145,7 +145,7 @@ class Consent:
         tokens = thought = None
         try:
             reply = complete(
-                self.api, self.client, self.api_name, messages,
+                self.api, self.client, self.served_name, messages,
                 silence=self.timeout, temperature=0,
                 **self.json_request(SCHEMA),
             )

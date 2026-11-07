@@ -7,10 +7,10 @@ let out of the sandbox) that includes the commands ZERO runs: `zero -p yes
 own commands may look, and only the user's own client sends, answers, stops
 or changes anything.
 
-A peer is ZERO's own when its process descends from the host's, or, where
-the host runs in its unit (systemd's transient `zero-host`, named to it in
-ZERO_HOST_UNIT by client/launcher.py, and the host's cgroup is that unit's),
-when it lives in the host's cgroup: a command whose parent is gone is taken
+A peer is ZERO's own when its process descends from the server's, or, where
+the server runs in its unit (systemd's transient `zero-server`, named to it in
+ZERO_SERVER_UNIT by client/launcher.py, and the server's cgroup is that unit's),
+when it lives in the server's cgroup: a command whose parent is gone is taken
 in by systemd but stays in the unit. What this leaves:
 a command that starts `zero` in a unit of its own (`systemd-run --user
 --scope zero …`), which the judge sees as it is. Sandboxed commands can't
@@ -21,15 +21,15 @@ import os
 import socket
 import struct
 
-# Where client/launcher.py names the host's unit to it
-UNIT_ENV = "ZERO_HOST_UNIT"
+# Where client/launcher.py names the server's unit to it
+UNIT_ENV = "ZERO_SERVER_UNIT"
 UNSET = object()
 
 
-def refused(looking=()):
-    """The no one of ZERO's own commands gets; `looking`: the messages that
-    only look, the kernel's and the parts'."""
-    named = ", ".join(looking)
+def refused(looking_messages=()):
+    """The no one of ZERO's own commands gets; `looking_messages`: the messages that
+    only look, the kernel's and the services'."""
+    named = ", ".join(looking_messages)
     return (
         f"ZERO's own commands can look at sessions over this socket ({named}) "
         "but not send, answer, stop or change anything: that comes from the "
@@ -69,7 +69,7 @@ def cgroup(pid):
 
 class Peers:
     def __init__(self, pid=None, unit=UNSET):
-        """`unit`: the host's unit's name (client/launcher.py sets it), or None
+        """`unit`: the server's unit's name (client/launcher.py sets it), or None
         for none."""
         self.pid = pid or os.getpid()
         if unit is UNSET:
@@ -80,8 +80,8 @@ class Peers:
         in_unit = unit and mine and mine.rstrip().endswith(f"/{unit}.service")
         self.cgroup = mine if in_unit else None
 
-    def own(self, pid):
-        """Whether process `pid` is one of ZERO's own commands. The host's
+    def is_zero_command(self, pid):
+        """Whether process `pid` is one of ZERO's own commands. The server's
         own process is not: only a test connects from it."""
         if pid is None or pid <= 1 or pid == self.pid:
             return False

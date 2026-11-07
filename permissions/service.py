@@ -1,4 +1,4 @@
-"""The permissions' part in the host (host/parts.py): the reply step, and the
+"""The permissions' service in the server (server/services.py): the reply step, and the
 `grant/list` and `grant/forget` messages.
 
 The reply step runs when a reply reaches a parked ask. One of the ask's
@@ -8,10 +8,10 @@ if the ask offers it. A "saved" answer writes its grant to the user's file
 (grants.py).
 """
 
-from host.parts import Part, Refused
-from host.runtime import picked
+from server.services import Service, Refused
+from server.runtime import picked
 from permissions import grants
-from permissions.consent import chosen, question
+from permissions.consent import chosen_answer, question
 from permissions.modes import JUDGED
 
 # Why a session's grant can't be taken back now
@@ -21,9 +21,9 @@ TURN_HOLDS = (
 )
 
 
-class PermissionsHost(Part):
+class PermissionsService(Service):
     name = "permissions"
-    looking = ("grant/list",)
+    looking_messages = ("grant/list",)
 
     def __init__(self, make_consent, saved_permissions=None):
         """`make_consent(model)` builds the consent check for a session's
@@ -42,7 +42,7 @@ class PermissionsHost(Part):
         sid = request.get("session")
         if not isinstance(sid, str):
             raise Refused("grant/list needs a session string")
-        return {"ok": True, "grants": self.permissions(sid)}
+        return {"ok": True, "grants": self.grants(sid)}
 
     def forget_message(self, request):
         sid, grant = request.get("session"), request.get("grant")
@@ -50,15 +50,15 @@ class PermissionsHost(Part):
             raise Refused("grant/forget needs a session string")
         if not isinstance(grant, str):
             raise Refused("grant/forget needs the grant's id, a string")
-        return {"ok": True, **self.forget(sid, grant)}
+        return {"ok": True, **self.forget_grant(sid, grant)}
 
     def reply(self, sid, ask, payload):
         choice, verdict = picked(ask, payload), None
         if payload.get("reply_to") == ask["ask"] and choice is None:
             verdict = self.consent(sid, ask, payload["text"])
-            choice = chosen(verdict, ask)
+            choice = chosen_answer(verdict, ask)
         path = self.saved_permissions and self.saved_permissions()
-        grants.keep(path, ask, choice, sid)
+        grants.save_grant(path, ask, choice, sid)
         return choice, verdict
 
     def consent(self, sid, ask, text):
@@ -67,7 +67,7 @@ class PermissionsHost(Part):
             self.consents[model] = self.make_consent(model)
         return self.consents[model].decide(question(ask), text)
 
-    def permissions(self, sid):
+    def grants(self, sid):
         """The grants that hold in a session: its own, the judge's where
         the judge answers, and the user's saved ones; each with its words."""
         info = self.runtime.store.session(sid)
@@ -77,12 +77,12 @@ class PermissionsHost(Part):
         held = grants.listing(
             self.runtime.log(sid).records(), path, info["mode"] in JUDGED
         )
-        return [{**g, "what": grants.describe(g["grant"])} for g in held]
+        return [{**g, "description": grants.describe(g["grant"])} for g in held]
 
-    def forget(self, sid, grant_id):
+    def forget_grant(self, sid, grant_id):
         """Take a grant back: a saved one from the user's file, a session's
         with a `forget` record (refused while a turn runs or waits)."""
-        found = {g["id"]: g for g in self.permissions(sid)}.get(grant_id)
+        found = {g["id"]: g for g in self.grants(sid)}.get(grant_id)
         if found is None:
             raise Refused(f"no permission {grant_id!r} in this session")
         if found["scope"] == "saved":

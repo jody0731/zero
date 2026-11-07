@@ -135,7 +135,7 @@ INTERPRETERS = {
     "powershell", "fish", "ksh", "tclsh", "awk", "gawk", "mawk", "nawk",
 }
 # Programs whose prefix would cover anything they run
-UNGRANTED = SHELLS | WRAPPERS | INTERPRETERS
+NEVER_GRANTED = SHELLS | WRAPPERS | INTERPRETERS
 # Prefixes that run whatever a project or an option says (Codex's banned
 # suggestions): `git -C x …`, a bare `npm run`
 WIDE = {"git", "npm run", "pnpm run", "yarn run", "bun run"}
@@ -146,7 +146,7 @@ CLOSERS = {"done", "fi", "}"}
 # Words that start something other than a command (a loop's list, a case's
 # patterns); a part that starts with an option or a number is a fragment the
 # split left (`find . \( -name x \)`, `) 2>/dev/null`). No grant for these
-UNREAD = {"for", "case", "esac", "select", "function", "coproc"}
+NOT_COMMANDS = {"for", "case", "esac", "select", "function", "coproc"}
 # Options with which a program acts on what it finds: it runs a command,
 # deletes, or writes a file. A grant for the program doesn't cover them
 ACTING = {
@@ -168,12 +168,12 @@ def prefixes(command):
         if not words or words[0] in CLOSERS:
             continue
         first = words[0]
-        if first in UNREAD or first.startswith("-") or first.isdigit():
+        if first in NOT_COMMANDS or first.startswith("-") or first.isdigit():
             return None
         # A program named by a variable runs whatever it holds
         if "$" in first:
             return None
-        if first in UNGRANTED or acts(words):
+        if first in NEVER_GRANTED or acts(words):
             return None
         found.add(prefix(words))
     if not found:

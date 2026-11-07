@@ -28,7 +28,7 @@
 - **Any model:** any server that speaks OpenAI's Chat Completions or Responses API. ZERO ships a catalog (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter, Ollama) and takes servers of your own; no model is built in. What a model honours of its API (thinking off, strict JSON) is measured, and a setting it can't honour shows unavailable.
 - **Many sessions:** each with its own workspace and history, opened, switched, renamed or archived from any terminal.
 - **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
-- **One host:** it runs every session. Turns, background jobs and waiting questions go on after the terminal closes, and every app reaches the host the same way.
+- **One server:** it runs every session. Turns, background jobs and waiting questions go on after the terminal closes, and every app reaches the server the same way.
 - **It trusts the model:** what the model reads states facts, never guardrails; the limits live in code; it is built for the models to come.
 
 > [!NOTE]
@@ -48,7 +48,7 @@ The installer checks what ZERO needs, checks out the newest release, makes a Pyt
 
 - Linux, with `git`, Python 3.11 or newer (made and tested on 3.14) and its `venv` module
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`): ZERO's sandbox for the commands it runs
-- a model: an API key for a provider ZERO knows (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter), or a server of your own that speaks OpenAI's Chat Completions API, such as Ollama or llama-server
+- a model: an API key for a server ZERO knows (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter), or a server of your own that speaks OpenAI's Chat Completions API, such as Ollama or llama-server
 
 </details>
 
@@ -56,18 +56,18 @@ The installer checks what ZERO needs, checks out the newest release, makes a Pyt
 
 ### Connect a model
 
-The first `zero` with no model opens **Connect a model**. Pick a provider and paste its API key, or choose **Your own server…** and give its URL, a key if it takes one, a model it serves and, where the server doesn't say, its context window. ZERO makes a one-token test call before it saves anything, and the first model connected becomes new sessions' default. With a server connected but no default (its server removed, say), `zero` opens **New sessions' model** instead: a pick of the models known. Later, `/settings` → **Models and keys…** connects another model, takes a new key, tests a server or removes it.
+The first `zero` with no model opens **Connect a model**. Pick a server and paste its API key, or choose **Your own server…** and give its URL, a key if it takes one, a model it serves and, where the server doesn't say, its context window. ZERO makes a one-token test call before it saves anything, and the first model connected becomes new sessions' default. With a server connected but no default (its server removed, say), `zero` opens **New sessions' model** instead: a pick of the models known. Later, `/settings` → **Models and keys…** connects another model, takes a new key, tests a server or removes it.
 
 <details>
 <summary><b>The same, by hand</b>: ZERO's files in <code>~/.zero/</code></summary>
 
 ```toml
-# ~/.zero/config.toml: new sessions' model, provider/model
+# ~/.zero/config.toml: new sessions' model, server/model
 model = "deepseek/deepseek-flash"
 ```
 
 ```toml
-# ~/.zero/keys.toml (mode 600): each provider's key
+# ~/.zero/keys.toml (mode 600): each server's key
 [deepseek]
 api_key = "..."
 ```
@@ -76,7 +76,7 @@ api_key = "..."
 # ~/.zero/models.toml: a server of your own, under a name of your choosing
 [myserver]
 url = "http://localhost:8080/v1"
-context = 65536
+context_window = 65536
 ```
 
 Its models are then `myserver/<model>`. A server that speaks the Responses API takes `api = "responses"`. The catalog ZERO ships, with every field explained, is [model/catalog.toml](model/catalog.toml); a line in models.toml under the same name changes any of it. `zero model features myserver/<model>` says what the model honours of its API (`--test` measures again).
@@ -88,11 +88,11 @@ Its models are then `myserver/<model>`. A server that speaks the Responses API t
 ```bash
 zero                 # this folder's latest session, or a new one on your first line
 zero new             # a new session here
-zero -r              # the session list
-zero -p "a question" # one question, for scripts
+zero -r              # the session list (--resume)
+zero -p "a question" # one question, for scripts (--print)
 ```
 
-Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's model and its thinking; `/settings` sets this session, what new sessions start with, the theme, the models and keys and the key bindings, and in **Dev** the judge, the limits and the host.
+Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's model and its thinking; `/settings` sets this session, what new sessions start with, the theme, the models and keys and the key bindings, and in **Advanced…** the judge, the limits and the server.
 
 ### CLI
 
@@ -103,10 +103,10 @@ zero session send "a task" --cd ~/project --json   # one result object when it s
 zero session list                                  # read, watch, stop, continue, rename, archive, delete, set
 zero job list                                      # job stop JOB
 zero grant list ID                                 # grant forget ID GRANT
-zero model provider list                           # probe, connect, disconnect
+zero model server list                             # probe, connect, disconnect
 zero model features MODEL                          # what it honours of its API; --test
 zero setting set max_steps 80                      # setting list
-zero host status                                   # whether the host runs and what keeps it busy
+zero server status                                 # whether the server runs and what keeps it busy
 ```
 
 <details>
@@ -114,7 +114,7 @@ zero host status                                   # whether the host runs and w
 
 - A session or a job is named by its id or the start of it.
 - A long text can come from stdin (`-`); a key only does (`--key-stdin`), never as an argument.
-- `--json` prints the host's reply as one JSON object; `session send --json` prints the session, its outcome, the answer, a waiting question, the tokens and the seconds.
+- `--json` prints the server's reply as one JSON object; `session send --json` prints the session, its outcome, the answer, a waiting question, the tokens and the seconds.
 - The exit status is 0 when it worked, 1 when not, 2 when a question waits: answer it with `zero session send TEXT --session ID`, or pick one of its choices with `--choice yes|session|saved|no`.
 - `zero -p TEXT` is short for `zero session send TEXT`.
 
@@ -143,7 +143,7 @@ The mode decides who answers ZERO's questions: in `default` the calling agent do
 zero update
 ```
 
-It fetches the releases, checks out the newest, installs the requirements again when they changed and shows what the new release brought. The host picks up the new code once it is idle. It never touches `~/.zero`, and it refuses when the clone has changes of your own.
+It fetches the releases, checks out the newest, installs the requirements again when they changed and shows what the new release brought. The server picks up the new code once it is idle. It never touches `~/.zero`, and it refuses when the clone has changes of your own.
 
 <details>
 <summary><b>If an update goes wrong</b>: the same, by hand</summary>

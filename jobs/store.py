@@ -1,4 +1,4 @@
-"""The jobs' table in the host's one database (host/store.py).
+"""The jobs' table in the server's one database (server/store.py).
 
 A job's change of state and its notice commit in one transaction, so a crash
 can't leave one without the other.
@@ -34,7 +34,7 @@ CREATE INDEX IF NOT EXISTS jobs_running ON jobs (state, session);
 
 
 class JobStore:
-    """The jobs' rows, over the host's store."""
+    """The jobs' rows, over the server's store."""
 
     def __init__(self, store):
         self.store = store
@@ -85,7 +85,7 @@ class JobStore:
                 session = db.execute(
                     "SELECT session FROM jobs WHERE id = ?", (id,)
                 ).fetchone()["session"]
-                self.store.notice(
+                self.store.queue_notice(
                     db, msg_id, session, SOURCE, {"text": text, "job": id}
                 )
         return True

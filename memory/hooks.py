@@ -3,7 +3,7 @@ tools refuse them (a call that would write one is denied before anything
 asks, in every mode), and the prompt names them, with the other agents' files
 the walk found (prompt/instructions.py), which are written for those agents.
 
-The refusal reads a tool's `writes` (core/tools.py), so it names no tool. A
+The refusal reads a tool's `written_files` (core/tools.py), so it names no tool. A
 command can still write the files: in the sandbox the workspace's ZERO.md is
 read-only (sandbox/), outside it nothing stops a command but the mode's
 approver, as with any other file.
@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 from core import tools
-from core.hooks import Deny, Plugin
+from core.hooks import Deny, Hook
 from prompt.instructions import PROJECT_FILE
 
 REFUSED = (
@@ -21,7 +21,7 @@ REFUSED = (
 )
 
 
-def real(path, workspace):
+def resolved_path(path, workspace):
     """Where a path a call names is, links followed: relative to the
     workspace, as the file tools take it."""
     path = Path(os.path.expanduser(str(path)))
@@ -30,7 +30,7 @@ def real(path, workspace):
     return Path(os.path.realpath(path))
 
 
-class OwnFiles(Plugin):
+class ZeroFilesGuard(Hook):
     """`own`: the session's {target: path} (the memory tool's own_files);
     `others`: the other agents' files on the walk."""
 
@@ -39,7 +39,7 @@ class OwnFiles(Plugin):
         self.others = list(others)
         self.workspace = Path(workspace)
         self.guarded = {
-            real(own[t], workspace) for t in ("soul", "user") if own.get(t)
+            resolved_path(own[t], workspace) for t in ("soul", "user") if own.get(t)
         }
 
     def system_prompt(self, session):
@@ -68,8 +68,8 @@ class OwnFiles(Plugin):
         return "\n".join(lines)
 
     def before_tool(self, call):
-        for written in tools.writes(call.name, call.args):
-            path = real(written, self.workspace)
+        for written in tools.written_files(call.name, call.args):
+            path = resolved_path(written, self.workspace)
             if path in self.guarded or path.name.lower() == PROJECT_FILE.lower():
                 return Deny(REFUSED.format(path=path))
         return None

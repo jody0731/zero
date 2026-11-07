@@ -2,7 +2,7 @@
 ask, decided as any ask in the mode (bypassPermissions loads no caps)."""
 
 from core import tools
-from core.hooks import Plugin
+from core.hooks import Hook
 
 SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
 
@@ -13,14 +13,14 @@ def ordinal(n):
     return f"{n}{SUFFIXES.get(n % 10, 'th')}"
 
 
-class JobLimit(Plugin):
+class JobLimit(Hook):
     """Marks a background call past the running-jobs cap for the approver."""
 
     def before_tool(self, call):
         if not tools.starts_job(call.name, call.args):
             return None
         jobs = call.turn.session.tool_context.get("jobs")
-        if jobs is None or jobs.room():
+        if jobs is None or jobs.has_room():
             return None
         why = str(call.args.get("reason") or "").strip() or "no reason given"
         count = jobs.count()

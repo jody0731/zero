@@ -14,7 +14,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from core.history import FORMAT, version
+from core.history import LOG_FORMAT, log_format
 
 UPGRADED = (
     "[The turns below come from a log without a harness header: their questions "
@@ -32,7 +32,7 @@ def from_1(records, header, time):
         old = next((r for r in records if r["type"] == "session"), {})
         header = {
             "model": old.get("model", ""), "mode": old.get("mode", ""),
-            "settings": {}, "plugins": [],
+            "settings": {}, "hooks": [],
             "system_prompt": old.get("system_prompt", ""),
         }
     result = [{
@@ -90,8 +90,8 @@ def migrate(records, header=None, *, time):
     """Pure in-memory upgrades, one step at a time; no file or clock access."""
     if not records:
         return []
-    source = version(records)
-    while source < FORMAT:
+    source = log_format(records)
+    while source < LOG_FORMAT:
         records = MIGRATIONS[source](records, header, time)
         source += 1
     return records
@@ -136,8 +136,8 @@ def upgrade_file(log, header):
     """Fsync the replacement and original copy, then atomically replace the log."""
     log.check_lock()
     records = log.records()
-    source = version(records)
-    if not log.path.exists() or source == FORMAT:
+    source = log_format(records)
+    if not log.path.exists() or source == LOG_FORMAT:
         return False
     original = log.path.read_bytes()
     stamp = timestamp()

@@ -83,7 +83,7 @@ class ChoiceView(ModalScreen):
         self.dismiss(self.choices[event.option_index])
 
 
-class CaptureView(ModalScreen):
+class KeyCaptureView(ModalScreen):
     """Takes the next key pressed, whatever it is: the app's own keys are off
     while it shows (Zero.check_action). Esc cancels. A plain character would
     type into the input, so it isn't taken."""
@@ -103,7 +103,7 @@ class CaptureView(ModalScreen):
         event.prevent_default()
         if event.key == "escape":
             self.dismiss(None)
-        elif event.key in keybindings.KEPT:
+        elif event.key in keybindings.RESERVED_KEYS:
             self.query_one(Static).update(self.ask(
                 f"{keybindings.pretty(event.key)} moves in the lists and edits the "
                 "input, so it stays theirs.\n\n"

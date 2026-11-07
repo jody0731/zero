@@ -2,9 +2,9 @@
 
 The runtime (runtime.py) runs turns; this is the rest of what a client asks
 of a session: the list (with its open ask's question, its news and what the
-parts add, host/parts.py), its history, `set` (what its next turn runs with,
+services add, server/services.py), its history, `set` (what its next turn runs with,
 logged then as a switch note), its title, archive, seen and last (which session
-a bare `zero` opens), and delete, to the trash. A part of the runtime's own
+a bare `zero` opens), and delete, to the trash. A service of the runtime's own
 class, over its store, locks and logs.
 """
 
@@ -13,8 +13,8 @@ from pathlib import Path
 
 import settings
 from core import history
-from host import trash
-from host.parts import Refused
+from server import trash
+from server.services import Refused
 from sessions import upgrade
 from sessions.lock import Busy
 
@@ -23,11 +23,11 @@ TITLE_LENGTH = 60
 COLUMNS = ("mode", "model", "workspace")
 
 
-def known_effort(name, effort):
+def check_thinking_effort(name, effort):
     """`effort` if it is one of the setting's choices; else refused."""
     efforts = settings.BY_NAME[name].choices
     if effort not in efforts:
-        what = "judge effort" if name == "judge_effort" else "effort"
+        what = "judge effort" if name == "judge_thinking_effort" else "thinking_effort"
         raise Refused(f"unknown {what} {effort!r}; efforts: {efforts}")
     return effort
 
@@ -37,23 +37,23 @@ def title(text):
     return line if len(line) <= TITLE_LENGTH else line[: TITLE_LENGTH - 1] + "…"
 
 
-class Sessions:
+class SessionActions:
     def history(self, sid, after=0, limit=None, before=None):
         """The session's records after a seq (and before one, to page back),
-        the newest `limit` of them, and how many came before those (the gap)."""
+        the newest `limit` of them, and how many came before those (earlier_count)."""
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
         records = upgrade.migrate(self.log(sid).records(), time=upgrade.timestamp())
         records = [r for r in records if r["seq"] > after
                    and (before is None or r["seq"] < before)]
-        gap = 0
+        earlier_count = 0
         if limit is not None and len(records) > limit:
-            gap = len(records) - limit
-            records = records[gap:]
-        return records, gap
+            earlier_count = len(records) - limit
+            records = records[earlier_count:]
+        return records, earlier_count
 
     def set_session(self, sid, mode=None, model=None, workspace=None,
-                    effort=None, judge_model=None, judge_effort=None):
+                    thinking_effort=None, judge_model=None, judge_thinking_effort=None):
         """Change what a session runs with. Its next turn takes it; a
         turn running or waiting for an answer keeps its own. `judge_model`
         "": the session's own model again. Returns what was set, and whether
@@ -62,7 +62,7 @@ class Sessions:
             raise Refused(f"no session {sid!r}")
         fields = {}
         if mode is not None:
-            fields["mode"] = self.known_mode(mode)
+            fields["mode"] = self.check_mode(mode)
         if model is not None:
             if not model.strip():
                 raise Refused("a model needs a name")
@@ -74,19 +74,23 @@ class Sessions:
             if not path.is_dir():
                 raise Refused(f"no folder {workspace}")
             fields["workspace"] = str(path.resolve())
-        if effort is not None:
-            fields["effort"] = known_effort("effort", effort)
+        if thinking_effort is not None:
+            fields["thinking_effort"] = check_thinking_effort(
+                "thinking_effort", thinking_effort
+            )
         if judge_model is not None:
             if not isinstance(judge_model, str):
                 raise Refused("a judge model is a model's name, or empty for "
                               "the session's own")
             fields["judge_model"] = judge_model.strip() or None
-        if judge_effort is not None:
-            fields["judge_effort"] = known_effort("judge_effort", judge_effort)
+        if judge_thinking_effort is not None:
+            fields["judge_thinking_effort"] = check_thinking_effort(
+                "judge_thinking_effort", judge_thinking_effort
+            )
         if not fields:
             raise Refused(
-                "nothing to set: give a mode, a model, a workspace, an effort, "
-                "or the judge's model or effort"
+                "nothing to set: give a mode, a model, a workspace, a thinking effort, "
+                "or the judge's model or thinking effort"
             )
         # The session's row has no effort or judge: its switch and its log
         # hold them
@@ -96,7 +100,7 @@ class Sessions:
             self.store.update_session(
                 sid, **columns, switch=json.dumps({**switch, **fields})
             )
-        return {"set": fields, "next_turn": bool(self.pending(sid))}
+        return {"set": fields, "next_turn": bool(self.pending_switches(sid))}
 
     def runs_with(self, sid):
         """What the session's next turn runs with: its mode, model and
@@ -107,16 +111,16 @@ class Sessions:
             raise Refused(f"no session {sid!r}")
         config = self.config()
         now = {
-            "effort": config["effort"],
+            "thinking_effort": config["thinking_effort"],
             "judge_model": config["judge_model"],
-            "judge_effort": config["judge_effort"],
+            "judge_thinking_effort": config["judge_thinking_effort"],
             **history.running_with(self.log(sid).records()),
             **json.loads(row["switch"] or "{}"),
         }
         now.update({name: row[name] for name in COLUMNS})
         return {name: now[name] for name in history.SWITCHABLE}
 
-    def pending(self, sid, row=None):
+    def pending_switches(self, sid, row=None):
         """What a running or waiting turn holds from before a `set`: those
         values change when its next turn starts."""
         row = row or self.store.session(sid)
@@ -128,7 +132,7 @@ class Sessions:
 
     def sessions(self, archived=None, workspace=None):
         """The session list, each with its open ask's question, whether it has
-        news the user hasn't seen, and what the parts add (the jobs: its
+        news the user hasn't seen, and what the services add (the jobs: its
         running ones). `archived`: None for all, or only those archived (True)
         or not (False); `workspace`: only the sessions in exactly that
         folder."""
@@ -148,18 +152,18 @@ class Sessions:
             row["archived"] = bool(row["archived"])
             row["unseen"] = row["end_seq"] > row["seen_seq"]
             result.append(row)
-        for part in self.parts.values():
-            part.annotate(result)
+        for service in self.services.values():
+            service.annotate(result)
         for row in result:
-            row["pending"] = self.pending(row["id"], row)
+            row["pending"] = self.pending_switches(row["id"], row)
         return result
 
-    def seen(self, sid, seq):
+    def mark_seen(self, sid, seq):
         """The user has seen the session up to `seq`: it is the one they last
         worked in (OpenCode's `viewed`)."""
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
-        self.store.seen(sid, seq)
+        self.store.mark_seen(sid, seq)
 
     def last(self):
         return self.store.last_seen()
@@ -178,17 +182,17 @@ class Sessions:
         self.store.update_session(sid, archived=int(archived))
 
     def delete(self, sid):
-        """Move the session's log and its parts' files (the jobs' output) to
+        """Move the session's log and its services' files (the jobs' output) to
         the trash, then forget its rows. Refused while anything of it runs or
         waits to."""
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
-        parts = list(self.parts.values())
+        services = list(self.services.values())
         with self.lock:
-            if sid in self.runners or sid in self.store.waiting():
+            if sid in self.runners or sid in self.store.waiting_sessions():
                 raise Refused("a turn is running in this session; stop it first")
-            for part in parts:
-                why = part.refuse_delete(sid)
+            for service in services:
+                why = service.refuse_delete(sid)
                 if why:
                     raise Refused(why)
             lock = self.session_lock(sid)
@@ -198,10 +202,10 @@ class Sessions:
                 raise Refused(str(error)) from None
             try:
                 files = [self.paths.sessions / f"{sid}.jsonl"]
-                for part in parts:
-                    files += part.session_files(sid)
+                for service in services:
+                    files += service.session_files(sid)
                 where = trash.move(self.paths, files)
-                tables = [table for part in parts for table in part.tables]
+                tables = [table for service in services for table in service.tables]
                 self.store.forget(sid, tables)
                 self.live.pop(sid, None)
                 self.blocked.discard(sid)

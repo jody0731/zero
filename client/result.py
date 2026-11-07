@@ -44,12 +44,12 @@ class Result:
             return "waiting"
         return None if self.last is None else self.last["outcome"]
 
-    def code(self):
+    def exit_code(self):
         """The exit status: 0 answered, 1 not, 2 a question waits."""
         outcome = self.outcome()
         return 0 if outcome == "answered" else 2 if outcome == "waiting" else 1
 
-    def object(self):
+    def as_json(self):
         answer = None
         if self.outcome() not in ("waiting", "running") and self.last:
             answer = self.last.get("answer")

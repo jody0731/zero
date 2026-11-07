@@ -3,7 +3,7 @@
 Every record is written before the model sees it. Every tool call gets a
 result; Ctrl+C closes calls that never started and tells the model; a cut-off
 reply gets a note; an empty reply is never taken as the answer; a malformed
-call gets its error back. Plugins supply limits and decisions.
+call gets its error back. Hooks supply limits and decisions.
 """
 
 import copy
@@ -18,8 +18,8 @@ from core.asking import (
     APPROVED, APPROVED_LATE, CANCELLED, DECLINED_STOP, NO, NOT_ASKED, choices,
 )
 from core.control import Stopped
-from core.history import FORMAT, OldLog, version
-from core.hooks import Deny, Hooks, Park, Stop
+from core.history import LOG_FORMAT, OldLog, log_format
+from core.hooks import Deny, HookRunner, Park, Stop
 from core.llm import MODEL_ERRORS
 from core.records import Call, ModelFailure, Step, Turn
 
@@ -40,9 +40,9 @@ class Parked(Exception):
 class Session:
     """One conversation: the message history, shared by all its turns."""
 
-    def __init__(self, model, plugins, system_prompt, log, settings, tool_context=None):
+    def __init__(self, model, hooks, system_prompt, log, settings, tool_context=None):
         self.model = model
-        self.hooks = Hooks(plugins)
+        self.hooks = HookRunner(hooks)
         self.log = log
         self.settings = settings
         # As built, before a rebuild takes the logged ones: what a switch logs
@@ -52,7 +52,7 @@ class Session:
         records = log.records()
         self.prompt_tokens = 0
         if records:
-            self.rebuild(log)
+            self.restore(log)
         else:
             system = system_prompt + self.hooks.collect("system_prompt", self)
             self.messages = [{"role": "system", "content": system}]
@@ -61,10 +61,10 @@ class Session:
         """The tools as this session tells them: bash's says its timeout."""
         return tools.schemas(self.tool_context.get("limits"), self.tool_context)
 
-    def rebuild(self, log):
-        """Restore the logged prompt and messages without rebuilding plugins."""
+    def restore(self, log):
+        """Restore the logged prompt and messages without rebuilding hooks."""
         records = log.records()
-        if not records or version(records) != FORMAT:
+        if not records or log_format(records) != LOG_FORMAT:
             raise OldLog("This session needs a log upgrade before it can run")
         self.log = log
         self.settings = history.settings_now(records)
@@ -77,11 +77,11 @@ class Session:
 
     def session_record(self):
         return {
-            "format": FORMAT,
+            "format": LOG_FORMAT,
             "model": self.model.name,
             "mode": self.settings["mode"],
             "settings": self.settings,
-            "plugins": [repr(p) for p in self.hooks.plugins],
+            "hooks": [repr(p) for p in self.hooks.hooks],
             "system_prompt": self.messages[0]["content"],
         }
 
@@ -96,7 +96,7 @@ class Session:
 
     def open_turn(self, text, inbox=None, source=None, control=None,
                   continued=False):
-        """`continued`: the turn is a host's `continue`, its text a
+        """`continued`: the turn is a server's `continue`, its text a
         harness note the user asked for, not words they typed."""
         if not self.log.records():
             fields = self.session_record()
@@ -117,7 +117,7 @@ class Session:
 
     def resume(self, inbox=None, control=None):
         """Repair an unfinished turn, returning it ready for run()."""
-        records = history.pending(self.log.records())
+        records = history.unfinished_turn(self.log.records())
         if not records:
             raise ValueError("no open turn to resume")
         user = records[0]
@@ -125,7 +125,7 @@ class Session:
             raise ValueError("the queued message is not the log's open turn")
         answer = history.final_answer(records)
         if answer is None:
-            # What the plugins add, before repair writes anything: the files
+            # What the hooks add, before repair writes anything: the files
             # this turn touched that changed while it was cut off, say
             extra = self.hooks.collect("resumed", self, records)
             text = history.restart_note(records, extra=extra)
@@ -188,7 +188,7 @@ class Session:
 
     def run_step(self, step):
         """One model call plus its tool calls. Returns a Stop, or None."""
-        stop = self.ask_model(step)
+        stop = self.call_with_retries(step)
         if stop is not None:
             return stop
         reply = step.reply
@@ -237,8 +237,8 @@ class Session:
                 self.write("step", **step.record())
         return stop
 
-    def ask_model(self, step):
-        """Call the model, retrying while a plugin says Retry."""
+    def call_with_retries(self, step):
+        """Call the model, retrying while a hook says Retry."""
         attempt = 0
         while True:
             if step.turn.control is not None:
@@ -279,9 +279,9 @@ class Session:
 
     def call_model(self, step):
         """One streamed model call (core/llm.py, complete), on every path with
-        the clock on the model's silence. With a host's control, a stop
+        the clock on the model's silence. With a server's control, a stop
         abandons the reply at once, so it never writes to the session, and
-        each chunk's draft goes out to the host's watchers; a draft is
+        each chunk's draft goes out to the server's watchers; a draft is
         never a record."""
         control = step.turn.control
         check = on_delta = None
@@ -354,10 +354,10 @@ class Session:
         source, text, consent (the check's verdict or None).
         """
         records = self.log.records()
-        ask = history.parked(records)
+        ask = history.parked_ask(records)
         if ask is None or ask["ask"] != fields["ask"]:
             raise ValueError(f"no open ask {fields['ask']!r} in this session")
-        pending = history.pending(records)
+        pending = history.unfinished_turn(records)
         user = pending[0]
         asked = datetime.fromisoformat(ask["time"])
         waited = (datetime.now().astimezone() - asked).total_seconds()
@@ -462,8 +462,8 @@ class Session:
         A call interrupted while running already got its own result in execute;
         the calls left on Ctrl+C never started.
         """
-        records = history.pending(self.log.records())
-        for fields in history.closures(records, result, closed):
+        records = history.unfinished_turn(self.log.records())
+        for fields in history.closing_results(records, result, closed):
             self.write("tool", **fields)
 
 

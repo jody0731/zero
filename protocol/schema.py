@@ -66,7 +66,7 @@ def build():
         "$id": f"zero-protocol-{version.PROTOCOL}",
         "title": f"Z.E.R.O. protocol {version.PROTOCOL}",
         "description": (
-            "One JSON object a line over the host's Unix socket "
+            "One JSON object a line over the server's Unix socket "
             "(~/.zero/run/zero.sock): a request, then its reply; "
             "session/watch and session/list with watch stream events. Each "
             "request names its message in `message`."

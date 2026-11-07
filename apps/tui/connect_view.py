@@ -1,4 +1,4 @@
-"""Connecting a model: the servers ZERO knows, from the host's `providers`.
+"""Connecting a model: the servers ZERO knows, from the server's `servers`.
 
 One view, two doors: "Connect a model" opens in front of the session view
 when new sessions' model can't start (its key missing, no window, or none
@@ -6,10 +6,10 @@ set with no server connected), and "Models and keys" from the settings.
 With a server connected and none set, new sessions' model is picked
 instead (`pick_default`). A connect is a few small steps (a key, the
 server's models, a name, a window: only those the server doesn't already
-answer), then the host's `connect` with all of them in one request:
-the host keeps nothing between the steps, so the same request could come
+answer), then the server's `connect` with all of them in one request:
+the server keeps nothing between the steps, so the same request could come
 from anywhere. A key is typed into a masked line and goes straight to the
-host, which keeps it in keys.toml; the view never shows it.
+server, which keeps it in keys.toml; the view never shows it.
 """
 
 import re
@@ -39,23 +39,23 @@ KEY_STATE = {"there": "key saved", "none needed": "no key needed",
              "missing": "needs a key"}
 URL_LABEL = ("Its URL (OpenAI-style servers serve under /v1, as "
              "http://localhost:8080/v1)")
-FIRST = ("ZERO needs a model to talk to. Pick a provider and paste its API "
-         "key, or point ZERO at a server of your own (llama.cpp, Ollama, LM "
-         "Studio, vLLM).")
+NO_MODEL_YET = ("ZERO needs a model to talk to. Pick a server and paste its API "
+                "key, or point ZERO at a server of your own (llama.cpp, Ollama, LM "
+                "Studio, vLLM).")
 
 
 def name_from(url):
     """A server's short name, suggested from its URL."""
-    host = (urlparse(url).hostname or "").lower()
-    if not host or host in ("localhost", "127.0.0.1", "::1"):
+    server = (urlparse(url).hostname or "").lower()
+    if not server or server in ("localhost", "127.0.0.1", "::1"):
         return "local"
-    if host.replace(".", "").isdigit():
+    if server.replace(".", "").isdigit():
         return "server"
-    return re.sub(r"[^a-z0-9_-]", "-", host.split(".")[0]).strip("-") or "server"
+    return re.sub(r"[^a-z0-9_-]", "-", server.split(".")[0]).strip("-") or "server"
 
 
-def provider_of(model, names):
-    """The server a model name goes to, as the host reads it."""
+def server_of(model, names):
+    """The server a model name goes to, as the server reads it."""
     if not model:
         return None
     prefix, _, rest = model.partition("/")
@@ -63,10 +63,10 @@ def provider_of(model, names):
 
 
 def connected_servers(listed):
-    """The servers of a `providers` reply a model can be picked from: a key
+    """The servers of a `servers` reply a model can be picked from: a key
     saved, or one of the user's own that needs none."""
-    return [row for row in listed if row["key"] == "there"
-            or (row["own"] and row["key"] != "missing")]
+    return [row for row in listed if row["key_state"] == "there"
+            or (row["user_added"] and row["key_state"] != "missing")]
 
 
 def pick_default(zero):
@@ -113,16 +113,16 @@ def pick_default(zero):
     threading.Thread(target=run, daemon=True).start()
 
 
-def tokens(text):
-    """A window typed as 32768, 32,768 or 32_768; None if it isn't one."""
+def parse_context_window(text):
+    """A context window typed as 32768, 32,768 or 32_768; None if it isn't one."""
     digits = re.sub(r"[,_ ]", "", text or "")
     return int(digits) if digits.isdigit() and int(digits) > 0 else None
 
 
 class Connecting:
-    """One connect, a step at a time, each a small view; the last the host's
+    """One connect, a step at a time, each a small view; the last the server's
     connect, run off the screen's thread, since a local server may first
-    load the model. `row`: a server the host listed; None for one of the
+    load the model. `row`: a server the server listed; None for one of the
     user's own, not yet known. `new_key`: ask for its key even where none
     is needed."""
 
@@ -149,7 +149,7 @@ class Connecting:
         else:
             self.list_models()
 
-    def off(self, work, then):
+    def run_in_background(self, work, then):
         """`work()` on a thread of its own; `then(result, error)` back on
         the screen's."""
         def run():
@@ -168,7 +168,7 @@ class Connecting:
         self.ask_key()
 
     def ask_key(self):
-        if self.row and self.row["key"] == "there":
+        if self.row and self.row["key_state"] == "there":
             empty = "keep the saved one"
         elif self.row and self.row["needs_key"]:
             empty = None
@@ -185,7 +185,7 @@ class Connecting:
         text = text.strip()
         if text:
             self.key = text
-        elif self.row and self.row["key"] == "there":
+        elif self.row and self.row["key_state"] == "there":
             self.key = None
         elif self.row and self.row["needs_key"]:
             self.view.notify(f"{self.title} needs its API key.",
@@ -203,7 +203,8 @@ class Connecting:
         if self.key is not None:
             fields["key"] = self.key
         self.view.notify(f"Asking {self.title} for its models…")
-        self.off(lambda: self.connection.probe(**fields), self.models_listed)
+        self.run_in_background(lambda: self.connection.probe(**fields),
+                               self.models_listed)
 
     def models_listed(self, result, error):
         found = []
@@ -215,7 +216,7 @@ class Connecting:
             url, found = result
             if self.url:
                 self.url = url
-        self.listed = {m["id"]: m["context"] for m in found}
+        self.listed = {m["id"]: m["context_window"] for m in found}
         named = list(self.row["models"]) if self.row else []
         choices = [*self.listed, *(m for m in named if m not in self.listed),
                    OTHER]
@@ -247,50 +248,51 @@ class Connecting:
                 self.name_given,
             )
         else:
-            self.ask_window()
+            self.ask_context_window()
 
     def name_given(self, text):
         if not text or not text.strip():
             return
         self.name = text.strip().lower()
-        self.ask_window()
+        self.ask_context_window()
 
-    def known_window(self):
+    def known_context_window(self):
         if self.listed.get(self.model):
             return self.listed[self.model]
         if self.row:
-            return self.row["models"].get(self.model) or self.row["context"]
+            return (self.row["models"].get(self.model)
+                    or self.row["context_window"])
         return None
 
-    def ask_window(self):
-        if self.known_window():
-            # The host takes it from the server's list or its table
+    def ask_context_window(self):
+        if self.known_context_window():
+            # The server takes it from the server's list or its table
             self.connect(None)
             return
         self.app.push_screen(
             PromptView(f"{self.model}'s context window, in tokens (the server "
                        "doesn't say; its own setting, as llama-server's "
                        "--ctx-size)"),
-            self.window_given,
+            self.context_window_given,
         )
 
-    def window_given(self, text):
+    def context_window_given(self, text):
         if text is None:
             return
-        context = tokens(text)
-        if context is None:
-            self.view.notify("A window is a number of tokens, as 32768.",
+        context_window = parse_context_window(text)
+        if context_window is None:
+            self.view.notify("A context window is a number of tokens, as 32768.",
                              severity="warning")
-            self.ask_window()
+            self.ask_context_window()
             return
-        self.connect(context)
+        self.connect(context_window)
 
-    def connect(self, context):
-        fields = {"url": self.url, "key": self.key, "context": context}
+    def connect(self, context_window):
+        fields = {"url": self.url, "key": self.key, "context_window": context_window}
         self.view.notify(f"Testing {self.model}…")
-        self.off(lambda: self.connection.connect(self.name, self.model,
-                                                 **fields),
-                 self.view.connected)
+        self.run_in_background(lambda: self.connection.connect(self.name, self.model,
+                                                               **fields),
+                               self.view.connected)
 
 
 class ServersView(Screen):
@@ -313,17 +315,17 @@ class ServersView(Screen):
         self.selected = 0
         self.rows = [None]
         self.default = None
-        self.ready = None
+        self.not_ready_reason = None
 
     def compose(self):
         if self.first:
             title = "Connect a model"
         else:
-            where = session_list.short(str(paths.models_file()))
+            where = session_list.tilde_path(str(paths.models_file()))
             title = f"Models and keys · {where}"
         yield Plain(title, classes="view-title")
         if self.first:
-            yield Plain(FIRST, id="first")
+            yield Plain(NO_MODEL_YET, id="first")
         yield VerticalScroll(Plain(id="rows"))
         yield Plain(id="preview")
         yield Plain("↑↓ choose · Enter connect · Esc back", classes="view-keys")
@@ -334,22 +336,22 @@ class ServersView(Screen):
 
     def fetch(self):
         try:
-            reply = self.zero.connection.providers()
+            reply = self.zero.connection.servers()
         except ERRORS as error:
             self.notify(str(error), severity="error")
             return
-        listed = reply["providers"]
+        listed = reply["servers"]
         # The catalog's in its order, then the user's own
-        ordered = ([r for r in listed if r["shipped"]]
-                   + [r for r in listed if not r["shipped"]])
+        ordered = ([r for r in listed if r["in_catalog"]]
+                   + [r for r in listed if not r["in_catalog"]])
         self.rows = [*ordered, None]
         self.default = reply["default"]
-        self.ready = reply["ready"]
+        self.not_ready_reason = reply["not_ready_reason"]
 
     def draw(self):
         self.selected = max(0, min(self.selected, len(self.rows) - 1))
         names = [r["name"] for r in self.rows if r]
-        using = provider_of(self.default, names)
+        using = server_of(self.default, names)
         text = Text()
         for index, row in enumerate(self.rows):
             style = "reverse" if index == self.selected else ""
@@ -357,10 +359,10 @@ class ServersView(Screen):
                 text.append(f"\n{OWN}\n", style=style)
                 continue
             mark = "●" if row["name"] == using else " "
-            title = row["title"] + (" (yours)" if row["own"] and not row["shipped"]
-                                    else "")
+            yours = row["user_added"] and not row["in_catalog"]
+            title = row["title"] + (" (yours)" if yours else "")
             text.append(f"{mark} {title:<40} ", style=style)
-            text.append(KEY_STATE[row["key"]], style=style)
+            text.append(KEY_STATE[row["key_state"]], style=style)
             text.append("\n")
         self.query_one("#rows", Static).update(text)
         self.query_one("#preview", Static).update(self.preview())
@@ -371,11 +373,11 @@ class ServersView(Screen):
             return ("A server of your own: its URL, a key if it takes one, and "
                     "a model it serves.")
         said = [row["url"]]
-        if row["name"] == provider_of(self.default, [r["name"] for r in self.rows
+        if row["name"] == server_of(self.default, [r["name"] for r in self.rows
                                                     if r]):
             said.append(f"New sessions use {self.default}.")
-        if self.ready and self.default:
-            said.append(self.ready)
+        if self.not_ready_reason and self.default:
+            said.append(self.not_ready_reason)
         return "\n".join(said)
 
     def action_move(self, step):
@@ -388,10 +390,10 @@ class ServersView(Screen):
             Connecting(self, row).start()
             return
         actions = ["Connect a model…"]
-        if row["needs_key"] or row["own"]:
+        if row["needs_key"] or row["user_added"]:
             actions.append("New key…")
         actions.append("Test")
-        if row["key"] == "there" or row["own"]:
+        if row["key_state"] == "there" or row["user_added"]:
             actions.append("Remove")
         self.app.push_screen(ChoiceView(row["title"], actions),
                              lambda action: self.act(row, action))
@@ -403,7 +405,7 @@ class ServersView(Screen):
             Connecting(self, row, new_key=True).start()
         elif action == "Test":
             self.notify(f"Asking {row['title']} for its models…")
-            Connecting(self, row).off(
+            Connecting(self, row).run_in_background(
                 lambda: self.zero.connection.probe(name=row["name"]),
                 lambda result, error: self.tested(row, result, error),
             )
@@ -437,7 +439,7 @@ class ServersView(Screen):
         self.draw()
 
     def connected(self, reply, error):
-        """The host's answer to a connect (Connecting.connect)."""
+        """The server's answer to a connect (Connecting.connect)."""
         if error is not None:
             self.notify(str(error), severity="error")
             return

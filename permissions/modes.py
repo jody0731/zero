@@ -46,6 +46,6 @@ def canonical(mode):
     return mode
 
 
-def answers(mode):
+def answers_line(mode):
     """The mode and who answers its asks: the environment's line."""
     return f"mode: {mode}; {ANSWERS[MODES[canonical(mode)].decides]}"

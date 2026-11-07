@@ -2,8 +2,8 @@
 built from the protocol's messages (protocol/messages.py).
 
 A connection that fails or drops before its reply is NotRunning: the caller may
-start a host and send the same request again, with the same message id, which
-the host admits once. A host that takes the connection but never answers is
+start a server and send the same request again, with the same message id, which
+the server admits once. A server that takes the connection but never answers is
 NoAnswer.
 """
 
@@ -20,7 +20,7 @@ class NotRunning(Exception):
 
 
 class NoAnswer(NotRunning):
-    """Connected, but no reply in time: a host that hangs, or one still
+    """Connected, but no reply in time: a server that hangs, or one still
     starting."""
 
 
@@ -36,7 +36,7 @@ def connect(path, timeout=30):
     except (FileNotFoundError, ConnectionRefusedError, TimeoutError) as error:
         conn.close()
         raise NotRunning(
-            f"ZERO's host isn't running (no host at {path}): {error}"
+            f"ZERO's server isn't running (no server at {path}): {error}"
         ) from None
     except BaseException:
         conn.close()
@@ -44,11 +44,11 @@ def connect(path, timeout=30):
     return conn
 
 
-# Seconds a connect may take: the host's test call waits up to a minute
-CONNECT_WAIT = 90
+# Seconds a connect may take: the server's test call waits up to a minute
+CONNECT_WAIT_SECONDS = 90
 # Seconds a model's features may take to measure: four small calls, each
 # with a short thought on a thinking model
-FEATURES_WAIT = 300
+FEATURES_WAIT_SECONDS = 300
 
 
 def request(path, payload, timeout=30):
@@ -58,16 +58,16 @@ def request(path, payload, timeout=30):
             with conn.makefile(encoding="utf-8") as stream:
                 line = stream.readline()
     except TimeoutError:
-        raise NoAnswer(f"ZERO's host did not answer at {path}") from None
+        raise NoAnswer(f"ZERO's server did not answer at {path}") from None
     except (ConnectionResetError, BrokenPipeError):
-        # A host that stopped listening as this connected (its idle exit)
-        raise NotRunning("ZERO's host closed the connection") from None
+        # A server that stopped listening as this connected (its idle exit)
+        raise NotRunning("ZERO's server closed the connection") from None
     if not line:
-        raise NotRunning("ZERO's host closed the connection without a reply")
+        raise NotRunning("ZERO's server closed the connection without a reply")
     try:
         return json.loads(line)
     except ValueError:
-        raise ProtocolError("ZERO's host sent an invalid JSON reply") from None
+        raise ProtocolError("ZERO's server sent an invalid JSON reply") from None
 
 
 class Watch:
@@ -77,7 +77,7 @@ class Watch:
     def __init__(self, path, session=None, after=0, payload=None):
         self.conn = connect(path)
         self.stream = None
-        # The reason the host gave when it closed this watch, if it did
+        # The reason the server gave when it closed this watch, if it did
         self.bye = None
         payload = payload or build("session/watch", session=session, after=after)
         try:
@@ -86,13 +86,13 @@ class Watch:
             self.stream = self.conn.makefile(encoding="utf-8")
         except (ConnectionResetError, BrokenPipeError):
             self.conn.close()
-            raise NotRunning("ZERO's host closed the connection") from None
+            raise NotRunning("ZERO's server closed the connection") from None
         except BaseException:
             self.conn.close()
             raise
 
     def __iter__(self):
-        """Events until the host closes the watch; a `bye` ends it, and its
+        """Events until the server closes the watch; a `bye` ends it, and its
         reason is kept in `bye`."""
         for line in self.stream:
             event = json.loads(line)
@@ -120,8 +120,8 @@ class Watch:
 
 
 class Connection:
-    """`ensure()` finds or starts a host, and checks its versions: called before
-    the first request, and again when a request finds no host."""
+    """`ensure()` finds or starts a server, and checks its versions: called before
+    the first request, and again when a request finds no server."""
 
     def __init__(self, paths, ensure=None, source=None):
         self.paths = paths
@@ -148,9 +148,9 @@ class Connection:
         return reply
 
     def send(self, text, session=None, mode=None, model=None, reply_to=None,
-             workspace=None, when_busy="steer", choice=None, effort=None):
+             workspace=None, when_busy="steer", choice=None, thinking_effort=None):
         """`reply_to`: the open ask's id, for a line typed at its prompt.
-        `workspace` and `effort`: a new session's folder and thinking.
+        `workspace` and `thinking_effort`: a new session's folder and thinking.
         `when_busy`: "queue" makes a follow-up that waits for the running
         turn's answer. `choice`: one of the open ask's choices, picked at its
         box."""
@@ -160,95 +160,96 @@ class Connection:
             model=model, source=self.source, reply_to=reply_to,
             workspace=workspace, when_busy=when_busy,
         )
-        if effort is not None:
-            request["effort"] = effort
+        if thinking_effort is not None:
+            request["thinking_effort"] = thinking_effort
         if choice is not None:
             request["choice"] = choice
         return {**self.call(request), "id": msg_id}
 
-    def go_on(self, session):
+    def continue_session(self, session):
         """`session/continue`: a turn that ended without an answer goes on."""
         msg_id = str(uuid.uuid4())
         return {**self.call(build(
             "session/continue", id=msg_id, session=session, source=self.source,
         )), "id": msg_id}
 
-    def set(self, session, mode=None, model=None, workspace=None, effort=None,
-            judge_model=None, judge_effort=None):
-        """Change a session's mode, model, workspace, effort or judge from its
+    def set(self, session, mode=None, model=None, workspace=None, thinking_effort=None,
+            judge_model=None, judge_thinking_effort=None):
+        """Change a session's mode, model, workspace, thinking effort or judge from its
         next turn; a `judge_model` of "" is the session's own model again."""
         given = {"mode": mode, "model": model, "workspace": workspace,
-                 "effort": effort, "judge_model": judge_model,
-                 "judge_effort": judge_effort}
+                 "thinking_effort": thinking_effort, "judge_model": judge_model,
+                 "judge_thinking_effort": judge_thinking_effort}
         return self.call(build("session/set", session=session, **{
             name: value for name, value in given.items() if value is not None
         }))
 
-    def permissions(self, session):
+    def grants(self, session):
         """The grants that hold in a session."""
         return self.call(build("grant/list", session=session))["grants"]
 
-    def forget(self, session, grant):
+    def forget_grant(self, session, grant):
         """Take a grant back."""
         return self.call(build("grant/forget", session=session, grant=grant))
 
     def hello(self):
-        return self.call(build("host/hello"))
+        return self.call(build("server/hello"))
 
     def models(self):
-        """Every server the host can reach, with its models by the names a
-        session takes, or why it lists none: the host's reply as it is."""
+        """Every server the server can reach, with its models by the names a
+        session takes, or why it lists none: the server's reply as it is."""
         return self.call(build("model/list"))
 
     def features(self, model, test=False):
-        """What a model honours of its API's features, as the host measured
-        it (measured now when never, or `test`): the host's reply. Measuring
+        """What a model honours of its API's features, as the server measured
+        it (measured now when never, or `test`): the server's reply. Measuring
         calls the model a few times, so the wait is long."""
         fields = {"test": True} if test else {}
         return self.call(build("model/features", model=model, **fields),
-                         timeout=FEATURES_WAIT)
+                         timeout=FEATURES_WAIT_SECONDS)
 
-    def providers(self):
-        """Every model server the host knows, whether its key is there, the
+    def servers(self):
+        """Every model server the server knows, whether its key is there, the
         default model and why a session on it couldn't start (None: it
-        can): the host's reply as it is."""
-        return self.call(build("model/provider/list"))
+        can): the server's reply as it is."""
+        return self.call(build("model/server/list"))
 
     def probe(self, name=None, url=None, key=None):
         """A server's models, for a pick list: (the url that answered,
-        [{"id", "context"}])."""
+        [{"id", "context_window"}])."""
         fields = {k: v for k, v in (("name", name), ("url", url), ("key", key))
                   if v is not None}
-        reply = self.call(build("model/provider/probe", **fields))
+        reply = self.call(build("model/server/probe", **fields))
         return reply["url"], reply["models"]
 
-    def connect(self, name, model, url=None, key=None, context=None,
+    def connect(self, name, model, url=None, key=None, context_window=None,
                 title=None, default=None):
         """A server's model tested, then saved (and the default if none is
-        set, or if asked): the host's reply. A local server may first load
+        set, or if asked): the server's reply. A local server may first load
         the model, so the wait is long."""
-        fields = {"url": url, "key": key, "context": context, "title": title,
+        fields = {"url": url, "key": key, "context_window": context_window,
+                  "title": title,
                   "default": default}
         given = {k: v for k, v in fields.items() if v is not None}
-        request = build("model/provider/connect", name=name, model=model, **given)
-        return self.call(request, timeout=CONNECT_WAIT)
+        request = build("model/server/connect", name=name, model=model, **given)
+        return self.call(request, timeout=CONNECT_WAIT_SECONDS)
 
     def disconnect(self, name):
         """The server's key and the user's lines for it taken out."""
-        return self.call(build("model/provider/disconnect", name=name))
+        return self.call(build("model/server/disconnect", name=name))
 
     def settings(self):
         """ZERO's settings, each with its value, and what is wrong with
-        config.toml (None if nothing): the host's to read and write."""
+        config.toml (None if nothing): the server's to read and write."""
         reply = self.call(build("setting/list"))
         return reply["settings"], reply["error"]
 
     def set_setting(self, name, value):
-        """Write one of ZERO's settings, through the host."""
+        """Write one of ZERO's settings, through the server."""
         return self.call(build("setting/set", name=name, value=value))
 
-    def seen(self, session, seq):
-        return self.call(build("session/seen", session=session, seq=seq))
+    def mark_seen(self, session, seq):
+        return self.call(build("session/mark_seen", session=session, seq=seq))
 
     def rename(self, session, title):
         return self.call(build("session/rename", session=session, title=title))
@@ -275,21 +276,21 @@ class Connection:
 
     def read(self, session, after=0, limit=None, before=None):
         """`session/read`'s whole reply: the records after the seq (and
-        before `before`), or the newest `limit` of them, the gap before
+        before `before`), or the newest `limit` of them, how many came before
         them, and what the session's next turn runs with (`runs_with`)."""
-        # A limit of null asks for them all; left out, the host's window (50)
+        # A limit of null asks for them all; left out, the server's window (50)
         return self.call(build(
             "session/read", session=session, after=after, limit=limit, before=before,
         ))
 
     def history(self, session, after=0, limit=None, before=None):
-        """(records, gap), as `read` gives them."""
+        """(records, earlier_count), as `read` gives them."""
         reply = self.read(session, after, limit, before)
-        return reply["records"], reply["gap"]
+        return reply["records"], reply["earlier_count"]
 
     def runs_with(self, session):
         """What the session's next turn runs with: its mode, model, workspace,
-        effort, judge_model (None: the session's own) and judge_effort."""
+        effort, judge_model (None: the session's own) and judge_thinking_effort."""
         return self.read(session, limit=0)["runs_with"]
 
     def jobs(self, session=None):

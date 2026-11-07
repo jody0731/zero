@@ -4,7 +4,7 @@ import random
 
 from openai import APIConnectionError, APIStatusError
 
-from core.hooks import Plugin, Retry
+from core.hooks import Hook, Retry
 from core.llm import CutShort, NoReply
 
 
@@ -29,7 +29,7 @@ def retry_delay(error, attempt, base):
     return base * 2**attempt * random.uniform(0.9, 1.1)
 
 
-class ModelRetry(Plugin):
+class ModelRetry(Hook):
     """Up to `retries` retries, waiting about base, 2 x base, 4 x base seconds."""
 
     def __init__(self, retries, base):

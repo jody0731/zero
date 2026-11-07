@@ -19,20 +19,20 @@ import tempfile
 from pathlib import Path
 
 from core.tools import tool
-from prompt.instructions import CAPS, clean
+from prompt.instructions import MAX_CHARS_BY_FILE, clean
 
 TARGETS = ("soul", "user", "project")
 ACTIONS = ("add", "replace", "remove")
 # Each target as an ask and the judge name it, and as its own refusals do
-NAMES = {
+ASK_NAMES = {
     "soul": "SOUL.md", "user": "the user's ZERO.md",
     "project": "the project's ZERO.md",
 }
-FILES = {"soul": "SOUL.md", "user": "ZERO.md", "project": "the project's ZERO.md"}
-CROSSES = "It changes what every later session reads."
+FILE_NAMES = {"soul": "SOUL.md", "user": "ZERO.md", "project": "the project's ZERO.md"}
+CROSSING = "It changes what every later session reads."
 HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*$")
 # How much of a change an ask and the judge see
-SHOWN = 2000
+SHOWN_CHARS = 2000
 # Where a change lives from now: this session (its result) and every later
 # one (the file)
 NOW = (
@@ -134,14 +134,14 @@ def store(path, text):
 
 def clipped(text):
     text = str(text or "")
-    if len(text) <= SHOWN:
+    if len(text) <= SHOWN_CHARS:
         return text
-    return f"{text[:SHOWN]}… [{len(text) - SHOWN:,} more characters]"
+    return f"{text[:SHOWN_CHARS]}… [{len(text) - SHOWN_CHARS:,} more characters]"
 
 
 def summary(args):
     """The change, as an ask and the judge read it."""
-    name = NAMES.get(args.get("target"), str(args.get("target")))
+    name = ASK_NAMES.get(args.get("target"), str(args.get("target")))
     action = args.get("action")
     if action == "add":
         under = f" under “{title(args['heading'])}”" if args.get("heading") else ""
@@ -154,8 +154,8 @@ def summary(args):
     return f"memory: {action} from {name}:\n{clipped(args.get('old_text'))}"
 
 
-def crosses(args):
-    return {"rule": "memory", "fact": CROSSES, "why": args.get("reason"),
+def crossing(args):
+    return {"rule": "memory", "fact": CROSSING, "why": args.get("reason"),
             "every_mode": True}
 
 
@@ -170,8 +170,9 @@ DESCRIPTION = (
     "goes first to the session's approver, whom the environment's mode line "
     "names. A change's result holds the file as it then reads, for this "
     "session; later sessions read it at their start. SOUL.md holds "
-    f"{CAPS['soul']:,} characters, ZERO.md {CAPS['user']:,}, the project's "
-    f"ZERO.md {CAPS['project']:,}; a change past that isn't made. The file "
+    f"{MAX_CHARS_BY_FILE['soul']:,} characters, ZERO.md "
+    f"{MAX_CHARS_BY_FILE['user']:,}, the project's ZERO.md "
+    f"{MAX_CHARS_BY_FILE['project']:,}; a change past that isn't made. The file "
     "tools don't change these files; the user edits them by hand too."
 )
 
@@ -181,7 +182,7 @@ DESCRIPTION = (
     optional=("text", "old_text", "heading", "reason"),
     summary=summary,
     ready=lambda context: context.get("own_files") is not None,
-    crosses=crosses,
+    crossing=crossing,
     target=({"type": "string", "enum": list(TARGETS)}, "Which file"),
     action=({"type": "string", "enum": list(ACTIONS)}, "What to do"),
     text=("string", "For add, the text; for replace, what takes old_text's place"),
@@ -210,10 +211,10 @@ def memory(target, action, text=None, old_text=None, heading=None, reason="",
     if isinstance(after, Refusal):
         return after.format(name=path)
     size = len(clean(after))
-    cap = CAPS[target]
+    cap = MAX_CHARS_BY_FILE[target]
     if size > cap:
         return (
-            f"Not changed: {FILES[target]} would hold {size:,} characters as "
+            f"Not changed: {FILE_NAMES[target]} would hold {size:,} characters as "
             f"sessions read it; it holds {cap:,}. Removing or shortening "
             "entries makes room."
         )

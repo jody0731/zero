@@ -4,7 +4,7 @@ Each record has seq (its line number), time and type. Every append reaches the
 disk (fsync) before the caller goes on, so what the log says happened did. A
 crash mid-write can leave half a line at the end: reading leaves it out, and the
 next append cuts it off first so the file stays whole. `on_append` hears each
-record once it is on disk: the host hands it to the session's watchers. A new
+record once it is on disk: the server hands it to the session's watchers. A new
 session's log is named when it is made and claimed when its first turn starts
 (fresh_log).
 """

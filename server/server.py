@@ -1,17 +1,17 @@
-"""The host's server: one process for every session, a thin shell around the
+"""The server's server: one process for every session, a thin shell around the
 runtime.
 
-It holds host.lock for its whole life, so whoever holds it owns the socket: it
+It holds server.lock for its whole life, so whoever holds it owns the socket: it
 removes any socket left behind and listens on a Unix socket only the user can
 open (0600 in a 0700 folder): no port, no password. A client sends one JSON
 object on one line and gets one line back: the messages and their replies
 are protocol/messages.py's.
 
-ZERO's own commands (a child of the host, or in its unit: host/peers.py) get
+ZERO's own commands (a child of the server, or in its unit: server/peers.py) get
 the looking messages only, never a send, a stop or a change: who may answer an ask
 is the user's own client.
 
-The host leaves after `idle_minutes` with no turn, no message that could start
+The server leaves after `server_idle_minutes` with no turn, no message that could start
 one, no job and no client connected; a parked ask waits on disk. A shutdown or
 SIGTERM drains: no new messages, running turns get a few seconds, each job's
 loss is written before it is killed, and what is cut off resumes at the next
@@ -31,47 +31,48 @@ import traceback
 
 import settings
 from core import history
-from host import peers
-from host.parts import Refused
-from host.runtime import Message
+from server import peers
+from server.services import Refused
+from server.runtime import Message
 from protocol import messages, version
 
 # How long a stop waits for running turns
 DRAIN_SECONDS = 10
-# How long a new host waits for an old one to let go of host.lock
-LOCK_WAIT = 10
+# How long a new server waits for an old one to let go of server.lock
+LOCK_WAIT_SECONDS = 10
 MAX_REQUEST = 1 << 20
 # How long the list's changes gather before the list is sent again
-LIST_GATHER = 0.1
+LIST_GATHER_SECONDS = 0.1
 # Seconds between two drafts on a watch: ten a second at most
-DRAFT_EVERY = 0.1
-BYES = ("stopped", "restart")
-# The messages the kernel serves itself; a part adds its own (host/parts.py)
-SERVED = ("host/hello", "host/stop", "session/send", "session/continue",
+DRAFT_EVERY_SECONDS = 0.1
+STOP_REASONS = ("stopped", "restart")
+# The messages the kernel serves itself; a service adds its own (server/services.py)
+SERVED = ("server/hello", "server/stop", "session/send", "session/continue",
           "session/stop", "session/list", "session/read", "session/watch",
-          "session/seen", "session/rename", "session/archive",
+          "session/mark_seen", "session/rename", "session/archive",
           "session/unarchive", "session/delete", "session/set", "setting/list",
           "setting/set")
 # Those of them that only look, which ZERO's own commands may send too
-# (peers.py); a part names its own in `looking`
-LOOKING = ("host/hello", "session/list", "session/read", "session/watch")
-HOUSEKEEPING = ("session/seen", "session/rename", "session/archive",
-                "session/unarchive", "session/delete", "session/set")
+# (peers.py); a service names its own in `looking`
+LOOKING_MESSAGES = ("server/hello", "session/list", "session/read", "session/watch")
+SESSION_EDITS = ("session/mark_seen", "session/rename", "session/archive",
+                 "session/unarchive", "session/delete", "session/set")
 
 
 class AlreadyRunning(Exception):
     pass
 
 
-class Host:
-    def __init__(self, runtime, paths, idle_minutes=None, lock_wait=LOCK_WAIT):
-        """`idle_minutes`: None reads config.toml's at each look, so a change
+class Server:
+    def __init__(self, runtime, paths, server_idle_minutes=None,
+                 lock_wait=LOCK_WAIT_SECONDS):
+        """`server_idle_minutes`: None reads config.toml's at each look, so a change
         in the settings view counts without a restart."""
         self.runtime = runtime
         self.paths = paths
-        self.idle_minutes = idle_minutes
+        self.server_idle_minutes = server_idle_minutes
         self.lock_wait = lock_wait
-        self.build = version.build()
+        self.build = version.build_hash()
         self.started = time.time()
         self.stopping = threading.Event()
         # The `bye` its watches get when it stops
@@ -100,11 +101,11 @@ class Host:
                 self.accept(listener)
             finally:
                 # Stop listening before letting go of the lock: a client that
-                # connects now is refused and starts the next host
+                # connects now is refused and starts the next server
                 listener.close()
                 self.paths.socket.unlink(missing_ok=True)
             if self.stopping.is_set():
-                print(f"ZERO's host: stopping ({self.reason}).", flush=True)
+                print(f"ZERO's server: stopping ({self.reason}).", flush=True)
             self.runtime.stop(DRAIN_SECONDS)
             self.runtime.close_watchers(self.reason)
             self.wait_for_connections(2)
@@ -117,7 +118,7 @@ class Host:
         self.stopping.set()
 
     def take_lock(self):
-        """host.lock, waiting a while for an old host that is still exiting."""
+        """server.lock, waiting a while for an old server that is still exiting."""
         lock = open(self.paths.lock, "a+")
         deadline = time.monotonic() + self.lock_wait
         while True:
@@ -130,18 +131,40 @@ class Host:
                     pid = lock.read().strip() or "?"
                     lock.close()
                     raise AlreadyRunning(
-                        f"ZERO's host is already running (pid {pid})"
+                        f"ZERO's server is already running (pid {pid})"
                     ) from None
                 time.sleep(0.05)
+        self.wait_for_old_server(deadline)
         lock.seek(0)
         lock.truncate()
         lock.write(str(os.getpid()))
         lock.flush()
         return lock
 
+    def wait_for_old_server(self, deadline):
+        """A server from before 0.6.2.8 holds host.lock while it runs: wait
+        for it to exit as for server.lock, so two never share the socket."""
+        path = self.paths.old_server_lock
+        if not path.exists():
+            return
+        with open(path) as old:
+            while True:
+                try:
+                    fcntl.flock(old, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(old, fcntl.LOCK_UN)
+                    return
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        pid = old.read().strip() or "?"
+                        raise AlreadyRunning(
+                            f"ZERO's server from before 0.6.2.8 is still "
+                            f"running (pid {pid})"
+                        ) from None
+                    time.sleep(0.05)
+
     def listen(self):
         path = self.paths.socket
-        # One left by a host that died: the lock says nobody else uses it
+        # One left by a server that died: the lock says nobody else uses it
         path.unlink(missing_ok=True)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         # Born 0600, so there is no moment when others could connect
@@ -179,21 +202,22 @@ class Host:
             # Look often enough to leave close to the idle time, at most each
             # second
             next_look = now + min(1.0, idle_seconds / 4)
-            if self.connections or self.runtime.busy():
+            if self.connections or self.runtime.busy_with():
                 idle_since = None
             elif idle_since is None:
                 idle_since = now
             elif now - idle_since >= idle_seconds and self.leave_idle():
                 minutes = idle_seconds / 60
-                print(f"ZERO's host: idle for {minutes:g} min, exiting.", flush=True)
+                print(f"ZERO's server: idle for {minutes:g} min, exiting.", flush=True)
                 return
 
     def idle_seconds(self):
-        minutes = self.idle_minutes or self.runtime.config()["idle_minutes"]
+        minutes = (self.server_idle_minutes
+                   or self.runtime.config()["server_idle_minutes"])
         return minutes * 60
 
     def leave_idle(self):
-        """Whether the host may go: checked once more, under the lock a new
+        """Whether the server may go: checked once more, under the lock a new
         turn takes, so nothing starts in the moment it decides."""
         with self.connection_lock:
             if self.connections:
@@ -220,9 +244,10 @@ class Host:
             request = json.loads(read_line(conn))
             name = request.get("message") if isinstance(request, dict) else None
             # ZERO's own commands may look, never act
-            if (name not in LOOKING and name not in self.runtime.looking
-                    and self.peers.own(peers.peer_pid(conn))):
-                raise Refused(peers.refused((*LOOKING, *self.runtime.looking)))
+            looking = (*LOOKING_MESSAGES, *self.runtime.looking_messages)
+            if (name not in looking
+                    and self.peers.is_zero_command(peers.peer_pid(conn))):
+                raise Refused(peers.refused(looking))
             if name == "session/watch":
                 self.watch(conn, request)
                 return
@@ -246,7 +271,7 @@ class Host:
         if not isinstance(request, dict):
             return error("a request is a JSON object")
         name = request.get("message")
-        if name == "host/hello":
+        if name == "server/hello":
             return self.hello(request)
         if name == "session/send":
             return self.send(request)
@@ -271,20 +296,20 @@ class Host:
                 return error("a continue needs an id: a string the sender picks")
             return {"ok": True, **self.runtime.continue_turn(sid, msg_id, source)}
         if name == "session/list":
-            archived, workspace = listed(request)
+            archived, workspace = list_filters(request)
             return {"ok": True, "sessions": self.runtime.sessions(archived, workspace)}
         if name == "session/read":
             before = request.get("before")
             if before is not None and type(before) is not int:
                 return error("before must be an integer")
-            sid, after, limit = window(request)
-            records, gap = self.runtime.history(sid, after, limit, before)
-            return {"ok": True, "records": records, "gap": gap,
+            sid, after, limit = read_range(request)
+            records, earlier_count = self.runtime.history(sid, after, limit, before)
+            return {"ok": True, "records": records, "earlier_count": earlier_count,
                     "runs_with": self.runtime.runs_with(sid)}
-        if name in HOUSEKEEPING:
-            return self.housekeeping(name, request)
+        if name in SESSION_EDITS:
+            return self.edit_session(name, request)
         if name in self.runtime.messages:
-            # A part's message
+            # A service's message
             try:
                 return self.runtime.messages[name](request)
             except Refused as exc:
@@ -300,7 +325,7 @@ class Host:
             if problem:
                 return error(problem)
             return {"ok": True, "set": {setting: config.values[setting]}}
-        if name == "host/stop":
+        if name == "server/stop":
             return self.shutdown(request)
         served = {*SERVED, *self.runtime.messages}
         known = ", ".join(m for m in messages.MESSAGES if m in served)
@@ -311,15 +336,16 @@ class Host:
         if theirs is not None and theirs != version.PROTOCOL:
             return {
                 **error(
-                    f"this host speaks protocol {version.PROTOCOL}, the client "
-                    f"{theirs}: restart the host with the client's code"
+                    f"this server speaks protocol {version.PROTOCOL}, the client "
+                    f"{theirs}: restart the server with the client's code"
                 ),
                 "protocol": version.PROTOCOL,
             }
         return {
             "ok": True, "protocol": version.PROTOCOL, "build": self.build,
-            "pid": os.getpid(), "started": self.started,
-            "busy": self.runtime.busy(), "last": self.runtime.last(),
+            "pid": os.getpid(), "started_at": self.started,
+            "busy_with": self.runtime.busy_with(),
+            "last_session": self.runtime.last(),
             "mode": self.runtime.mode, "model": self.runtime.model,
             # What a client offers and shows without loading the harness
             "modes": list(self.runtime.modes),
@@ -327,11 +353,11 @@ class Host:
         }
 
     def config(self):
-        """The host's config.toml (settings.Config); Refused for a host that
+        """The server's config.toml (settings.Config); Refused for a server that
         reads none (the evals')."""
         config = self.runtime.config
         if not isinstance(config, settings.Config):
-            raise Refused("this host reads no config.toml")
+            raise Refused("this server reads no config.toml")
         return config
 
     def settings(self):
@@ -339,16 +365,16 @@ class Host:
         config = self.config()
         return {"ok": True, "settings": config.listing(), "error": config.error}
 
-    def housekeeping(self, name, request):
+    def edit_session(self, name, request):
         """A session's seen, rename, archive, unarchive, delete and set."""
         sid = request.get("session")
         if not isinstance(sid, str):
             return error(f"{name} needs a session string")
-        if name == "session/seen":
+        if name == "session/mark_seen":
             seq = request.get("seq")
             if type(seq) is not int or seq < 0:
-                return error("session/seen needs a seq, a nonnegative integer")
-            self.runtime.seen(sid, seq)
+                return error("session/mark_seen needs a seq, a nonnegative integer")
+            self.runtime.mark_seen(sid, seq)
         elif name == "session/rename":
             text = request.get("title")
             if not isinstance(text, str):
@@ -359,8 +385,9 @@ class Host:
         elif name == "session/set":
             values = {name: request.get(name) for name in history.SWITCHABLE}
             if any(v is not None and not isinstance(v, str) for v in values.values()):
-                return error("session/set takes mode, model, workspace, effort, "
-                             "judge_model and judge_effort, each a string")
+                return error("session/set takes mode, model, workspace, "
+                             "thinking_effort, judge_model and "
+                             "judge_thinking_effort, each a string")
             return {"ok": True, **self.runtime.set_session(sid, **values)}
         else:
             return {"ok": True, "trash": self.runtime.delete(sid)}
@@ -371,11 +398,11 @@ class Host:
         build is never forced."""
         force = request.get("force", False)
         reason = request.get("reason", "stopped")
-        if not isinstance(force, bool) or reason not in BYES:
-            return error(f"host/stop takes force (boolean) and reason {BYES}")
-        busy = self.runtime.busy()
+        if not isinstance(force, bool) or reason not in STOP_REASONS:
+            return error(f"server/stop takes force (boolean) and reason {STOP_REASONS}")
+        busy = self.runtime.busy_with()
         if busy and (not force or reason == "restart"):
-            return {"ok": True, "stopping": False, "busy": busy}
+            return {"ok": True, "stopping": False, "busy_with": busy}
         self.stop(reason)
         return {"ok": True, "stopping": True}
 
@@ -385,7 +412,7 @@ class Host:
             return error("a message needs an id: a string the sender picks")
         if not isinstance(text, str):
             return error("a message needs its text, a string")
-        names = ("session", "mode", "model", "effort", "reply_to", "workspace",
+        names = ("session", "mode", "model", "thinking_effort", "reply_to", "workspace",
                  "choice")
         fields = {name: request.get(name) for name in names}
         fields["when_busy"] = request.get("when_busy") or "steer"
@@ -403,8 +430,8 @@ class Host:
 
     def watch(self, conn, request):
         """The records after a seq, then each new one as it is appended: an ask
-        is its `ask` record. Ends with a `bye` when the host stops."""
-        sid, after, limit = window(request, limit=None)
+        is its `ask` record. Ends with a `bye` when the server stops."""
+        sid, after, limit = read_range(request, limit=None)
         try:
             token, watcher = self.runtime.subscribe(sid)
         except Refused as exc:
@@ -414,9 +441,9 @@ class Host:
         try:
             # Subscribed first, so a record appended meanwhile is in the queue
             # and the seq check drops the copy
-            records, gap = self.runtime.history(sid, after, limit)
-            if gap:
-                self.emit(conn, {"gap": gap})
+            records, earlier_count = self.runtime.history(sid, after, limit)
+            if earlier_count:
+                self.emit(conn, {"earlier_count": earlier_count})
             for record in records:
                 self.emit(conn, {"record": record})
                 after = record["seq"]
@@ -438,9 +465,9 @@ class Host:
                     drafted = drafted or "draft" in event
                     self.emit(conn, event)
                 if drafted:
-                    # At most DRAFT_EVERY a draft: the newest replaces what
+                    # At most DRAFT_EVERY_SECONDS a draft: the newest replaces what
                     # queues meanwhile (Watcher.put)
-                    time.sleep(DRAFT_EVERY)
+                    time.sleep(DRAFT_EVERY_SECONDS)
                 if watcher.bye:
                     self.emit(conn, {"bye": watcher.bye})
                     return
@@ -456,9 +483,9 @@ class Host:
 
     def watch_list(self, conn, request):
         """The list, then the whole list again whenever it changed, its changes
-        gathered for a moment; it ends with a `bye` when the host stops."""
+        gathered for a moment; it ends with a `bye` when the server stops."""
         try:
-            archived, workspace = listed(request)
+            archived, workspace = list_filters(request)
         except Refused as exc:
             self.emit(conn, error(str(exc)))
             return
@@ -482,7 +509,7 @@ class Host:
                     now = self.runtime.wait_list(version, 0.2)
                     if now != version:
                         version = now
-                        time.sleep(LIST_GATHER)
+                        time.sleep(LIST_GATHER_SECONDS)
                         version = self.runtime.list_version
                         break
         except (OSError, ValueError):
@@ -493,7 +520,7 @@ class Host:
         conn.sendall((json.dumps(event, ensure_ascii=False) + "\n").encode())
 
 
-def listed(request):
+def list_filters(request):
     """session/list's `archived` (False when left out) and `workspace`."""
     archived = request.get("archived", False)
     workspace = request.get("workspace")
@@ -504,7 +531,7 @@ def listed(request):
     return archived, workspace
 
 
-def window(request, limit=50):
+def read_range(request, limit=50):
     """A request's session, `after` (a seq) and `limit` (None: all; 0: none,
     for what a reply says beside the records)."""
     sid = request.get("session")

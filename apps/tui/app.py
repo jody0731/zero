@@ -9,10 +9,10 @@ outcome until clicked. ZERO's own themes (dark and light) follow the desktop's
 setting unless /settings picks one, or one of Textual's.
 
 What lines and keys mean is in controller.py, testable with no terminal; the
-views are their own files (session_screen, sessions_screen, settings_screen,
+views are their own files (session_view, session_list_view, settings_view,
 dialogs, widgets). The session in view is followed with `session/watch`, the
 list with `session/list` and `watch`, each in a thread whose events reach the
-screen as messages; what is shown is reported back with `session/seen`, so any
+screen as messages; what is shown is reported back with `session/mark_seen`, so any
 `zero` knows what is news.
 """
 
@@ -35,12 +35,12 @@ from textual.widgets import Static, TextArea
 import paths
 import settings
 from apps.tui import clipboard, config, controller, keybindings
-from apps.tui.connect_screen import ServersView, connected_servers, pick_default
-from apps.tui.controller import SessionClient
-from apps.tui.dialogs import CaptureView, ChoiceView, PromptView, TextView
-from apps.tui.session_screen import SessionView
-from apps.tui.sessions_screen import SessionsView
-from apps.tui.settings_screen import SettingsView
+from apps.tui.connect_view import ServersView, connected_servers, pick_default
+from apps.tui.controller import SessionInput
+from apps.tui.dialogs import KeyCaptureView, ChoiceView, PromptView, TextView
+from apps.tui.session_view import SessionView
+from apps.tui.session_list_view import SessionListView
+from apps.tui.settings_view import SettingsView
 from apps.tui.widgets import ERRORS, MessageBox, Plain, Transcript, message, placeholder
 from client import render, session_list
 from client.follower import Follower
@@ -48,7 +48,7 @@ from client.render import jobs_text
 
 
 # Records a switch shows at most; a scroll to the top pages back by as many
-WINDOW = 50
+MAX_RECORDS_SHOWN = 50
 # ZERO's themes: a blue-black ground; cyan is ZERO (its mark, the
 # input, what's new), amber only what needs you (an ask, a waiting command, the
 # attention line), violet the mode you set
@@ -116,14 +116,14 @@ PromptView, ChoiceView { align: center middle; background: $background 60%; }
 PromptView Vertical, ChoiceView Vertical { width: 70%; height: auto;
     border: round $primary; padding: 1 2; background: $panel; }
 ChoiceView OptionList { height: auto; max-height: 12; margin: 1 0 0 0; }
-CaptureView { align: center middle; background: $background 60%; }
-CaptureView Static { width: 60%; height: auto; border: round $text-warning;
+KeyCaptureView { align: center middle; background: $background 60%; }
+KeyCaptureView Static { width: 60%; height: auto; border: round $text-warning;
     padding: 1 2; background: $panel; }
 """
 
 
 class ListWatch:
-    """Keeps the session list current from its watch, across host restarts;
+    """Keeps the session list current from its watch, across server restarts;
     after a `bye` "stopped" it waits until `resume()`."""
 
     def __init__(self, connection, changed):
@@ -178,7 +178,7 @@ class ListWatch:
                 pass
 
 
-class Later(Message):
+class WorkFromThread(Message):
     """Work a thread hands the screen without waiting for it (call_from_thread
     would wait, and stall a switch that joins that thread)."""
 
@@ -188,7 +188,7 @@ class Later(Message):
         self.args = args
 
 
-class Quiet:
+class SilentRenderer:
     """The follower's renderer: the screen draws records itself."""
 
     def event(self, event):
@@ -216,16 +216,17 @@ class SafeClicks:
                 and widget.parent is None)
 
 
-class Zero(SafeClicks, App):
+class ZeroApp(SafeClicks, App):
     CSS = CSS
     TITLE = "ZERO"
     BINDINGS = [
         Binding("ctrl+c", "interrupt", show=False, priority=True, id="interrupt"),
         Binding("ctrl+d", "leave", show=False, priority=True, id="leave"),
         Binding("ctrl+o", "sessions", show=False, priority=True, id="sessions"),
-        Binding("alt+down", "next_needing", show=False, priority=True,
-                id="next_needing"),
-        Binding("alt+up", "go_back", show=False, priority=True, id="go_back"),
+        Binding("alt+down", "next_needing_you", show=False, priority=True,
+                id="next_needing_you"),
+        Binding("alt+up", "previous_session", show=False, priority=True,
+                id="previous_session"),
         Binding(keybindings.ACTIONS["follow_up"].keys, "follow_up", show=False,
                 priority=True, id="follow_up"),
     ]
@@ -243,7 +244,7 @@ class Zero(SafeClicks, App):
         self.show_list = show_list
         # Why this view opened again (reopening): said once it's up
         self.notice = notice
-        self.client = SessionClient(connection, None, mode, model, workspace=cwd)
+        self.client = SessionInput(connection, None, mode, model, workspace=cwd)
         self.follower = None
         self.thread = None
         self.back = []
@@ -255,7 +256,7 @@ class Zero(SafeClicks, App):
         self.picked = 0
         # Which follower is current: a stopped one's late events are dropped
         self.generation = 0
-        self.lists = ListWatch(connection, lambda: self.later(self.listed))
+        self.lists = ListWatch(connection, lambda: self.run_on_screen(self.listed))
         self.view = SessionView()
         # config.toml's settings (/settings); a broken file is said, not used
         self.config_error = None
@@ -264,7 +265,7 @@ class Zero(SafeClicks, App):
         except settings.SettingsError as error:
             self.config = {**config.DEFAULTS, "keys": {}}
             self.config_error = str(error)
-        self.keys = keybindings.current(self.config["keys"])
+        self.keys = keybindings.current_keys(self.config["keys"])
 
     # Starting and leaving
 
@@ -298,15 +299,15 @@ class Zero(SafeClicks, App):
         """When new sessions' model can't start: with none set and a server
         connected, a pick of the models known (pick_default); otherwise
         "Connect a model" in front (nothing connected, its key missing, no
-        window). A host that can't say leaves it to the first message's
+        window). A server that can't say leaves it to the first message's
         refusal."""
         try:
-            reply = self.connection.providers()
+            reply = self.connection.servers()
         except ERRORS:
             return
-        if not reply.get("ready"):
+        if not reply.get("not_ready_reason"):
             return
-        servers = connected_servers(reply.get("providers", ()))
+        servers = connected_servers(reply.get("servers", ()))
         if not reply.get("default") and servers:
             pick_default(self)
         else:
@@ -345,14 +346,14 @@ class Zero(SafeClicks, App):
         return self.view.query_one(Transcript)
 
     def open(self, sid, remember=True):
-        """Show a session: its last WINDOW records, a line for the earlier
+        """Show a session: its last MAX_RECORDS_SHOWN records, a line for the earlier
         ones, which a scroll to the top brings in, then it goes live."""
         if remember and self.client.session and self.client.session != sid:
             self.back.append(self.client.session)
         self.stop_following()
         row = self.row(sid) or find(self.connection.sessions(), sid)
-        records, gap = self.connection.history(sid, after=0, limit=WINDOW)
-        self.client = SessionClient(self.connection, sid, workspace=row["workspace"])
+        records, gap = self.connection.history(sid, after=0, limit=MAX_RECORDS_SHOWN)
+        self.client = SessionInput(self.connection, sid, workspace=row["workspace"])
         transcript = self.transcript
         transcript.clear()
         if gap:
@@ -377,7 +378,7 @@ class Zero(SafeClicks, App):
         if self.client.session:
             self.back.append(self.client.session)
         self.stop_following()
-        self.client = SessionClient(
+        self.client = SessionInput(
             self.connection, None, self.mode, self.model, workspace=workspace
         )
         self.oldest = None
@@ -385,26 +386,26 @@ class Zero(SafeClicks, App):
         self.draw()
 
     def listed(self):
-        """A new session list from the host: every view that shows it is
+        """A new session list from the server: every view that shows it is
         drawn again, the list itself too when it is the one showing."""
         self.draw()
-        if isinstance(self.screen, SessionsView) and self.screen.is_mounted:
+        if isinstance(self.screen, SessionListView) and self.screen.is_mounted:
             self.screen.draw()
 
-    def later(self, work, *args):
+    def run_on_screen(self, work, *args):
         """Run `work(*args)` on the screen's loop; safe from any thread."""
-        self.post_message(Later(work, *args))
+        self.post_message(WorkFromThread(work, *args))
 
-    def on_later(self, message):
+    def on_work_from_thread(self, message):
         message.work(*message.args)
 
     def follow(self, after):
         self.generation += 1
         generation = self.generation
         self.follower = Follower(
-            self.connection, self.client, Quiet(), after=after,
-            emit=lambda line: self.later(self.followed_line, generation, line),
-            on_event=lambda event: self.later(self.followed, event, generation),
+            self.connection, self.client, SilentRenderer(), after=after,
+            emit=lambda line: self.run_on_screen(self.followed_line, generation, line),
+            on_event=lambda event: self.run_on_screen(self.followed, event, generation),
         )
         self.thread = threading.Thread(target=self.follower.run,
                                        name="watch-client", daemon=True)
@@ -447,7 +448,7 @@ class Zero(SafeClicks, App):
         if sid is None:
             return
         try:
-            self.connection.seen(sid, seq)
+            self.connection.mark_seen(sid, seq)
         except ERRORS:
             pass
 
@@ -528,11 +529,11 @@ class Zero(SafeClicks, App):
             return
         if answer is None:
             return
-        disposition = answer.get("disposition")
-        mark = {"steered": "steer", "queued": "queued"}.get(disposition)
+        handled_as = answer.get("handled_as")
+        mark = {"steered": "steer", "queued": "queued"}.get(handled_as)
         self.transcript.sent(text, answer.get("id"), mark)
         if made or self.follower is None or self.follower.stopped:
-            # A new session, or the host was stopped by hand and starts again
+            # A new session, or the server was stopped by hand and starts again
             after = self.follower.after if self.follower and not made else 0
             self.follow(after)
         self.lists.resume()
@@ -573,7 +574,7 @@ class Zero(SafeClicks, App):
                 else:
                     self.push_screen(
                         ChoiceView("Mode, from the next turn", self.modes(),
-                                   self.now("mode")),
+                                   self.session_value("mode")),
                         lambda mode: mode and self.switch(mode=mode),
                     )
             elif name == "/model":
@@ -583,7 +584,7 @@ class Zero(SafeClicks, App):
                     # The model and its thinking, as in /settings
                     self.push_screen(SettingsView(self, place="model"))
             elif name == "/cd":
-                here = self.now("workspace") or self.cwd
+                here = self.session_value("workspace") or self.cwd
                 if rest:
                     self.switch(workspace=controller.resolve_workspace(rest, here))
                 else:
@@ -595,7 +596,7 @@ class Zero(SafeClicks, App):
             elif sid is None:
                 self.note("This session isn't made yet: send a message first.")
             elif name == "/continue":
-                reply = self.connection.go_on(sid)
+                reply = self.connection.continue_session(sid)
                 self.transcript.sent("/continue", reply.get("id"))
                 self.client.running = True
                 self.client.doing("thinking")
@@ -622,18 +623,18 @@ class Zero(SafeClicks, App):
                 if sid is None:
                     self.note("ZERO: no session yet.")
                     return
-                grants = self.connection.permissions(sid)
+                grants = self.connection.grants(sid)
                 words = rest.split()
                 if len(words) == 2 and words[0] == "forget" and words[1].isdigit():
                     index = int(words[1]) - 1
                     if not 0 <= index < len(grants):
                         self.note(f"ZERO: no permission {words[1]}.")
                         return
-                    self.connection.forget(sid, grants[index]["id"])
-                    self.note(f"ZERO: taken back: {grants[index]['what']}.")
+                    self.connection.forget_grant(sid, grants[index]["id"])
+                    self.note(f"ZERO: taken back: {grants[index]['description']}.")
                     return
                 self.push_screen(TextView("Permissions",
-                                          render.permissions_text(grants)))
+                                          render.grants_text(grants)))
             elif name == "/jobs":
                 jobs = self.connection.jobs(sid)
                 body = jobs_text(jobs) if jobs else "No jobs in this session."
@@ -641,7 +642,7 @@ class Zero(SafeClicks, App):
         except Exception as error:
             self.failed(error)
 
-    def now(self, name):
+    def session_value(self, name):
         """The session's mode, model or workspace as it stands (the next
         turn's, after a switch)."""
         row = self.row() or {}
@@ -651,7 +652,7 @@ class Zero(SafeClicks, App):
         return row.get(name) or own
 
     def switch(self, **values):
-        """Set what the session runs with: the host keeps it for the next
+        """Set what the session runs with: the server keeps it for the next
         turn; a session not made yet is made with it."""
         sid = self.client.session
         try:
@@ -675,12 +676,12 @@ class Zero(SafeClicks, App):
 
     def action_cycle_mode(self):
         if self.screen is self.view:
-            self.switch(mode=controller.next_mode(self.now("mode")))
+            self.switch(mode=controller.next_mode(self.session_value("mode")))
 
     def on_transcript_at_top(self, message):
-        self.history()
+        self.load_earlier()
 
-    def history(self):
+    def load_earlier(self):
         """Earlier records, put in above what shows when a scroll reaches the
         top, which stays on what showed while they come in above it."""
         sid = self.client.session
@@ -690,7 +691,7 @@ class Zero(SafeClicks, App):
             return
         self.loading = True
         records, gap = self.connection.history(
-            sid, after=0, limit=WINDOW, before=self.oldest
+            sid, after=0, limit=MAX_RECORDS_SHOWN, before=self.oldest
         )
         transcript = self.transcript
         made = []
@@ -750,11 +751,11 @@ class Zero(SafeClicks, App):
     # Settings
 
     def modes(self):
-        """The modes the host offers (its `hello`): the client knows none."""
+        """The modes the server offers (its `hello`): the client knows none."""
         return list(self.defaults.get("modes") or controller.MODE_CYCLE)
 
     def served_models(self):
-        """The models every server lists, asked of the host; none when it
+        """The models every server lists, asked of the server; none when it
         can't say, since they are only suggestions."""
         try:
             return controller.served_models(self.connection.models())
@@ -762,11 +763,11 @@ class Zero(SafeClicks, App):
             return []
 
     def default_model(self):
-        """The host's own model, where config.toml names none."""
+        """The server's own model, where config.toml names none."""
         return self.defaults.get("default_model")
 
     def runs_with(self):
-        """What the session in view runs with from its next turn: the host's
+        """What the session in view runs with from its next turn: the server's
         word for a made one; for one not made yet, what it will be made with
         where the user chose it (the rest is the defaults')."""
         if self.client.session is not None:
@@ -775,11 +776,11 @@ class Zero(SafeClicks, App):
             "mode": self.client.mode or self.defaults.get("mode"),
             "model": (self.client.model or self.defaults.get("model")
                       or self.default_model()),
-            "effort": self.client.effort,
+            "thinking_effort": self.client.thinking_effort,
         }
         return {name: value for name, value in chosen.items() if value}
 
-    def key(self, id):
+    def first_key(self, id):
         """The first of an action's keys, as the views' hints name it."""
         return keybindings.pretty(self.keys[id][0])
 
@@ -788,14 +789,14 @@ class Zero(SafeClicks, App):
         for theme in THEMES.values():
             self.register_theme(theme)
         self.theme = theme_for(self.config["theme"])
-        self.keys = keybindings.current(self.config["keys"])
+        self.keys = keybindings.current_keys(self.config["keys"])
         self.set_keymap(keybindings.keymap(self.config["keys"]))
         if self.view.is_mounted:
             field = self.view.query_one("#message", MessageBox)
             field.placeholder = placeholder(self.keys)
 
     def save_settings(self, **changes):
-        """Write a change to the CLI's own settings ([cli]) and show it here
+        """Write a change to the full screen's own settings ([tui]) and show it
         at once."""
         values = {**self.config, **changes}
         config.save(values)
@@ -804,7 +805,7 @@ class Zero(SafeClicks, App):
         self.draw()
 
     def set_setting(self, name, value):
-        """Change one of ZERO's settings through the host, which reads it for
+        """Change one of ZERO's settings through the server, which reads it for
         its next session."""
         self.connection.set_setting(name, value)
         # What a session not made yet starts with
@@ -817,17 +818,17 @@ class Zero(SafeClicks, App):
 
     def check_action(self, action, parameters):
         # While a new key is captured, every key goes to the capture
-        return not isinstance(self.screen, CaptureView)
+        return not isinstance(self.screen, KeyCaptureView)
 
     # Moving between sessions
 
     def action_sessions(self):
-        if isinstance(self.screen, SessionsView):
+        if isinstance(self.screen, SessionListView):
             self.screen.action_archived()
             return
-        self.push_screen(SessionsView(self))
+        self.push_screen(SessionListView(self))
 
-    def action_next_needing(self):
+    def action_next_needing_you(self):
         rows = session_list.needs_you(self.lists.sessions, self.client.session)
         if not rows:
             self.notify("Nothing else needs you.")
@@ -838,7 +839,7 @@ class Zero(SafeClicks, App):
         except ERRORS as error:
             self.note(f"ZERO: {error}")
 
-    def action_go_back(self):
+    def action_previous_session(self):
         self.leave_views()
         while self.back:
             sid = self.back.pop()
@@ -909,10 +910,11 @@ class Zero(SafeClicks, App):
             return
         row = self.row()
         if self.client.session is None:
-            title = f"new session · {session_list.short(self.client.workspace or '/')}"
+            where = session_list.tilde_path(self.client.workspace or "/")
+            title = f"new session · {where}"
         else:
             title = (f"{(row or {}).get('title', self.client.session)} · "
-                     f"{session_list.short((row or {}).get('workspace', '/'))}")
+                     f"{session_list.tilde_path((row or {}).get('workspace', '/'))}")
         view.query_one("#title", Static).update(title)
         transcript = self.transcript
         if transcript.max_scroll_y - transcript.scroll_y <= 1:
@@ -1009,7 +1011,7 @@ def desktop_theme(run=subprocess.run):
     return THEMES["dark"].name
 
 
-class Named:
+class KeyName:
     """A key name where Textual's sequence table wants a Keys member."""
 
     def __init__(self, value):
@@ -1022,7 +1024,7 @@ def konsole_shift_enter():
     with the kitty protocol report Shift+Enter as itself."""
     from textual._ansi_sequences import ANSI_SEQUENCES_KEYS
 
-    ANSI_SEQUENCES_KEYS["\x1bOM"] = (Named("shift+enter"),)
+    ANSI_SEQUENCES_KEYS["\x1bOM"] = (KeyName("shift+enter"),)
 
 
 def find(sessions, sid):
@@ -1032,23 +1034,23 @@ def find(sessions, sid):
     raise LookupError(f"no session {sid}")
 
 
-def terminal(connection, cwd, session=None, mode=None, model=None,
-             defaults=None, show_list=False, older=lambda: False):
+def run_full_screen(connection, cwd, session=None, mode=None, model=None,
+                    defaults=None, show_list=False, older=lambda: False):
     konsole_shift_enter()
 
     def make(sid, notice):
         first = sid if sid is not None else session
-        return Zero(connection, cwd, mode=mode, model=model, defaults=defaults,
-                    older=older, session=first,
-                    show_list=show_list and notice is None, notice=notice)
+        return ZeroApp(connection, cwd, mode=mode, model=model, defaults=defaults,
+                       older=older, session=first,
+                       show_list=show_list and notice is None, notice=notice)
 
     return reopening(make, paths.Paths().crash_log)
 
 
-# A view that crashes opens again: the host holds the session, so a
+# A view that crashes opens again: the server holds the session, so a
 # crash costs a moment, never the work. So many within a minute stop it
-CRASHES = 3
-CRASH_WINDOW = 60
+MAX_CRASHES = 3
+CRASH_SECONDS = 60
 
 
 def reopening(make, log, now=time.monotonic):
@@ -1071,12 +1073,12 @@ def reopening(make, log, now=time.monotonic):
         with open(log, "a", encoding="utf-8") as f:
             f.write(f"--- {datetime.now().isoformat(timespec='seconds')}\n")
             f.write("".join(traceback.format_exception(error)))
-        crashes = [t for t in crashes if now() - t < CRASH_WINDOW] + [now()]
-        if len(crashes) >= CRASHES:
-            print(f"ZERO's view crashed {CRASHES} times within a minute, the last "
+        crashes = [t for t in crashes if now() - t < CRASH_SECONDS] + [now()]
+        if len(crashes) >= MAX_CRASHES:
+            print(f"ZERO's view crashed {MAX_CRASHES} times within a minute, the last "
                   f"with {what}; the tracebacks are in {log}. The sessions go on "
-                  "in the host, and the next zero opens them.")
+                  "in the server, and the next zero opens them.")
             return 1
         sid = app.client.session or sid
         notice = (f"ZERO: the view crashed ({what}) and opened again; the "
-                  f"session went on in the host. The traceback is in {log}.")
+                  f"session went on in the server. The traceback is in {log}.")

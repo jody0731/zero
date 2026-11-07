@@ -18,7 +18,7 @@ approver. The model is told why a call ran unasked, in a remark.
 What "don't ask again" offers is each tool's own (its Grant, core/tools.py;
 from Codex, OpenCode and Claude Code): for bash, each part's prefix
 (shell/commands.py: `git push`, `rm`, `docker compose up`); for a local fetch,
-its host; for a file tool, its path. A later call is covered when every item
+its server; for a file tool, its path. A later call is covered when every item
 it would be granted already is. A grant is {"tool", <its field>: [items]}, as
 the user's saved file keeps it.
 """
@@ -32,7 +32,7 @@ from pathlib import Path
 
 from core import history, tools
 from core.asking import SAVED, waiting_ask
-from core.hooks import Plugin
+from core.hooks import Hook
 
 PLAN = "propose_plan"
 SAVED_HEAD = (
@@ -76,7 +76,7 @@ def describe(grant):
 
 
 def items(grant):
-    """What a grant names: its prefixes, hosts or paths."""
+    """What a grant names: its prefixes, servers or paths."""
     return {x for field in tools.grant_fields() for x in grant.get(field, ())}
 
 
@@ -179,7 +179,7 @@ def save(path, grant, session=None):
     return grant_id
 
 
-def keep(path, ask, choice, session):
+def save_grant(path, ask, choice, session):
     """A "saved" answer to an ask: its grant to the user's file at `path`
     (None: no file, as in the evals, where it counts for the session)."""
     if choice == SAVED and path is not None:
@@ -216,9 +216,9 @@ def listing(records, saved_path, judged):
     return grants + read_saved(saved_path)
 
 
-class Remembered(Plugin):
+class GrantCheck(Hook):
     """Marks what a call's "don't ask again" would grant (`offer`), and a call
-    a grant covers (`granted`), which core/asking.py's asks() then passes
+    a grant covers (`granted`), which core/asking.py's ask_of() then passes
     over. `saved`: the user's file, None for none (evals, tests); `judged`:
     whether the judge is this session's approver, so its grants count."""
 

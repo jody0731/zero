@@ -1,11 +1,11 @@
 """The web tools: web_search through DeepSeek's Search API, and web_fetch,
 our own GET from this machine.
 
-Both run in the host, never in the sandbox, which has no network. The search
-goes to the provider's own client, which holds the key (model/); the key
+Both run in ZERO's server, never in the sandbox, which has no network. The search
+goes to the server's own client, which holds the key (model/); the key
 never reaches a command or a result. The fetch resolves the host first: a
 local or LAN address is refused unless the call says local_network, which is
-asked about first (its `crosses`), as outside_sandbox is. A proxy's fake-ip
+asked about first (its `crossing`), as outside_sandbox is. A proxy's fake-ip
 answer (198.18.0.0/15: Clash, Mihomo and Surge answer every name from it) is
 the proxy's, not the network's, so it counts as public; the request then goes
 through the environment's proxy, which resolves the real name.
@@ -34,15 +34,15 @@ from markdownify import MarkdownConverter
 
 from core.control import Stopped
 from core.tools import Grant, tool
-from model.providers import ProviderError, api_key, find
+from model.servers import ModelServerError, api_key, find
 
 # DeepSeek's Search API (https://api-docs.deepseek.com/guides/search)
 SEARCH_PATH = "/v1/tools/search"
 QUERY_CHARS = 128
 MOST_RESULTS = 50
-# Statuses worth one more try, after RETRY_PAUSE seconds
+# Statuses worth one more try, after RETRY_PAUSE_SECONDS seconds
 RETRIED = {408, 429, 500, 502, 503, 504}
-RETRY_PAUSE = 2.0
+RETRY_PAUSE_SECONDS = 2.0
 # What a fetch reads at most, and how many redirects it follows
 MAX_BYTES = 5 * 1024 * 1024
 MAX_REDIRECTS = 5
@@ -73,7 +73,7 @@ def resolve_host(host):
 
 
 class Web:
-    """What a session's web tools reach the network with (default_web).
+    """What a session's web tools reach the network with (web_clients).
     `search`: the DeepSeek client (its `post`), or None when there's no key;
     `transport`: httpx2's, for tests; `resolve`: a host's addresses."""
 
@@ -85,17 +85,17 @@ class Web:
         self.pause = pause
 
 
-def default_web(limits):
+def web_clients(limits):
     """What a session's web tools reach the network with: the fetch
     always; the search where a DeepSeek key exists, whatever the session's
     model, through DeepSeek's own client (its key stays in the client)."""
     try:
-        provider = find("deepseek")
-        key = api_key(provider)
-    except ProviderError:
+        server = find("deepseek")
+        key = api_key(server)
+    except ModelServerError:
         return Web()
     # The SDK's own retries are off: the search tries once more itself
-    search = openai.OpenAI(base_url=provider.url, api_key=key,
+    search = openai.OpenAI(base_url=server.url, api_key=key,
                            timeout=limits["web_timeout"], max_retries=0)
     return Web(search=search)
 
@@ -142,7 +142,7 @@ def web_search(query, count=None, limits=None, web=None, request=None, notes=Non
     `notes` come from the session, never the model."""
     limits = limits or {}
     if count is None:
-        count = min(limits.get("web_results") or MOST_RESULTS, MOST_RESULTS)
+        count = min(limits.get("web_search_results") or MOST_RESULTS, MOST_RESULTS)
     whole = isinstance(count, int) and not isinstance(count, bool)
     if not whole or not 1 <= count <= MOST_RESULTS:
         return f"Not searched: count is a whole number from 1 to {MOST_RESULTS}."
@@ -175,7 +175,7 @@ def web_search(query, count=None, limits=None, web=None, request=None, notes=Non
         lines.append(f"{n}. {item.get('title') or item.get('url')}")
         lines.append(f"   {item.get('url')}")
         when = (item.get("date") or "")[:10]
-        site = words(item.get("site_name"))
+        site = site_name(item.get("site_name"))
         where = " · ".join(part for part in (when, site) if part)
         if where:
             lines.append(f"   {where}")
@@ -185,7 +185,7 @@ def web_search(query, count=None, limits=None, web=None, request=None, notes=Non
     return "\n".join(lines)
 
 
-def words(name):
+def site_name(name):
     """A site's name; DeepSeek sends some as hex, read back here."""
     if not isinstance(name, str) or len(name) < 8:
         return name
@@ -207,7 +207,7 @@ def post_search(web, body):
             raise
     except (openai.APIConnectionError, openai.APITimeoutError):
         pass
-    web.pause(RETRY_PAUSE)
+    web.pause(RETRY_PAUSE_SECONDS)
     return web.search.post(SEARCH_PATH, body=body, cast_to=object)
 
 
@@ -215,7 +215,7 @@ def post_search(web, body):
 
 
 def fetch_describe(limits):
-    chars = limits.get("web_chars")
+    chars = limits.get("web_fetch_chars")
     size = f"Up to {chars:,} characters" if chars else "The start of a page"
     return (
         "Fetch a web page or file over http(s) from this machine: HTML comes back "
@@ -237,7 +237,7 @@ def fetch_summary(args):
 LOCAL = "It fetches from this machine or its local network."
 
 
-def fetch_crosses(args):
+def fetch_crossing(args):
     """What a fetch with local_network crosses, or None."""
     if args.get("local_network") is not True:
         return None
@@ -259,7 +259,7 @@ def fetch_hosts(args):
     # its network may reach a service that does, and asks
     needs_permission=lambda args: args.get("local_network") is True,
     summary=fetch_summary,
-    crosses=fetch_crosses,
+    crossing=fetch_crossing,
     grant=Grant("hosts", fetch_hosts,
                 lambda grant: "fetches from " + ", ".join(grant["hosts"])),
     url=("string", "The http or https URL"),
@@ -275,14 +275,14 @@ def web_fetch(url, local_network=False, reason="", sandbox=None, limits=None, we
     web = web or Web()
     seconds = limits.get("web_timeout")
     try:
-        fetched = in_thread(lambda: get(web, url, local_network is True, seconds),
-                            stop, seconds)
+        fetched = run_in_thread(lambda: get(web, url, local_network is True, seconds),
+                                stop, seconds)
     except Refused as e:
         return f"Not fetched: {e}"
-    return render(fetched, limits.get("web_chars"), sandbox)
+    return render(fetched, limits.get("web_fetch_chars"), sandbox)
 
 
-def in_thread(work, stop, seconds):
+def run_in_thread(work, stop, seconds):
     """Run `work` in a helper thread; a stop returns at once (Stopped), its
     late result dropped."""
     done = queue.Queue()
@@ -489,9 +489,9 @@ def to_text(kind, body, charset, url):
     for link in soup.find_all("a", href=True):
         link["href"] = urljoin(url, link["href"])
     for img in soup.find_all("img"):
-        words = (img.get("alt") or "").strip()
-        if words:
-            img.replace_with(words)
+        site_name = (img.get("alt") or "").strip()
+        if site_name:
+            img.replace_with(site_name)
         else:
             img.decompose()
     text = MarkdownConverter(heading_style="ATX", bullets="-").convert_soup(soup)

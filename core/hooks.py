@@ -1,12 +1,12 @@
-"""The hook names, which ones decide, and how plugins get called.
+"""The hook names, which ones decide, and how hooks get called.
 
-A plugin is a class whose method names are hook names. At each hook the loop
-calls only the plugins that have that method, in profile order.
+A hook is a class whose method names are hook names. At each hook the loop
+calls only the hooks that have that method, in profile order.
 
-- watch hooks: every plugin is called; what it returns is ignored.
-- collect hooks: every plugin is called; the texts are joined in profile order.
-- decide hooks: every plugin is called (no stopping at the first answer), then
-  any Deny or Stop wins, so plugin order can never turn a denial into permission;
+- watch hooks: every hook is called; what it returns is ignored.
+- collect hooks: every hook is called; the texts are joined in profile order.
+- decide hooks: every hook is called (no stopping at the first answer), then
+  any Deny or Stop wins, so hook order can never turn a denial into permission;
   then a Park, then the longest Retry. Nothing means "no opinion", never
   "allow".
 
@@ -19,13 +19,13 @@ import traceback
 WATCH = {"turn_start", "after_model", "after_tool", "turn_end"}
 # switched: what a session runs with after the user changed it between
 # turns, told to the model in a note; resumed: what the restart note adds,
-# when a turn cut off by a stopped host goes on
+# when a turn cut off by a stopped server goes on
 COLLECT = {"system_prompt", "switched", "resumed"}
 DECIDE = {"before_model", "model_error", "before_tool", "approve", "step_end"}
-HOOKS = WATCH | COLLECT | DECIDE
+EVENTS = WATCH | COLLECT | DECIDE
 
 
-class Plugin:
+class Hook:
     """Base class. Subclasses add methods named after hooks, nothing else."""
 
     def __repr__(self):
@@ -65,36 +65,36 @@ class Retry:
         self.delay = delay
 
 
-class Hooks:
-    def __init__(self, plugins):
-        self.plugins = list(plugins)
-        # Plugin crashes since the loop last took them: (where, traceback)
+class HookRunner:
+    def __init__(self, hooks):
+        self.hooks = list(hooks)
+        # Hook crashes since the loop last took them: (where, traceback)
         self.errors = []
         # A typo like `before_tools` would otherwise be silently never called,
         # so public methods must be hook names; helpers start with _
-        for plugin in self.plugins:
-            public = [n for n in dir(type(plugin)) if not n.startswith("_")]
-            unknown = [n for n in public if n not in HOOKS]
+        for hook in self.hooks:
+            public = [n for n in dir(type(hook)) if not n.startswith("_")]
+            unknown = [n for n in public if n not in EVENTS]
             if unknown:
-                raise TypeError(f"{plugin!r}: not hook names: {unknown}")
+                raise TypeError(f"{hook!r}: not hook names: {unknown}")
 
     def take_errors(self):
         errors, self.errors = self.errors, []
         return errors
 
     def _each(self, name, *args):
-        """Yield (plugin, answer, crash) for every plugin that joins this hook."""
-        for plugin in self.plugins:
-            method = getattr(plugin, name, None)
+        """Yield (hook, answer, crash) for every hook that joins this hook."""
+        for hook in self.hooks:
+            method = getattr(hook, name, None)
             if method is None:
                 continue
             try:
-                yield plugin, method(*args), None
+                yield hook, method(*args), None
             except Exception as e:
-                where = f"{plugin!r}.{name}"
+                where = f"{hook!r}.{name}"
                 self.errors.append({"where": where, "error": traceback.format_exc()})
                 print(f"(warning: {where} crashed: {type(e).__name__}: {e})")
-                yield plugin, None, f"{where} crashed ({type(e).__name__}: {e})"
+                yield hook, None, f"{where} crashed ({type(e).__name__}: {e})"
 
     def notify(self, name, *args):
         assert name in WATCH, name
@@ -106,7 +106,7 @@ class Hooks:
         return "".join(text for _, text, _ in self._each(name, *args) if text)
 
     def decide(self, name, *args):
-        """Ask every plugin; return the winning decision, or None."""
+        """Ask every hook; return the winning decision, or None."""
         assert name in DECIDE, name
         decisions = []
         for _, answer, crash in self._each(name, *args):
@@ -129,6 +129,6 @@ def fail_closed(name, crash):
     if name in ("before_tool", "approve"):
         return Deny(f"Not run: a bug in the harness ({crash}).")
     if name in ("before_model", "step_end"):
-        return Stop("plugin_error", crash)
+        return Stop("hook_error", crash)
     # model_error: no Retry, so the turn gives up
     return None

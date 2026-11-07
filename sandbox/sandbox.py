@@ -2,11 +2,11 @@
 
 Read-only system (the machine's /tmp included), one writable workspace, a
 scratch folder per session ($TMPDIR, `Scratch`) at the same path in the box
-and out, kept while the host runs, no network, no desktop sockets, secrets
+and out, kept while the server runs, no network, no desktop sockets, secrets
 hidden: Codex's Linux shape.
 readOnly's sandbox keeps the workspace read-only too, and so does every
 sandbox whose workspace is /: binding / writable would open the whole
-machine and cover the /dev and /proc mounts. The file tools' helper runs
+machine and cover the /dev and /proc mounts. The file tools' sandboxed_io runs
 through the same command (files/). A call whose ask to leave the
 sandbox was approved runs in Outside: bare, as the user (no root guard).
 ZERO's home (its settings and keys, its history, its socket) and keys are
@@ -20,11 +20,11 @@ import weakref
 from pathlib import Path
 
 import paths
-from model.providers import ProviderError, key_envs
+from model.servers import ModelServerError, key_envs
 
 # Hidden behind an empty folder: keys, the gpg keyring, Claude's own login
 SECRETS = [".ssh", ".gnupg", ".claude"]
-# How long the scratch folder lasts, as the line says it: the host keeps it
+# How long the scratch folder lasts, as the line says it: the server keeps it
 # while it runs (Scratch)
 LASTS = (
     "the scratch folder is kept until ZERO restarts, and a new, empty one "
@@ -48,7 +48,7 @@ NOT_OUTSIDE = (
 OUTSIDE = "It runs outside the sandbox, with the user's permissions and the network."
 
 
-def leaves(args):
+def outside_crossing(args):
     """What a call that asks to run outside the sandbox crosses (the
     `outside_sandbox` the shell and the file tools offer), or None: the
     tools' `crosses` (core/tools.py)."""
@@ -86,7 +86,7 @@ class SandboxError(Exception):
 
 class Scratch:
     """A session's scratch folder, its $TMPDIR: a real folder, made on first
-    use, removed when the last one holding it lets it go. The host keeps
+    use, removed when the last one holding it lets it go. The server keeps
     each session's while it runs, so a session built again (a switch of mode,
     model or workspace) finds its files."""
 
@@ -129,7 +129,7 @@ class Sandbox:
         ws = str(self.workspace)
         args = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
         # Before the workspace bind, so the workspace comes back on top
-        for path in self.covered():
+        for path in self.covered_folders():
             if path.exists():
                 args += ["--tmpfs", str(path)]
         # At its own path, so a path means one place in the box and out
@@ -153,7 +153,7 @@ class Sandbox:
         args += ISOLATION + ["--chdir", ws, "--"]
         return args + list(argv)
 
-    def covered(self):
+    def covered_folders(self):
         """Folders covered with empty ones before the workspace is mounted,
         so a workspace inside one stays visible: none here; the evals' exam
         room names its own (dev/evalkit/exam.py)."""
@@ -197,7 +197,7 @@ class Sandbox:
             "no network"
         )
 
-    def line(self):
+    def environment_line(self):
         """What the session's environment says of this box (the prompt)."""
         tmp = self.private_tmp()
         if self.read_only:
@@ -233,7 +233,7 @@ class Unsandboxed:
     def env(self):
         return harness_free_env()
 
-    def line(self):
+    def environment_line(self):
         """What the session's environment says of this box (the prompt)."""
         return "sandbox: off. Commands run as the user, with the network"
 
@@ -257,11 +257,11 @@ class Outside(Unsandboxed):
 def harness_free_env():
     """This process's environment without the harness's API keys: whatever a
     command can print ends up with the model and in the trajectory. Every
-    provider's key variable, the user's servers' too; when models.toml can't
+    server's key variable, the user's servers' too; when models.toml can't
     be read, no command runs (a variable it names can't be known)."""
     try:
         names = key_envs()
-    except ProviderError as e:
+    except ModelServerError as e:
         raise SandboxError(f"no command runs until this is fixed: {e}") from e
     env = dict(os.environ)
     for name in names:

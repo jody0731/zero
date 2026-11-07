@@ -14,14 +14,14 @@ import os
 import stat
 from pathlib import Path
 
-from core.hooks import Plugin
+from core.hooks import Hook
 
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-class FileMemory:
+class SeenFiles:
     """What a session's file tools saw, from its log. `log_of` gives the
     session's log as it stands (a fresh log's name is claimed only at its
     first turn)."""
@@ -35,7 +35,7 @@ class FileMemory:
         return seen(self.log_of().records(), path)
 
 
-class ChangedFiles(Plugin):
+class ChangedFiles(Hook):
     """On a resume: the files the cut-off turn's tools read or wrote that
     changed while it was cut off, in the restart note."""
 
@@ -60,7 +60,7 @@ def changed_since(records):
                 last[note["real"]] = note
     return [
         note["path"] for real, note in last.items()
-        if current(real) != (note.get("seen") or note.get("after"))
+        if current_hash(real) != (note.get("seen") or note.get("after"))
     ]
 
 
@@ -73,7 +73,7 @@ def seen(records, path):
     return None
 
 
-def current(path):
+def current_hash(path):
     """A file's hash as it is now: None when missing, "other" for a link or
     anything not a regular file."""
     try:

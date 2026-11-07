@@ -1,4 +1,4 @@
-"""Optional turn controls supplied by a host, independent of how it stores work."""
+"""Optional turn controls supplied by a server, independent of how it stores work."""
 
 import threading
 
@@ -12,7 +12,7 @@ class Stopped(KeyboardInterrupt):
 class Control:
     """`steers()` and `delivered(steer)`: messages that join the turn. `draft`
     (step, draft): the model's reply as it streams in (core/llm.py, Draft),
-    for the host's watchers; never logged."""
+    for the server's watchers; never logged."""
 
     def __init__(self, steers=None, delivered=None, draft=None):
         self.stop = threading.Event()

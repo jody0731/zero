@@ -1,6 +1,6 @@
 """The records of a session's work: a turn, its steps, their tool calls.
 
-The loop (core/loop.py) fills them in; plugins read them at every hook.
+The loop (core/loop.py) fills them in; hooks read them at every hook.
 """
 
 import time
@@ -19,7 +19,7 @@ class Turn:
         self.number = number
         self.control = control
         self.started = time.monotonic()
-        # Time spent waiting for the user, which plugins add (Approval)
+        # Time spent waiting for the user, which hooks add (Approval)
         self.waiting = 0.0
         # A parked turn coming back: (step, call, later calls, the reply)
         self.unpark = None
@@ -43,7 +43,7 @@ class Turn:
             if getattr(self, name) is not None:
                 fields[name] = getattr(self, name)
         if self.errors:
-            fields["plugin_errors"] = self.errors
+            fields["hook_errors"] = self.errors
         return fields
 
 
@@ -78,7 +78,7 @@ class Step:
     def record(self):
         fields = {"step": self.number, "seconds": round(self.seconds, 1)}
         if self.errors:
-            fields["plugin_errors"] = self.errors
+            fields["hook_errors"] = self.errors
         return fields
 
 
@@ -94,9 +94,9 @@ class Call:
         self.args, self.error = tools.check(self.name, self.arguments)
         self.result = None
         self.denied = self.ran = False
-        # What plugins found out about this call (a rule hit, say); logged as is
+        # What hooks found out about this call (a rule hit, say); logged as is
         self.notes = {}
-        # Plugin notes for the model, added below the result of a call that ran
+        # Hook notes for the model, added below the result of a call that ran
         self.remarks = []
 
     def record(self):

@@ -1,14 +1,14 @@
 """The asks that aren't the user's preferences: a plan (tool.py), and a call
 that crosses what its tool says is asked about first (leaving the sandbox, a
-fetch from a local address: the tool's `crosses`). Who answers is the mode's
-approver (approval.py, judge/plugin.py); a grant can answer first
+fetch from a local address: the tool's `crossing`). Who answers is the mode's
+approver (approval.py, judge/hooks.py); a grant can answer first
 (grants.py).
 
 The note they leave is named "rule", as in older logs, so those read the same.
 """
 
 from core import tools
-from core.hooks import Plugin
+from core.hooks import Hook
 
 # A plan (tool.py) is always put to the approver; what it is about, shown to
 # the user above the one question
@@ -21,7 +21,7 @@ PLAN_ABOUT = (
 ASKED_ABOUT = "It asks first."
 
 
-class Asks(Plugin):
+class Asks(Hook):
     """Marks a plan, and a call that crosses what its tool says is asked
     about, for the mode's approver, in the tool's own words. Modes without a
     sandbox don't load it: in auto+ Permissions marks every call that needs
@@ -45,13 +45,13 @@ class Asks(Plugin):
             why = str(crossing["why"] or "").strip() or "no reason given"
             call.notes["rule"] = {
                 "rule": crossing["rule"], "action": "ask",
-                "reason": f"{tools.inside(crossing['fact'])}: {why.rstrip('.')}",
+                "reason": f"{tools.as_clause(crossing['fact'])}: {why.rstrip('.')}",
                 "about": crossing["fact"],
             }
         return None
 
 
-class AskWhen(Plugin):
+class AskWhen(Hook):
     """Marks every call `when(call)` is true for, as the rules file once could:
     the tests' way to make a call ask (`make_session(ask_when=...)`)."""
 

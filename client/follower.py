@@ -1,9 +1,9 @@
-"""Follow a session across host restarts, without depending on a terminal.
+"""Follow a session across server restarts, without depending on a terminal.
 
-The host's `bye` says what to do when it closes the watch: "stopped" (by
-the user) leaves the host down until the user sends something; "restart" (a
+The server's `bye` says what to do when it closes the watch: "stopped" (by
+the user) leaves the server down until the user sends something; "restart" (a
 newer build) follows again at once. A watch that ends with no `bye` was a
-crash: following again starts a host, which resumes the cut-off turn.
+crash: following again starts a server, which resumes the cut-off turn.
 """
 
 import threading
@@ -22,7 +22,7 @@ class Follower:
         self.renderer = renderer
         self.after = after
         self.emit = emit
-        # True once the host was stopped by hand: following ended on purpose
+        # True once the server was stopped by hand: following ended on purpose
         self.stopped = False
         self.leaving = threading.Event()
         self.lock = threading.Lock()
@@ -69,16 +69,16 @@ class Follower:
                 self.stopped = True
                 if not self.leaving.is_set():
                     self.emit(
-                        "(ZERO's host was stopped; it starts again when you "
+                        "(ZERO's server was stopped; it starts again when you "
                         "send something)"
                     )
                 return
             if not self.leaving.is_set():
                 if not reconnecting:
                     if stream.bye == "restart":
-                        self.emit("(the host restarts with newer code)")
+                        self.emit("(the server restarts with newer code)")
                     else:
-                        self.emit("(the host restarted; following again)")
+                        self.emit("(the server restarted; following again)")
                     reconnecting = True
                 self.leaving.wait(0.2)
 

@@ -1,21 +1,21 @@
-# The model providers ZERO knows out of the box (providers.py). The user's
+# The model servers ZERO knows out of the box (servers.py). The user's
 # models.toml adds servers of their own and changes any line here by naming
-# the same provider. Each provider: name (what the screens show), url,
+# the same server. Each server: title (what the screens show), url,
 # key_env (the variable its key may come from; a key is then needed),
 # api (the API its server speaks, model/apis/: "responses", or
 # "chat_completions" when left out),
-# context and context_stop (its models' window, and where the context guard
-# stops a turn: 80% of the window when left out), price (USD per 1M tokens
-# at peak: cache hit, cache miss, output). Under [x.models], a model's own
-# context, context_stop and price. The facts are from the providers' docs and
+# context_window and context_stop (its models' context window, and where the
+# context guard stops a turn: 80% of the window when left out), price (USD
+# per 1M tokens at peak: cache hit, cache miss, output). Under [x.models], a
+# model's own context_window, context_stop and price. The facts are from the servers' docs and
 # models.dev; DeepSeek's and Ollama's are tried.
 
 [deepseek]
-name = "DeepSeek"
+title = "DeepSeek"
 url = "https://api.deepseek.com"
 key_env = "DEEPSEEK_API_KEY"
 api = "responses"
-context = 1_000_000
+context_window = 1_000_000
 # Far below the window: a runaway turn stays cheap; --context-stop raises it
 context_stop = 100_000
 
@@ -25,65 +25,65 @@ context_stop = 100_000
 "deepseek-v4-pro" = {}
 
 [ollama]
-name = "Ollama (on this computer)"
+title = "Ollama (on this computer)"
 url = "http://localhost:11434/v1"
 # No window: it is the server's own setting (OLLAMA_CONTEXT_LENGTH), so the
 # user's to give in models.toml
 
 [openai]
-name = "OpenAI"
+title = "OpenAI"
 url = "https://api.openai.com/v1"
 key_env = "OPENAI_API_KEY"
 context_stop = 100_000
 
 [openai.models]
-"gpt-5.6" = { context = 1_050_000 }
-"gpt-5.6-luna" = { context = 1_050_000 }
-"gpt-5.4-mini" = { context = 400_000 }
+"gpt-5.6" = { context_window = 1_050_000 }
+"gpt-5.6-luna" = { context_window = 1_050_000 }
+"gpt-5.4-mini" = { context_window = 400_000 }
 
 [google]
-name = "Google Gemini"
+title = "Google Gemini"
 url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 key_env = "GEMINI_API_KEY"
 context_stop = 100_000
 
 [google.models]
-"gemini-3.8-flash" = { context = 1_048_576 }
-"gemini-3.1-pro-preview" = { context = 1_048_576 }
+"gemini-3.8-flash" = { context_window = 1_048_576 }
+"gemini-3.1-pro-preview" = { context_window = 1_048_576 }
 
 [qwen]
-name = "Qwen (Alibaba Cloud, China)"
+title = "Qwen (Alibaba Cloud, China)"
 url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 key_env = "DASHSCOPE_API_KEY"
 context_stop = 100_000
 
 [qwen.models]
-"qwen3.7-max" = { context = 1_000_000 }
-"qwen3.7-flash" = { context = 1_000_000 }
-"qwen3-coder-plus" = { context = 1_048_576 }
+"qwen3.7-max" = { context_window = 1_000_000 }
+"qwen3.7-flash" = { context_window = 1_000_000 }
+"qwen3-coder-plus" = { context_window = 1_048_576 }
 
 [kimi]
-name = "Kimi (Moonshot AI, China)"
+title = "Kimi (Moonshot AI, China)"
 url = "https://api.moonshot.cn/v1"
 key_env = "MOONSHOT_API_KEY"
 context_stop = 100_000
 
 [kimi.models]
-"kimi-k3.1-pro" = { context = 1_048_576 }
-"kimi-k2.7-code" = { context = 262_144 }
+"kimi-k3.1-pro" = { context_window = 1_048_576 }
+"kimi-k2.7-code" = { context_window = 262_144 }
 
 [glm]
-name = "GLM (Zhipu AI, China)"
+title = "GLM (Zhipu AI, China)"
 url = "https://open.bigmodel.cn/api/paas/v4"
 key_env = "ZHIPU_API_KEY"
 context_stop = 100_000
 
 [glm.models]
-"glm-5.3" = { context = 1_000_000 }
-"glm-5.3-flashx" = { context = 1_000_000 }
+"glm-5.3" = { context_window = 1_000_000 }
+"glm-5.3-flashx" = { context_window = 1_000_000 }
 
 [openrouter]
-name = "OpenRouter (many providers, one key)"
+title = "OpenRouter (many servers, one key)"
 url = "https://openrouter.ai/api/v1"
 key_env = "OPENROUTER_API_KEY"
 context_stop = 100_000

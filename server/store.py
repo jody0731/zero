@@ -1,11 +1,11 @@
 """The runtime's state in SQLite: what is waiting and what is running.
 
 History lives in the session logs (sessions/log.py); this holds the inbox, the
-session list and the asks waiting for a reply, and the host parts' tables
+session list and the asks waiting for a reply, and the server services' tables
 (jobs/store.py). Every change is one transaction, committed before the caller
 goes on, so a message that got its ack is on disk. The database is born with
 its whole schema. `on_change` hears each committed
-transaction: the host's live session list.
+transaction: the server's live session list.
 """
 
 import json
@@ -79,7 +79,7 @@ CREATE INDEX IF NOT EXISTS asks_open ON asks (session, status);
 """
 # A user message that waits for the turn's answer instead of steering it
 FOLLOW_UP = "json_extract(payload, '$.follow_up') IS NOT NULL"
-# A notice: any message but a user's and a stop (a job's, jobs/host.py)
+# A notice: any message but a user's and a stop (a job's, jobs/service.py)
 NOTICE = "kind NOT IN ('user', 'stop')"
 
 
@@ -89,7 +89,7 @@ class UnknownSession(Exception):
 
 class Store:
     def __init__(self, path, schemas=()):
-        """`schemas`: the host parts' tables, made with the kernel's."""
+        """`schemas`: the server services' tables, made with the kernel's."""
         path.parent.mkdir(parents=True, exist_ok=True)
         # One connection shared by the runtime's threads, one transaction at a time
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
@@ -216,7 +216,7 @@ class Store:
         )
         return rows[0] if rows else None
 
-    def waiting(self):
+    def waiting_sessions(self):
         """Sessions with messages that can start a turn, the longest waiting
         first."""
         rows = self.query(
@@ -259,7 +259,7 @@ class Store:
             })
         return result
 
-    def done(self, msg_id):
+    def mark_steer_done(self, msg_id):
         """A steer is in the log; don't release the turn's claim."""
         with self.transaction() as db:
             db.execute("UPDATE inbox SET status = 'done' WHERE id = ?", (msg_id,))
@@ -327,8 +327,8 @@ class Store:
                 (state, time.time(), session),
             )
 
-    def notice(self, db, msg_id, session, source, payload):
-        """Queue a notice inside a part's own transaction (jobs/store.py), so
+    def queue_notice(self, db, msg_id, session, source, payload):
+        """Queue a notice inside a service's own transaction (jobs/store.py), so
         its row and its notice commit together; kept once by its id."""
         db.execute(
             "INSERT OR IGNORE INTO inbox (id, session, kind, source, payload, "
@@ -344,7 +344,7 @@ class Store:
                 (msg_id,),
             )
 
-    def unfinished(self):
+    def unfinished_rows(self):
         """Rows not done, oldest first: what the boot repair looks at."""
         return self.query("SELECT * FROM inbox WHERE status != 'done' ORDER BY arrival")
 
@@ -366,7 +366,7 @@ class Store:
 
     # What the user has seen, and housekeeping
 
-    def ended(self, session, seq):
+    def mark_ended(self, session, seq):
         """A turn ended at this record: news until the user sees it."""
         with self.transaction() as db:
             db.execute(
@@ -374,7 +374,7 @@ class Store:
                 (seq, session),
             )
 
-    def seen(self, session, seq):
+    def mark_seen(self, session, seq):
         """The user has seen the session up to `seq`, and worked in it now."""
         with self.transaction() as db:
             db.execute(
@@ -400,7 +400,7 @@ class Store:
 
     def forget(self, session, tables=()):
         """Every row of the session, its log already moved to the trash.
-        `tables`: the host parts' with a session column (Part.tables)."""
+        `tables`: the server services' with a session column (Service.tables)."""
         with self.transaction() as db:
             for table in ("asks", *tables, "inbox"):
                 db.execute(f"DELETE FROM {table} WHERE session = ?", (session,))

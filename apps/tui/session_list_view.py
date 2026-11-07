@@ -14,7 +14,7 @@ from apps.tui.widgets import ERRORS, Plain
 from client import render, session_list
 
 
-class SessionsView(Screen):
+class SessionListView(Screen):
     """The session list, and nothing else (Ctrl+O)."""
 
     BINDINGS = [
@@ -25,7 +25,8 @@ class SessionsView(Screen):
         Binding("ctrl+a", "act('archive')", show=False, priority=True,
                 id="archive"),
         Binding("delete", "act('delete')", show=False, priority=True, id="trash"),
-        Binding("ctrl+n", "elsewhere", show=False, priority=True, id="elsewhere"),
+        Binding("ctrl+n", "new_elsewhere", show=False, priority=True,
+                id="new_elsewhere"),
         Binding("tab", "app.pop_screen", show=False, priority=True,
                 id="switch_view"),
     ]
@@ -78,11 +79,11 @@ class SessionsView(Screen):
                 text.append(f"\n{heading}\n", style="dim")
             style = "reverse" if index == self.selected else ""
             if kind == "new":
-                line = (f"+ New session in {session_list.short(self.zero.cwd)}   "
-                        f"({self.zero.key('elsewhere')}: in another folder)")
+                line = (f"+ New session in {session_list.tilde_path(self.zero.cwd)}   "
+                        f"({self.zero.first_key('new_elsewhere')}: in another folder)")
             else:
                 line = (f"{session_list.row_mark(row)} {row['title'][:40]:<40} "
-                        f"{session_list.brief(row['workspace'], 26):<26} "
+                        f"{session_list.short_path(row['workspace'], 26):<26} "
                         f"{session_list.row_state(row, now)}")
             text.append(line + "\n", style=style)
         if len(entries) <= (0 if self.show_archived else 1):
@@ -93,9 +94,9 @@ class SessionsView(Screen):
         archive, other = ("unarchive", "sessions") if self.show_archived else (
             "archive", "archived"
         )
-        key = self.zero.key
+        key = self.zero.first_key
         self.query_one("#sessions-keys", Static).update(
-            f"Enter open · {key('switch_view')} back · {key('elsewhere')} new "
+            f"Enter open · {key('switch_view')} back · {key('new_elsewhere')} new "
             f"elsewhere · {key('rename')} rename · {key('archive')} {archive} · "
             f"{key('trash')} trash · {key('sessions')} {other}"
         )
@@ -105,7 +106,7 @@ class SessionsView(Screen):
         kind, row = self.chosen()
         if row is None:
             return ""
-        where = session_list.short(row["workspace"])
+        where = session_list.tilde_path(row["workspace"])
         parts = [(f"{row['title']} · {where}\n", "bold")]
         ask = row.get("ask")
         if ask is not None:
@@ -168,7 +169,7 @@ class SessionsView(Screen):
         except ERRORS as error:
             self.notify(str(error), severity="error")
 
-    def action_elsewhere(self):
+    def action_new_elsewhere(self):
         self.zero.ask_line("Folder for the new session (empty: /)",
                            self.zero.cwd, self.new_in)
 

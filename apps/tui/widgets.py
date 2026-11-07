@@ -103,7 +103,7 @@ def message(mark, body, kind):
     )
 
 
-class Said(Static):
+class UserWords(Static):
     """The user's words, and after them, dim, where they came from when not
     the user's own terminals (a phone, say) or how they went (a steer)."""
 
@@ -117,7 +117,7 @@ class Said(Static):
 
 
 def yours(text, label=None):
-    return message("❯", Said(text, label), "you")
+    return message("❯", UserWords(text, label), "you")
 
 
 class Transcript(VerticalScroll):
@@ -412,7 +412,7 @@ class MessageBox(TextArea):
             event.stop()
             event.prevent_default()
             return
-        mine = getattr(self.app, "keys", None) or keybindings.current()
+        mine = getattr(self.app, "keys", None) or keybindings.current_keys()
         if event.key not in mine["new_line"] and event.key not in mine["send"]:
             # TextArea's own handler takes it
             return

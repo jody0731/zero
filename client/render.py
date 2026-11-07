@@ -55,10 +55,10 @@ def divider(title, workspace, width=80):
 
 
 def jobs_text(jobs, sessions=False):
-    """The host's job rows, each with its state in words (`said`)."""
+    """The server's job rows, each with its state in words (`said`)."""
     return "\n".join(
         f"  {row['id']}  {row['session'] + '  ' if sessions else ''}"
-        f"{row['said']}  {row['command']}"
+        f"{row['state_text']}  {row['command']}"
         for row in jobs
     )
 
@@ -120,7 +120,7 @@ def command_of(call):
         return arguments
 
 
-def permissions_text(grants):
+def grants_text(grants):
     """/permissions' list: numbered, who granted it and for how long."""
     if not grants:
         return "Nothing runs without asking here, beyond an approved plan's calls."
@@ -129,13 +129,13 @@ def permissions_text(grants):
         who = "the judge" if grant["by"] == "judge" else "you"
         how = "in every session" if grant["scope"] == "saved" else (
             "in this session")
-        lines.append(f"{n}. {grant['what']}: allowed by {who}, {how}")
+        lines.append(f"{n}. {grant['description']}: allowed by {who}, {how}")
     lines.append("\n/permissions forget N takes one back.")
     return "\n".join(lines)
 
 
 # The judge's settings, as a switch line names them
-SWITCH_NAMES = {"judge_model": "judge", "judge_effort": "judge's thinking"}
+SWITCH_NAMES = {"judge_model": "judge", "judge_thinking_effort": "judge's thinking"}
 
 
 def switch_text(record):

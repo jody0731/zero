@@ -12,7 +12,7 @@ from settings import Setting
 
 SETTINGS = (
     Setting("mode", "Default", "Mode", "default", "mode"),
-    Setting("consent_timeout", "Host",
+    Setting("consent_silence_seconds", "Server",
             "Seconds the consent check may stay silent", 30, "number",
             shown=False),
 )

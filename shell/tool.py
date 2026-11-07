@@ -1,6 +1,6 @@
 """The bash tool: own process group, timeout, clipped output, Codex-style header.
 
-Where the session has a host for jobs, a call can start in the background,
+Where the session has a server for jobs, a call can start in the background,
 and a command still running at the timeout moves there instead of being killed
 (jobs/).
 """
@@ -12,7 +12,7 @@ from core.tools import Grant, tool
 from jobs import tool as jobtools
 from jobs.process import drain, read_output, stop_group
 from shell.output import OutputBuffer, format_output
-from sandbox.sandbox import NOT_OUTSIDE, WALL, WALL_MARKS, leaves
+from sandbox.sandbox import NOT_OUTSIDE, WALL, WALL_MARKS, outside_crossing
 from shell.commands import prefix_words, prefixes
 
 CUT_OUTPUT = (
@@ -36,7 +36,7 @@ NOT_MOVED = (
 def describe(limits):
     """bash's description, with the session's timeout; without a session's
     limits (the registry's own copy), the timeout isn't a number yet."""
-    timeout = limits.get("bash_timeout")
+    timeout = limits.get("bash_foreground_seconds")
     after = f"{timeout:g} seconds" if timeout else "the session's timeout"
     return (
         "Run a bash command and return its exit code and output (stdout and "
@@ -53,7 +53,7 @@ def describe(limits):
     summary=lambda args: args["command"],
     # A call with `background` starts a job (the jobs' cap)
     starts_job=lambda args: args.get("background") is True,
-    crosses=leaves,
+    crossing=outside_crossing,
     # "Don't ask again" grants each part's prefix (shell/commands.py)
     grant=Grant("prefixes", lambda args: prefixes(str(args.get("command", ""))),
                 prefix_words),
@@ -82,12 +82,12 @@ def bash(
 ):
     """`sandbox`, `outside`, `stop`, `jobs` and `limits` come from the session,
     never the model. `outside`: where an approved call to leave the sandbox
-    runs; None when this session can't leave it. `jobs`: the session's host for
+    runs; None when this session can't leave it. `jobs`: the session's server for
     background jobs; None when it has none. `limits`: its timeout and output
     limit (every session's tools get them). `reason` is for the ask
-    (permissions/asks.py, jobs/plugin.py)."""
+    (permissions/asks.py, jobs/hooks.py)."""
     box = sandbox or SANDBOX
-    timeout = limits["bash_timeout"]
+    timeout = limits["bash_foreground_seconds"]
     note = ""
     if outside_sandbox is True:
         if outside is not None:
@@ -98,7 +98,7 @@ def bash(
         note = f"{note}\n{NO_BACKGROUND}" if note else NO_BACKGROUND
     t0 = time.monotonic()
     # Own process group, so a timeout can kill everything bash started; with a
-    # host, started by its spawner, so a command can outlive this thread.
+    # server, started by its spawner, so a command can outlive this thread.
     # The sandbox raises rather than hand back a bare command (fail closed)
     spawn = jobs.spawn if jobs is not None else subprocess.Popen
     proc = spawn(
@@ -119,13 +119,13 @@ def bash(
         job_id = jobs.start(proc, command, estimate)
         result = jobtools.started_text(job_id)
         return result + "\n\n" + note if note else result
-    output = OutputBuffer(limits["output_limit"])
+    output = OutputBuffer(limits["bash_output_chars"])
     moved = False
     try:
         try:
             read_output(proc, output, timeout=timeout, stop=stop)
         except subprocess.TimeoutExpired:
-            if jobs is not None and jobs.room():
+            if jobs is not None and jobs.has_room():
                 # The rest of its output goes to the job; the pipe stays open
                 moved = True
                 job_id = jobs.start(proc, command, None, time.monotonic() - t0)

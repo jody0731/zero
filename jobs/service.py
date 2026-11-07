@@ -1,14 +1,14 @@
-"""The jobs' part in the host (host/parts.py): their rows, their notices,
+"""The jobs' service in the server (server/services.py): their rows, their notices,
 check-ins, and the `job/list` and `job/stop` messages.
 
 process.py runs a job's process; this keeps what the session's state needs.
 A job's end, a check-in and a loss each reach its session as a `job` message in
 the inbox, written in the same transaction as the job's row (store.py), so a
-crash can't lose one. Jobs die with the host: a clean stop writes each one's loss before
-it kills it, and the boot repair writes it for a crash. Under systemd the
-host's unit takes a crashed host's jobs with it; a detached host's are killed
-by the next boot repair, by process group, if their pid still has the start
-time recorded for it (Codex's check).
+crash can't lose one. Jobs die with the server: a clean stop writes each one's
+loss before it kills it, and the boot repair writes it for a crash. Under
+systemd the server's unit takes a crashed server's jobs with it; a detached
+server's are killed by the next boot repair, by process group, if their pid
+still has the start time recorded for it (Codex's check).
 """
 
 import os
@@ -18,7 +18,7 @@ import time
 import traceback
 from pathlib import Path
 
-from host.parts import Part, Refused
+from server.services import Service, Refused
 from jobs import SETTINGS, process
 from jobs import tool as jobtools
 from jobs.store import SCHEMA, JobStore
@@ -51,10 +51,10 @@ def kill_leftover(row):
 
 
 class SessionJobs:
-    """What one session's tools get as `jobs`: the host, bound to the session."""
+    """What one session's tools get as `jobs`: the server, bound to the session."""
 
-    def __init__(self, host, sid, limit):
-        self.host = host
+    def __init__(self, service, sid, limit):
+        self.service = service
         self.sid = sid
         # Running jobs before another one asks: the session's max_jobs
         self.limit = limit
@@ -62,48 +62,48 @@ class SessionJobs:
     def spawn(self, argv, **options):
         return process.SPAWNER.popen(argv, **options)
 
-    def room(self):
+    def has_room(self):
         """Whether one more job fits under the cap without asking."""
-        return len(self.host.store.jobs(self.sid, running=True)) < self.limit
+        return len(self.service.store.jobs(self.sid, running=True)) < self.limit
 
     def count(self):
-        return len(self.host.store.jobs(self.sid, running=True))
+        return len(self.service.store.jobs(self.sid, running=True))
 
     def start(self, proc, command, expect_minutes=None, ran=0.0):
-        return self.host.start(self.sid, proc, command, expect_minutes, ran)
+        return self.service.start(self.sid, proc, command, expect_minutes, ran)
 
     def now(self):
-        return self.host.clock()
+        return self.service.clock()
 
     def list(self):
-        return self.host.store.jobs(self.sid)
+        return self.service.store.jobs(self.sid)
 
     def row(self, id):
-        row = self.host.store.job(id)
+        row = self.service.store.job(id)
         return row if row is not None and row["session"] == self.sid else None
 
     def stop(self, id):
-        return self.host.stop_job(id, by="model")
+        return self.service.stop_job(id, by="model")
 
-    def estimate(self, id, minutes):
-        due = self.host.clock() + minutes * 60
-        self.host.store.update_job(id, due=due, checkin=due)
+    def set_estimate(self, id, minutes):
+        due = self.service.clock() + minutes * 60
+        self.service.store.update_job(id, due=due, checkin=due)
 
     def look(self, id):
         """Its output since the model's last look; a look that sees the end takes
         the place of the end's notice."""
-        row = self.host.store.job(id)
-        files = self.host.files(id)
+        row = self.service.store.job(id)
+        files = self.service.files(id)
         text, dropped = files.read(row["read"])
-        self.host.store.update_job(id, read=files.size)
+        self.service.store.update_job(id, read=files.size)
         if row["state"] != "running":
-            self.host.store.withdraw(f"job:{id}:end")
+            self.service.store.withdraw(f"job:{id}:end")
         return text, dropped
 
 
-class Jobs(Part):
+class JobsService(Service):
     name = "jobs"
-    looking = ("job/list",)
+    looking_messages = ("job/list",)
     schema = SCHEMA
     tables = ("jobs",)
 
@@ -146,20 +146,20 @@ class Jobs(Part):
         """A session's jobs, ended ones too, or every running one; each with
         its state in words (`said`), as the model reads it, so a client needs
         no harness code to say it."""
-        rows = self.running() if sid is None else self.store.jobs(sid)
+        rows = self.running_jobs() if sid is None else self.store.jobs(sid)
         now = time.time()
-        return [{**row, "said": jobtools.state_text(row, now)} for row in rows]
+        return [{**row, "state_text": jobtools.state_text(row, now)} for row in rows]
 
     def session(self, sid, limit):
         return SessionJobs(self, sid, limit)
 
-    def give(self, sid, session):
-        """The session's tools start jobs through the host, up to its limit."""
+    def session_built(self, sid, session):
+        """The session's tools start jobs through the server, up to its limit."""
         limit = session.tool_context.get("limits", {}).get("max_jobs")
         session.tool_context["jobs"] = self.session(sid, limit or MAX_JOBS)
 
-    def busy(self):
-        return {"jobs": [row["id"] for row in self.running()]}
+    def busy_with(self):
+        return {"jobs": [row["id"] for row in self.running_jobs()]}
 
     def refuse_delete(self, sid):
         if self.store.jobs(sid, running=True):
@@ -240,7 +240,7 @@ class Jobs(Part):
             job = self.live.get(id)
         return job is not None and job.stop(by)
 
-    def running(self):
+    def running_jobs(self):
         return self.store.jobs(running=True)
 
     def check_ins(self):
@@ -248,7 +248,7 @@ class Jobs(Part):
         comes after as long again as it has run so far."""
         now = self.clock()
         woke = False
-        for row in self.running():
+        for row in self.running_jobs():
             if row["checkin"] > now:
                 continue
             count = row["checkins"] + 1
@@ -272,7 +272,7 @@ class Jobs(Part):
     def begin(self):
         """At boot: report jobs a crash cut off, then start looking for check-ins."""
         now = self.clock()
-        for row in self.running():
+        for row in self.running_jobs():
             if row["id"] in self.live:
                 continue
             kill_leftover(row)

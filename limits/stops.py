@@ -2,18 +2,18 @@
 full context, malformed replies in a row. Not in the chat's own limits: long
 jobs can rightly take hours; the steps are a soft cap (steps.py)."""
 
-from core.hooks import Plugin, Stop
+from core.hooks import Hook, Stop
 
 
-def caps(limits):
-    """The hard caps a session's limits set: TimeCap by `max_seconds`, when
+def hard_limits(limits):
+    """The hard caps a session's limits set: TimeLimit by `max_seconds`, when
     there is one (the evals')."""
     if limits["max_seconds"] is None:
         return []
-    return [TimeCap(limits["max_seconds"])]
+    return [TimeLimit(limits["max_seconds"])]
 
 
-class TimeCap(Plugin):
+class TimeLimit(Hook):
     """Agent time per turn; time spent waiting for the user doesn't count."""
 
     def __init__(self, seconds):
@@ -25,9 +25,9 @@ class TimeCap(Plugin):
             return Stop("time_limit", f"{used:.0f} s of agent time")
 
 
-class ContextGuard(Plugin):
+class ContextLimit(Hook):
     """Stop before the model's window fills: Ollama would silently cut old
-    messages, an API would refuse. Profiles pass the provider's numbers."""
+    messages, an API would refuse. Profiles pass the server's numbers."""
 
     def __init__(self, stop_at, limit):
         self._stop_at = stop_at
@@ -39,7 +39,7 @@ class ContextGuard(Plugin):
             return Stop("context_full", f"{tokens}/{self._limit} tokens")
 
 
-class FormatErrors(Plugin):
+class BrokenReplyLimit(Hook):
     """End the turn after `limit` malformed or cut-off replies in a row."""
 
     def __init__(self, limit):
@@ -54,5 +54,6 @@ class FormatErrors(Plugin):
     def step_end(self, step):
         if self._streak >= self._limit:
             return Stop(
-                "format_errors", f"{self._streak} malformed or cut-off replies in a row"
+                "broken_replies",
+                f"{self._streak} malformed or cut-off replies in a row"
             )

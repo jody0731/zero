@@ -7,7 +7,7 @@ the tags, checks out the newest, installs the requirements again when they
 changed and prints the CHANGELOG sections it brought. It refuses rather than
 merges: on local changes, and when the copy has commits of its own (Hermes'
 updater stashes, rescues and repairs, and grew to some 11,600 lines). The
-running host sees the new code and is replaced once it is idle.
+running server sees the new code and is replaced once it is idle.
 """
 
 import re
@@ -108,5 +108,5 @@ def update(root, out=print, pip=pip_install):
         out(f"Its requirements didn't install; run {root / 'install.sh'} to "
             "try again.")
         return 1
-    out("The host picks up the new code once it is idle.")
+    out("The server picks up the new code once it is idle.")
     return 0

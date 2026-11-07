@@ -28,7 +28,9 @@ class SessionLock:
             stream.seek(0)
             pid = stream.read().strip() or "?"
             stream.close()
-            raise Busy(f"Session is in use by another ZERO host (pid {pid})") from None
+            raise Busy(
+                f"Session is in use by another ZERO server (pid {pid})"
+            ) from None
         try:
             stream.seek(0)
             stream.truncate()

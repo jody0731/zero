@@ -6,14 +6,14 @@ settings.py), keys.toml (API keys), models.toml (the model servers they
 added, model/), SOUL.md (who ZERO is), ZERO.md (the user, their machines,
 their instructions and what ZERO remembers; both written from the templates
 on first use) and permissions.toml (the permissions they saved from an ask);
-all optional. state/ is the host's and lasts: the database, session logs,
-trajectories, locks, jobs' output, the trash, host.log and crashes.log. run/
-holds the running host's socket and locks. The sandbox hides the whole home
-from commands. Each home's host runs as a systemd unit of its own: zero-host
-for ~/.zero, zero-host-<hash> for any other, so two homes' hosts run side by
+all optional. state/ is the server's and lasts: the database, session logs,
+trajectories, locks, jobs' output, the trash, server.log and crashes.log. run/
+holds the running server's socket and locks. The sandbox hides the whole home
+from commands. Each home's server runs as a systemd unit of its own: zero-server
+for ~/.zero, zero-server-<hash> for any other, so two homes' servers run side by
 side.
 
-Shared by the host and its clients, so neither imports the other. Read when
+Shared by the server and its clients, so neither imports the other. Read when
 called, so a test's ZERO_HOME counts; nothing here names a user or a
 machine.
 """
@@ -28,7 +28,7 @@ HOME_ENV = "ZERO_HOME"
 # The longest path a Unix socket can bind to (sun_path, less its end)
 SOCKET_MAX = 107
 SOCKET = "zero.sock"
-UNIT = f"{NAME}-host"
+UNIT = f"{NAME}-server"
 
 
 def usual_home():
@@ -37,7 +37,7 @@ def usual_home():
 
 
 def home():
-    """The home: ZERO_HOME's folder, made whole (a host started elsewhere,
+    """The home: ZERO_HOME's folder, made whole (a server started elsewhere,
     as its systemd unit, is led to the same one), else the usual."""
     base = os.environ.get(HOME_ENV)
     if not base:
@@ -82,7 +82,7 @@ def config_file():
 
 
 def run_folder(top):
-    """The running host's folder: run/ in the home, or, when a socket there
+    """The running server's folder: run/ in the home, or, when a socket there
     would pass a Unix socket's limit, a folder named after the home in the
     login session's runtime folder (Hermes)."""
     run = top / "run"
@@ -99,7 +99,7 @@ def run_folder(top):
 
 
 def unit_name(top):
-    """The systemd unit a home's host runs as."""
+    """The systemd unit a home's server runs as."""
     if Path(top).absolute() == usual_home().absolute():
         return UNIT
     tag = hashlib.sha256(str(top).encode()).hexdigest()[:8]
@@ -114,22 +114,25 @@ class Paths:
         self.sessions = self.state / "sessions"
         self.trajectories = self.state / "trajectories"
         self.locks = self.state / "locks"
-        # Each job's output (jobs/), and deleted sessions (host/trash.py)
+        # Each job's output (jobs/), and deleted sessions (server/trash.py)
         self.jobs = self.state / "jobs"
         self.trash = self.state / "trash"
-        # A detached host's output, and the CLI's crashes
-        self.host_log = self.state / "host.log"
+        # A detached server's output, and the CLI's crashes
+        self.server_log = self.state / "server.log"
         self.crash_log = self.state / "crashes.log"
         self.run = run_folder(self.home)
         self.socket = self.run / SOCKET
-        # Held by the host for its whole life: whoever holds it owns the socket
-        self.lock = self.run / "host.lock"
-        # Held by a client while it starts a host, so two start one
+        # Held by the server for its whole life: whoever holds it owns the socket
+        self.lock = self.run / "server.lock"
+        # The lock ZERO's server held before 0.6.2.8, when it was the host:
+        # one still running holds it
+        self.old_server_lock = self.run / "host.lock"
+        # Held by a client while it starts a server, so two start one
         self.start_lock = self.run / "start.lock"
         self.unit = unit_name(self.home)
 
     def environment(self):
-        """The variable that leads a host to this home."""
+        """The variable that leads a server to this home."""
         return {HOME_ENV: str(self.home)}
 
     def make(self):

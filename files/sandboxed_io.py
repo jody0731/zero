@@ -21,7 +21,7 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def where(path):
+def write_target(path):
     """The absolute path, links followed: a write through a link lands where
     the link points, and a wall there stops it."""
     path = os.path.abspath(os.path.expanduser(path))
@@ -44,7 +44,7 @@ def kind(path):
 def load(request):
     """A file's bytes, or what it is instead: missing, a directory, something
     that isn't a regular file, or bigger than `cap`."""
-    path = where(request["path"])
+    path = write_target(request["path"])
     found = kind(path)
     answer = {"path": path, "kind": found}
     if found != "file":
@@ -66,7 +66,7 @@ def store(request):
     doesn't exist, a hash means it has that content, "any" skips the check.
     Written beside it, then moved into place, so a reader never sees half a
     file; the old file's permissions are kept."""
-    path = where(request["path"])
+    path = write_target(request["path"])
     found = kind(path)
     expect = request["expect"]
     if found not in ("missing", "file"):

@@ -3,12 +3,12 @@ ask in the mode.
 
 A cap is told to the model only when a call hits it, in the ask or the refusal
 it gets, never in every prompt. The other soft cap, on running jobs, is the
-jobs' own (jobs/plugin.py). The mode's approver answers the ask
-(permissions/approval.py, judge/plugin.py); bypassPermissions loads no caps.
+jobs' own (jobs/hooks.py). The mode's approver answers the ask
+(permissions/approval.py, judge/hooks.py); bypassPermissions loads no caps.
 """
 
 from core import history
-from core.hooks import Deny, Plugin, Stop
+from core.hooks import Deny, Hook, Stop
 
 
 STEP_REFUSED = (
@@ -16,7 +16,7 @@ STEP_REFUSED = (
 )
 
 
-class StepLimit(Plugin):
+class StepLimit(Hook):
     """Steps a turn may take before it asks to go on.
 
     The first call of a step past the limit is marked for the approver. A yes
@@ -36,7 +36,7 @@ class StepLimit(Plugin):
         ran was a yes, so a parked or restarted turn keeps its raised limit."""
         self._limit = self._base
         self._refused = False
-        for record in history.pending(turn.session.log.records()):
+        for record in history.unfinished_turn(turn.session.log.records()):
             if record["type"] == "tool" and record.get("ran"):
                 if record.get("notes", {}).get("step_limit"):
                     self._limit += self._grant

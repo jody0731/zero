@@ -15,7 +15,7 @@ import subprocess
 # What `copy` says when only the terminal was asked
 TERMINAL = "the terminal (OSC 52)"
 # A tool that hangs gives up after this many seconds
-TIMEOUT = 3
+TIMEOUT_SECONDS = 3
 
 
 def tools(env):
@@ -46,7 +46,7 @@ def copy(text, osc52, env=None, which=shutil.which, run=subprocess.run):
         try:
             # wl-copy stays behind to serve the clipboard: no pipes held open
             done = run(argv, input=text.encode(), stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=TIMEOUT)
+                       stderr=subprocess.DEVNULL, timeout=TIMEOUT_SECONDS)
         except (OSError, subprocess.SubprocessError):
             continue
         if done.returncode == 0:
@@ -63,7 +63,7 @@ def paste(env=None, which=shutil.which, run=subprocess.run):
             continue
         try:
             done = run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                       timeout=TIMEOUT)
+                       timeout=TIMEOUT_SECONDS)
         except (OSError, subprocess.SubprocessError):
             continue
         if done.returncode == 0 and done.stdout:

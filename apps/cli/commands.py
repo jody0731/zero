@@ -2,20 +2,20 @@
 agent, each sending one of the protocol's messages (protocol/messages.py).
 A message only a screen needs has no command; NO_COMMAND says why.
 
-    zero session send TEXT [--session ID] [--cd DIR] [--effort E]
+    zero session send TEXT [--session ID] [--cd DIR] [--thinking-effort E]
         [--json | --events]
     zero session list [--archived | --all] [--cd DIR] [--watch]
     zero session read ID · watch ID · stop ID · continue ID
     zero session rename ID TITLE · archive ID · unarchive ID · delete ID
-    zero session set ID [--mode M] [--model M] [--cd DIR] [--effort E]
-        [--judge-model M] [--judge-effort E]
+    zero session set ID [--mode M] [--model M] [--cd DIR] [--thinking-effort E]
+        [--judge-model M] [--judge-thinking-effort E]
     zero job list [--session ID] · job stop JOB
     zero grant list ID · grant forget ID GRANT
-    zero model list · model features MODEL [--test] · model provider list ·
+    zero model list · model features MODEL [--test] · model server list ·
         probe NAME · connect NAME --model M [--url URL] [--key-stdin] ·
         disconnect NAME
     zero setting list · setting set NAME VALUE
-    zero host hello · host stop (main.py's, with host status and host run)
+    zero server hello · server stop (main.py's, with server status and server run)
 
 How a message becomes a command:
 - Its name is its message's: a family (a noun), then the action; `zero
@@ -27,7 +27,7 @@ How a message becomes a command:
   `--cd`, as /cd is in the full screen.
 - A long text is the argument, or `-` to read it from stdin. A key never is
   an argument (shell history and `ps` would show it): `--key-stdin` reads it.
-- Output is lines for a person; `--json` prints the host's reply as one JSON
+- Output is lines for a person; `--json` prints the server's reply as one JSON
   object, an error included ({"ok": false, "error": ...}). The streams
   (`session watch`, `session list --watch`) print one JSON object a line.
 - Exit 0 done, 1 not (the error on stderr), 2 a question waits.
@@ -51,21 +51,21 @@ from client.render import duration, jobs_text
 from client.result import CHOICES, Result
 
 NAME = "ZERO"
-# The families main.py hands here; `host` is main.py's own
+# The families main.py hands here; `server` is main.py's own
 FAMILIES = ("session", "job", "grant", "model", "setting")
 # The messages with no command, and why: what only a screen needs
 NO_COMMAND = {
-    "session/seen": "a person's read mark, which the full screen sends for what "
+    "session/mark_seen": "a person's read mark, which the full screen sends for what "
                     "it has shown; a caller reads a session with session read",
 }
-EFFORTS_HELP = "the model's thinking effort from the next turn"
+THINKING_EFFORT_HELP = "the model's thinking effort from the next turn"
 MODES_HELP = "the mode (/mode in zero lists them)"
 
 
 # ------------------------------------------------------------- readers
 
 
-def find(sessions, sid):
+def match_session(sessions, sid):
     """A session by its id or the start of it; the newest with none given."""
     if sid is None:
         return sessions[0] if sessions else None
@@ -76,18 +76,18 @@ def find(sessions, sid):
     return matches[0]
 
 
-def read_session(host, sid=None):
+def read_session(server, sid=None):
     """A session's row (its open ask included) and its whole log, from the
-    host. `host`: a Connection, or anything with sessions() and history()."""
-    info = find(host.sessions(), sid)
+    server. `server`: a Connection, or anything with sessions() and history()."""
+    info = match_session(server.sessions(), sid)
     if info is None:
         return None, []
-    return info, host.history(info["id"], limit=None)[0]
+    return info, server.history(info["id"], limit=None)[0]
 
 
 def history_text(info, records, working=True, runs_with=None):
     """A session's transcript as text: its row, what its next turn runs
-    with (`runs_with`, the host's word, where given) and its records."""
+    with (`runs_with`, the server's word, where given) and its records."""
     lines = [
         f"{info['id']}  {info['state']}  {info['mode']}  {info['model']}  "
         f"{info['workspace']}",
@@ -95,8 +95,9 @@ def history_text(info, records, working=True, runs_with=None):
     ]
     if runs_with:
         judge = runs_with.get("judge_model") or "the session's model"
-        lines.insert(1, f"thinking {runs_with.get('effort')} · judge {judge}, "
-                        f"thinking {runs_with.get('judge_effort')}")
+        lines.insert(1, f"thinking {runs_with.get('thinking_effort')} · "
+                        f"judge {judge}, "
+                        f"thinking {runs_with.get('judge_thinking_effort')}")
     started = None
     restarts = 0
     for record in records:
@@ -144,21 +145,21 @@ def waited(delta):
     return f"{minutes // 60} hours"
 
 
-def show(host, sid=None):
+def show(server, sid=None):
     """A session's questions and answers, from its log, then its jobs."""
-    info, records = read_session(host, sid)
+    info, records = read_session(server, sid)
     if info is None:
         return "No sessions yet."
     text = history_text(info, records)
-    jobs = host.jobs(info["id"])
+    jobs = server.jobs(info["id"])
     if jobs:
         text += "\n\njobs:\n" + jobs_text(jobs)
     return text
 
 
-def list_sessions(host, sessions=None):
+def list_sessions(server, sessions=None):
     lines = []
-    for info in host.sessions() if sessions is None else sessions:
+    for info in server.sessions() if sessions is None else sessions:
         clock = datetime.fromtimestamp(info["updated"]).astimezone()
         mark = "  (a question waits)" if info.get("ask") else ""
         lines.append(
@@ -205,7 +206,7 @@ def follow(connection, sid, after, args, out):
             if not result.add(event):
                 continue
             if as_json:
-                out(json.dumps(result.object(), ensure_ascii=False))
+                out(json.dumps(result.as_json(), ensure_ascii=False))
             elif not events:
                 if result.ask is not None:
                     out(render.ask_line(result.ask))
@@ -215,7 +216,7 @@ def follow(connection, sid, after, args, out):
                     out("(nothing ran)")
                 else:
                     out(ending(result.last))
-            return result.code()
+            return result.exit_code()
     raise NotRunning("ZERO's watch ended before the session settled")
 
 
@@ -224,7 +225,7 @@ def print_turn(connection, args, workspace, out=print):
     until it settles."""
     sid, after, reply_to = None, 0, None
     if args.session is not None:
-        info = find(connection.sessions(), args.session)
+        info = match_session(connection.sessions(), args.session)
         sid = info["id"]
         records, _ = connection.history(sid, limit=1)
         after = records[-1]["seq"] if records else 0
@@ -233,7 +234,7 @@ def print_turn(connection, args, workspace, out=print):
             reply_to = info["ask"]["id"]
     options = {"session": sid, "mode": args.mode, "model": args.model,
                "workspace": workspace, "reply_to": reply_to,
-               "effort": getattr(args, "effort", None)}
+               "thinking_effort": getattr(args, "thinking_effort", None)}
     if getattr(args, "when_busy", None):
         options["when_busy"] = args.when_busy
     if getattr(args, "choice", None):
@@ -246,12 +247,12 @@ def print_turn(connection, args, workspace, out=print):
     return follow(connection, sid, after, args, out)
 
 
-def go_on(connection, args, out=print):
+def continue_session(connection, args, out=print):
     """`zero session continue`: the turn goes on, followed until it settles."""
-    sid = find(connection.sessions(), args.id)["id"]
+    sid = match_session(connection.sessions(), args.id)["id"]
     records, _ = connection.history(sid, limit=1)
     after = records[-1]["seq"] if records else 0
-    reply = connection.go_on(sid)
+    reply = connection.continue_session(sid)
     if getattr(args, "no_wait", False):
         out(json.dumps(reply) if args.json else sid)
         return 0
@@ -263,7 +264,7 @@ def go_on(connection, args, out=print):
 
 def json_flag(parser):
     parser.add_argument("--json", action="store_true",
-                        help="print the host's reply as one JSON object")
+                        help="print the server's reply as one JSON object")
 
 
 def follow_flags(parser):
@@ -284,8 +285,9 @@ def send_flags(parser):
                              "a new one")
     parser.add_argument("--mode", help=MODES_HELP)
     parser.add_argument("--model")
-    parser.add_argument("--effort", help="a new session's thinking effort: "
-                                         "off, low, high or max")
+    parser.add_argument("--thinking-effort", "--effort", dest="thinking_effort",
+                        help="a new session's thinking effort: off, low, high "
+                             "or max")
     parser.add_argument("--cd", metavar="DIR",
                         help="a new session's workspace (this folder)")
     parser.add_argument("--when-busy", choices=("steer", "queue"),
@@ -364,17 +366,19 @@ def parser(prog="zero"):
         action = actions.add_parser(name, help=about)
         session_arg(action)
         json_flag(action)
-        action.set_defaults(handler=housekeeping_command)
-    change = actions.add_parser("set", help="mode, model, workspace, effort or "
-                                            "judge, from the next turn")
+        action.set_defaults(handler=session_edit_command)
+    change = actions.add_parser("set", help="mode, model, workspace, thinking "
+                                            "effort or judge, from the next turn")
     session_arg(change)
     change.add_argument("--mode", help=MODES_HELP)
     change.add_argument("--model")
     change.add_argument("--cd", metavar="DIR", help="the workspace")
-    change.add_argument("--effort", help=EFFORTS_HELP)
+    change.add_argument("--thinking-effort", "--effort", dest="thinking_effort",
+                        help=THINKING_EFFORT_HELP)
     change.add_argument("--judge-model", metavar="M",
                         help='the judge\'s model ("": the session\'s own)')
-    change.add_argument("--judge-effort", metavar="E",
+    change.add_argument("--judge-thinking-effort", "--judge-effort",
+                        dest="judge_thinking_effort", metavar="E",
                         help="the judge's thinking effort: off, low, high or max")
     json_flag(change)
     change.set_defaults(handler=set_command)
@@ -417,14 +421,14 @@ def parser(prog="zero"):
                           help="measure again now (a few calls to the model)")
     json_flag(measured)
     measured.set_defaults(handler=model_features_command)
-    provider = actions.add_parser("provider", help="model servers and keys")
-    verbs = provider.add_subparsers(dest="verb", required=True)
+    server = actions.add_parser("server", help="model servers and keys")
+    verbs = server.add_subparsers(dest="verb", required=True)
     listing = verbs.add_parser("list", help="every server ZERO knows")
     json_flag(listing)
-    listing.set_defaults(handler=provider_list_command)
+    listing.set_defaults(handler=server_list_command)
     probe = verbs.add_parser("probe", help="a server's models")
     probe.add_argument("name", metavar="NAME", nargs="?",
-                       help="a server's name (provider list)")
+                       help="a server's name (server list)")
     probe.add_argument("--url", help="a server of one's own, its /v1 url")
     probe.add_argument("--key-stdin", action="store_true",
                        help="read the key from stdin")
@@ -438,7 +442,8 @@ def parser(prog="zero"):
     connect.add_argument("--key-stdin", action="store_true",
                          help="read the key from stdin; none read for a "
                               "server that needs none")
-    connect.add_argument("--context", type=int, metavar="TOKENS",
+    connect.add_argument("--context-window", "--context", type=int,
+                         metavar="TOKENS",
                          help="its context window, when the server doesn't say")
     connect.add_argument("--title")
     connect.add_argument("--default", action="store_true",
@@ -467,7 +472,7 @@ def parser(prog="zero"):
 
 def run(argv, connection, out=print, stdin=None):
     """One command: its exit status. Errors to stderr; with --json also as
-    the host's error object on stdout."""
+    the server's error object on stdout."""
     args = parser().parse_args(argv)
     args.stdin = stdin or sys.stdin
     try:
@@ -484,13 +489,13 @@ def run(argv, connection, out=print, stdin=None):
 # ------------------------------------------------------------- handlers
 
 
-def done(args, out, reply, text):
+def print_reply(args, out, reply, text):
     out(json.dumps(reply, ensure_ascii=False) if args.json else text)
     return 0
 
 
 def session_id(connection, prefix):
-    return find(connection.sessions(), prefix)["id"]
+    return match_session(connection.sessions(), prefix)["id"]
 
 
 def workspace_of(folder):
@@ -502,13 +507,13 @@ def send_command(connection, args, out):
 
 
 def continue_command(connection, args, out):
-    return go_on(connection, args, out)
+    return continue_session(connection, args, out)
 
 
 def stop_command(connection, args, out):
     reply = connection.stop(session_id(connection, args.id))
-    return done(args, out, reply,
-                "Stopped." if reply.get("stopped") else "Nothing was running.")
+    return print_reply(args, out, reply,
+                       "Stopped." if reply.get("stopped") else "Nothing was running.")
 
 
 def list_command(connection, args, out):
@@ -525,16 +530,16 @@ def list_command(connection, args, out):
                     return 0
         return 0
     sessions = connection.sessions(archived=archived, workspace=workspace)
-    return done(args, out, {"ok": True, "sessions": sessions},
-                list_sessions(connection, sessions))
+    return print_reply(args, out, {"ok": True, "sessions": sessions},
+                       list_sessions(connection, sessions))
 
 
 def read_command(connection, args, out):
-    info = find(connection.sessions(), args.id)
+    info = match_session(connection.sessions(), args.id)
     reply = connection.read(info["id"], after=args.after, limit=args.limit,
                             before=args.before)
     text = history_text(info, reply["records"], runs_with=reply.get("runs_with"))
-    return done(args, out, reply, text)
+    return print_reply(args, out, reply, text)
 
 
 def watch_command(connection, args, out):
@@ -554,40 +559,42 @@ def watch_command(connection, args, out):
 
 def rename_command(connection, args, out):
     reply = connection.rename(session_id(connection, args.id), args.title)
-    return done(args, out, reply, "Renamed.")
+    return print_reply(args, out, reply, "Renamed.")
 
 
-def housekeeping_command(connection, args, out):
+def session_edit_command(connection, args, out):
     sid = session_id(connection, args.id)
     if args.action == "delete":
         trash = connection.delete(sid)
-        return done(args, out, {"ok": True, "trash": trash},
-                    f"Deleted; its files are in {trash}.")
+        return print_reply(args, out, {"ok": True, "trash": trash},
+                           f"Deleted; its files are in {trash}.")
     reply = connection.archive(sid, archived=args.action == "archive")
-    return done(args, out, reply, f"{args.action.capitalize()}d.")
+    return print_reply(args, out, reply, f"{args.action.capitalize()}d.")
 
 
 def set_command(connection, args, out):
-    given = {"mode": args.mode, "model": args.model, "effort": args.effort,
+    given = {"mode": args.mode, "model": args.model,
+             "thinking_effort": args.thinking_effort,
              "workspace": workspace_of(args.cd) if args.cd else None,
-             "judge_model": args.judge_model, "judge_effort": args.judge_effort}
+             "judge_model": args.judge_model,
+             "judge_thinking_effort": args.judge_thinking_effort}
     if not any(value is not None for value in given.values()):
-        raise ValueError("session set takes --mode, --model, --cd, --effort, "
-                         "--judge-model or --judge-effort")
+        raise ValueError("session set takes --mode, --model, --cd, --thinking-effort, "
+                         "--judge-model or --judge-thinking-effort")
     reply = connection.set(session_id(connection, args.id), **given)
     # A judge model of None is the session's own again
     own = "the session's own"
     said = ", ".join(f"{k} {own if v is None else v}"
                      for k, v in reply.get("set", {}).items())
     when = " from its next turn" if reply.get("next_turn") else ""
-    return done(args, out, reply, f"Set {said}{when}.")
+    return print_reply(args, out, reply, f"Set {said}{when}.")
 
 
 def job_list_command(connection, args, out):
     sid = session_id(connection, args.session) if args.session else None
     jobs = connection.jobs(sid)
     text = jobs_text(jobs, sessions=sid is None) or "No jobs."
-    return done(args, out, {"ok": True, "jobs": jobs}, text)
+    return print_reply(args, out, {"ok": True, "jobs": jobs}, text)
 
 
 def job_stop_command(connection, args, out):
@@ -595,21 +602,21 @@ def job_stop_command(connection, args, out):
                if row["id"].startswith(args.job)]
     job = running[0] if len(running) == 1 else args.job
     reply = connection.stop_job(job)
-    return done(args, out, reply,
-                "Stopped." if reply["stopped"] else "It wasn't running.")
+    return print_reply(args, out, reply,
+                       "Stopped." if reply["stopped"] else "It wasn't running.")
 
 
 def grant_list_command(connection, args, out):
-    grants = connection.permissions(session_id(connection, args.id))
-    lines = [f"{g['id']}  {g['what']}  (by {g['by']}, {g['scope']})"
+    grants = connection.grants(session_id(connection, args.id))
+    lines = [f"{g['id']}  {g['description']}  (by {g['by']}, {g['scope']})"
              for g in grants]
-    return done(args, out, {"ok": True, "grants": grants},
-                "\n".join(lines) or "No grants.")
+    return print_reply(args, out, {"ok": True, "grants": grants},
+                       "\n".join(lines) or "No grants.")
 
 
 def grant_forget_command(connection, args, out):
-    reply = connection.forget(session_id(connection, args.id), args.grant)
-    return done(args, out, reply, f"Forgot {args.grant}.")
+    reply = connection.forget_grant(session_id(connection, args.id), args.grant)
+    return print_reply(args, out, reply, f"Forgot {args.grant}.")
 
 
 def model_list_command(connection, args, out):
@@ -617,30 +624,30 @@ def model_list_command(connection, args, out):
     lines = []
     for server in reply["servers"]:
         if server.get("error"):
-            lines.append(f"{server['provider']}: {server['error']}")
+            lines.append(f"{server['server']}: {server['error']}")
         else:
-            lines += server["models"] or [f"{server['provider']}: no models"]
-    return done(args, out, reply, "\n".join(lines) or "No servers reachable.")
+            lines += server["models"] or [f"{server['server']}: no models"]
+    return print_reply(args, out, reply, "\n".join(lines) or "No servers reachable.")
 
 
 def model_features_command(connection, args, out):
     reply = connection.features(args.model, test=args.test)
     words = {True: "yes", False: "unavailable", None: "not measured"}
     lines = [f"{reply['model']} on {reply['api']}, measured "
-             f"{reply['measured']}:"]
+             f"{reply['measured_at']}:"]
     lines += [f"  {name}: {words[honoured]}"
               for name, honoured in reply["features"].items()]
-    return done(args, out, reply, "\n".join(lines))
+    return print_reply(args, out, reply, "\n".join(lines))
 
 
-def provider_list_command(connection, args, out):
-    reply = connection.providers()
-    lines = [f"{row['name']}  key {row['key']}  {row['url']}"
-             for row in reply["providers"]]
+def server_list_command(connection, args, out):
+    reply = connection.servers()
+    lines = [f"{row['name']}  key {row['key_state']}  {row['url']}"
+             for row in reply["servers"]]
     lines.append(f"default model: {reply['default'] or 'none'}")
-    if reply.get("ready"):
-        lines.append(f"(a new session couldn't start: {reply['ready']})")
-    return done(args, out, reply, "\n".join(lines))
+    if reply.get("not_ready_reason"):
+        lines.append(f"(a new session couldn't start: {reply['not_ready_reason']})")
+    return print_reply(args, out, reply, "\n".join(lines))
 
 
 def key_of(args):
@@ -652,28 +659,29 @@ def key_of(args):
 
 def probe_command(connection, args, out):
     if args.name is None and args.url is None:
-        raise ValueError("model provider probe takes a NAME or --url")
+        raise ValueError("model server probe takes a NAME or --url")
     url, models = connection.probe(name=args.name, url=args.url,
                                    key=key_of(args))
     lines = [url] + [
-        f"  {m['id']}" + (f"  ({m['context']} tokens)" if m.get("context")
+        f"  {m['id']}" + (f"  ({m['context_window']} tokens)"
+                          if m.get("context_window")
                           else "")
         for m in models
     ]
-    return done(args, out, {"ok": True, "url": url, "models": models},
-                "\n".join(lines))
+    return print_reply(args, out, {"ok": True, "url": url, "models": models},
+                       "\n".join(lines))
 
 
 def connect_command(connection, args, out):
     reply = connection.connect(
         args.name, args.model, url=args.url, key=key_of(args),
-        context=args.context, title=args.title,
+        context_window=args.context_window, title=args.title,
         default=True if args.default else None,
     )
     said = f"Connected {reply['model']}: its test call answered."
     if reply.get("default"):
         said += " New sessions use it."
-    return done(args, out, reply, said)
+    return print_reply(args, out, reply, said)
 
 
 def disconnect_command(connection, args, out):
@@ -681,7 +689,7 @@ def disconnect_command(connection, args, out):
     said = f"Removed {reply['removed']}."
     if reply.get("default_unset"):
         said += " New sessions have no model until one is connected."
-    return done(args, out, reply, said)
+    return print_reply(args, out, reply, said)
 
 
 def setting_list_command(connection, args, out):
@@ -690,8 +698,8 @@ def setting_list_command(connection, args, out):
              for row in settings]
     if error:
         lines.append(f"config.toml: {error}")
-    return done(args, out, {"ok": True, "settings": settings, "error": error},
-                "\n".join(lines))
+    return print_reply(args, out, {"ok": True, "settings": settings, "error": error},
+                       "\n".join(lines))
 
 
 def setting_set_command(connection, args, out):
@@ -701,4 +709,4 @@ def setting_set_command(connection, args, out):
         value = args.value
     reply = connection.set_setting(args.name, value)
     shown = ", ".join(f"{k} = {json.dumps(v)}" for k, v in reply["set"].items())
-    return done(args, out, reply, f"Set {shown}.")
+    return print_reply(args, out, reply, f"Set {shown}.")

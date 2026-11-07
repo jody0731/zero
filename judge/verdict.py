@@ -32,7 +32,7 @@ Two placements (no root guard in either):
          (permissions/approval.py, Permissions) and the judge answers
 
 This is the judge itself, one model call per verdict; the judge eval uses it
-alone. What it sees of a session and how its verdict acts are plugin.py's.
+alone. What it sees of a session and how its verdict acts are hook.py's.
 """
 
 import json
@@ -41,11 +41,11 @@ import time
 
 from core.llm import MODEL_ERRORS, complete
 from model import features
-from model.providers import make_client, resolve
+from model.servers import make_client, resolve
 
 DECISIONS = ("allow", "session", "deny")
 # What a model writes when there are no side effects ("None; read-only", say)
-NOTHING = re.compile(r"(none|nothing|no side effects?|n/?a)\b", re.IGNORECASE)
+NO_SIDE_EFFECTS = re.compile(r"(none|nothing|no side effects?|n/?a)\b", re.IGNORECASE)
 
 PROMPT = """
 You review a command {users} assistant wants to run on {users} computer,
@@ -161,7 +161,7 @@ def parse(content):
     if not isinstance(effects, str):
         raise VerdictError("side_effects must be text")
     effects = effects.strip()
-    if NOTHING.match(effects):
+    if NO_SIDE_EFFECTS.match(effects):
         effects = ""
     # Kept for whoever reads the verdict; the decision stands without it
     look = data.get("second_look")
@@ -180,8 +180,8 @@ class Judge:
     def __init__(self, model, client=None, name=None, *, timeout, retries=1,
                  effort=None, output_chars=None, outputs=0):
         self.model = model
-        provider, self.api_name = resolve(model)
-        self.api = provider.api
+        server, self.served_name = resolve(model)
+        self.api = server.api
         # Seconds the judge may stay silent (complete's `silence`)
         self.timeout = timeout
         # Tries after a reply that isn't a verdict (judge_retries)
@@ -234,10 +234,10 @@ class Judge:
         for _ in range(self.retries + 1):
             try:
                 reply = complete(
-                    self.api, self.client, self.api_name, messages,
+                    self.api, self.client, self.served_name, messages,
                     silence=self.timeout, check=check, temperature=0,
-                    effort=features.effort_sent(self.model, self.api,
-                                                self.effort),
+                    effort=features.thinking_effort_sent(self.model, self.api,
+                                                         self.effort),
                     max_output_tokens=self.max_output_tokens,
                     **features.json_request(self.model, self.api, self.schema),
                 )

@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "zero-protocol-2",
-  "title": "Z.E.R.O. protocol 2",
-  "description": "One JSON object a line over the host's Unix socket (~/.zero/run/zero.sock): a request, then its reply; session/watch and session/list with watch stream events. Each request names its message in `message`.",
-  "x-protocol": 2,
+  "$id": "zero-protocol-3",
+  "title": "Z.E.R.O. protocol 3",
+  "description": "One JSON object a line over the server's Unix socket (~/.zero/run/zero.sock): a request, then its reply; session/watch and session/list with watch stream events. Each request names its message in `message`.",
+  "x-protocol": 3,
   "oneOf": [
     {
-      "$ref": "#/$defs/host.hello"
+      "$ref": "#/$defs/server.hello"
     },
     {
-      "$ref": "#/$defs/host.stop"
+      "$ref": "#/$defs/server.stop"
     },
     {
       "$ref": "#/$defs/session.send"
@@ -30,7 +30,7 @@
       "$ref": "#/$defs/session.watch"
     },
     {
-      "$ref": "#/$defs/session.seen"
+      "$ref": "#/$defs/session.mark_seen"
     },
     {
       "$ref": "#/$defs/session.rename"
@@ -66,16 +66,16 @@
       "$ref": "#/$defs/model.features"
     },
     {
-      "$ref": "#/$defs/model.provider.list"
+      "$ref": "#/$defs/model.server.list"
     },
     {
-      "$ref": "#/$defs/model.provider.probe"
+      "$ref": "#/$defs/model.server.probe"
     },
     {
-      "$ref": "#/$defs/model.provider.connect"
+      "$ref": "#/$defs/model.server.connect"
     },
     {
-      "$ref": "#/$defs/model.provider.disconnect"
+      "$ref": "#/$defs/model.server.disconnect"
     },
     {
       "$ref": "#/$defs/setting.list"
@@ -100,16 +100,16 @@
         "error"
       ]
     },
-    "host.hello": {
+    "server.hello": {
       "type": "object",
-      "description": "The host's versions and what keeps it busy; a client's first look.",
+      "description": "The server's versions and what keeps it busy; a client's first look.",
       "properties": {
         "message": {
-          "const": "host/hello"
+          "const": "server/hello"
         },
         "protocol": {
           "type": "integer",
-          "description": "the client's protocol; the host refuses another"
+          "description": "the client's protocol; the server refuses another"
         }
       },
       "required": [
@@ -117,7 +117,7 @@
       ],
       "additionalProperties": false
     },
-    "host.hello.reply": {
+    "server.hello.reply": {
       "type": "object",
       "properties": {
         "ok": {
@@ -132,13 +132,13 @@
         "pid": {
           "type": "integer"
         },
-        "started": {
+        "started_at": {
           "type": "number"
         },
-        "busy": {
+        "busy_with": {
           "type": "object"
         },
-        "last": {
+        "last_session": {
           "anyOf": [
             {
               "type": "string",
@@ -183,12 +183,12 @@
         "ok"
       ]
     },
-    "host.stop": {
+    "server.stop": {
       "type": "object",
-      "description": "Stop the host; while anything runs it says what, unless forced.",
+      "description": "Stop the server; while anything runs it says what, unless forced.",
       "properties": {
         "message": {
-          "const": "host/stop"
+          "const": "server/stop"
         },
         "force": {
           "type": "boolean"
@@ -205,7 +205,7 @@
       ],
       "additionalProperties": false
     },
-    "host.stop.reply": {
+    "server.stop.reply": {
       "type": "object",
       "properties": {
         "ok": {
@@ -214,7 +214,7 @@
         "stopping": {
           "type": "boolean"
         },
-        "busy": {
+        "busy_with": {
           "type": "object"
         }
       },
@@ -272,7 +272,7 @@
           "type": "string",
           "description": "who sends it: a client's own name"
         },
-        "effort": {
+        "thinking_effort": {
           "anyOf": [
             {
               "type": "string"
@@ -342,7 +342,7 @@
           "type": "string",
           "description": "a session's id"
         },
-        "disposition": {
+        "handled_as": {
           "enum": [
             "started",
             "steered",
@@ -397,7 +397,7 @@
           "type": "string",
           "description": "a session's id"
         },
-        "disposition": {
+        "handled_as": {
           "enum": [
             "started",
             "steered",
@@ -582,12 +582,12 @@
           },
           "description": "the log's records"
         },
-        "gap": {
+        "earlier_count": {
           "type": "integer"
         },
         "runs_with": {
           "type": "object",
-          "description": "what its next turn runs with: mode, model, workspace, effort, judge_model (null: the session's model) and judge_effort"
+          "description": "what its next turn runs with: mode, model, workspace, thinking_effort, judge_model (null: the session's model) and judge_thinking_effort"
         }
       },
       "required": [
@@ -652,7 +652,7 @@
         "withdrawn": {
           "type": "object"
         },
-        "gap": {
+        "earlier_count": {
           "type": "integer"
         },
         "bye": {
@@ -660,12 +660,12 @@
         }
       }
     },
-    "session.seen": {
+    "session.mark_seen": {
       "type": "object",
       "description": "Mark a session read up to a seq, for the lists' news marks.",
       "properties": {
         "message": {
-          "const": "session/seen"
+          "const": "session/mark_seen"
         },
         "session": {
           "type": "string",
@@ -683,7 +683,7 @@
       ],
       "additionalProperties": false
     },
-    "session.seen.reply": {
+    "session.mark_seen.reply": {
       "type": "object",
       "properties": {
         "ok": {
@@ -819,7 +819,7 @@
     },
     "session.set": {
       "type": "object",
-      "description": "Change a session's mode, model, workspace, effort or judge from its next turn.",
+      "description": "Change a session's mode, model, workspace, thinking effort or judge from its next turn.",
       "properties": {
         "message": {
           "const": "session/set"
@@ -837,14 +837,14 @@
         "workspace": {
           "type": "string"
         },
-        "effort": {
+        "thinking_effort": {
           "type": "string"
         },
         "judge_model": {
           "type": "string",
           "description": "empty: the session's own model"
         },
-        "judge_effort": {
+        "judge_thinking_effort": {
           "type": "string"
         }
       },
@@ -899,7 +899,7 @@
           "items": {
             "type": "object"
           },
-          "description": "one row a job, its state in words in `said`"
+          "description": "one row a job, its state in words in `state_text`"
         }
       },
       "required": [
@@ -966,7 +966,7 @@
           "items": {
             "type": "object"
           },
-          "description": "id, by, scope, grant, what"
+          "description": "id, by, scope, grant, description"
         }
       },
       "required": [
@@ -1011,7 +1011,7 @@
     },
     "model.list": {
       "type": "object",
-      "description": "Every server the host can reach, with its models by the names a session takes, or why it lists none.",
+      "description": "Every server the server can reach, with its models by the names a session takes, or why it lists none.",
       "properties": {
         "message": {
           "const": "model/list"
@@ -1072,7 +1072,7 @@
         "api": {
           "type": "string"
         },
-        "measured": {
+        "measured_at": {
           "type": "string"
         },
         "features": {
@@ -1083,12 +1083,12 @@
         "ok"
       ]
     },
-    "model.provider.list": {
+    "model.server.list": {
       "type": "object",
-      "description": "Every model server the host knows, whether its key is there, the default model, and why a session on it couldn't start (null: it can).",
+      "description": "Every model server the server knows, whether its key is there, the default model, and why a session on it couldn't start (null: it can).",
       "properties": {
         "message": {
-          "const": "model/provider/list"
+          "const": "model/server/list"
         }
       },
       "required": [
@@ -1096,18 +1096,18 @@
       ],
       "additionalProperties": false
     },
-    "model.provider.list.reply": {
+    "model.server.list.reply": {
       "type": "object",
       "properties": {
         "ok": {
           "const": true
         },
-        "providers": {
+        "servers": {
           "type": "array",
           "items": {
             "type": "object"
           },
-          "description": "name, title, url, key, needs_key, own, shipped, context, models"
+          "description": "name, title, url, key_state, needs_key, user_added, in_catalog, context_window, models"
         },
         "default": {
           "anyOf": [
@@ -1119,7 +1119,7 @@
             }
           ]
         },
-        "ready": {
+        "not_ready_reason": {
           "anyOf": [
             {
               "type": "string"
@@ -1134,12 +1134,12 @@
         "ok"
       ]
     },
-    "model.provider.probe": {
+    "model.server.probe": {
       "type": "object",
       "description": "A server's models, for a pick list. A typed url takes the typed key or none; a name alone, its own url and stored key.",
       "properties": {
         "message": {
-          "const": "model/provider/probe"
+          "const": "model/server/probe"
         },
         "name": {
           "type": "string"
@@ -1156,7 +1156,7 @@
       ],
       "additionalProperties": false
     },
-    "model.provider.probe.reply": {
+    "model.server.probe.reply": {
       "type": "object",
       "properties": {
         "ok": {
@@ -1170,19 +1170,19 @@
           "items": {
             "type": "object"
           },
-          "description": "id, context"
+          "description": "id, context_window"
         }
       },
       "required": [
         "ok"
       ]
     },
-    "model.provider.connect": {
+    "model.server.connect": {
       "type": "object",
       "description": "A server's model tested with a call of a few tokens, then saved: the key in keys.toml, the server in models.toml; the first model connected becomes the default.",
       "properties": {
         "message": {
-          "const": "model/provider/connect"
+          "const": "model/server/connect"
         },
         "name": {
           "type": "string"
@@ -1196,7 +1196,7 @@
         "model": {
           "type": "string"
         },
-        "context": {
+        "context_window": {
           "type": "integer",
           "minimum": 1
         },
@@ -1214,7 +1214,7 @@
       ],
       "additionalProperties": false
     },
-    "model.provider.connect.reply": {
+    "model.server.connect.reply": {
       "type": "object",
       "properties": {
         "ok": {
@@ -1231,12 +1231,12 @@
         "ok"
       ]
     },
-    "model.provider.disconnect": {
+    "model.server.disconnect": {
       "type": "object",
       "description": "A server's key and the user's lines for it taken out.",
       "properties": {
         "message": {
-          "const": "model/provider/disconnect"
+          "const": "model/server/disconnect"
         },
         "name": {
           "type": "string"
@@ -1248,7 +1248,7 @@
       ],
       "additionalProperties": false
     },
-    "model.provider.disconnect.reply": {
+    "model.server.disconnect.reply": {
       "type": "object",
       "properties": {
         "ok": {
@@ -1289,7 +1289,7 @@
           "items": {
             "type": "object"
           },
-          "description": "name, group, label, default, kind, choices, least, off, shown, needs, runs_on, value"
+          "description": "name, group, label, default, kind, choices, minimum, unset_means, shown, needs, runs_on, value"
         },
         "error": {
           "anyOf": [
@@ -1308,7 +1308,7 @@
     },
     "setting.set": {
       "type": "object",
-      "description": "Write one of ZERO's settings to config.toml (a face's own table, the full screen's [cli], is the face's).",
+      "description": "Write one of ZERO's settings to config.toml (a face's own table, the full screen's [tui], is the face's).",
       "properties": {
         "message": {
           "const": "setting/set"

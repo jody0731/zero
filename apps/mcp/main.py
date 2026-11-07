@@ -1,5 +1,5 @@
 """`zero mcp serve`'s own entry: the CLI execs this file in its place (as `zero
-host` execs host/main.py), so the CLI never loads the MCP app and the MCP app
+server` execs server/main.py), so the CLI never loads the MCP app and the MCP app
 never loads the CLI.
 """
 

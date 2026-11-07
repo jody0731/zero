@@ -31,12 +31,13 @@ ACTIONS = {
     "switch_view": Action("tab", "Sessions view and back (completes a / command)",
                           "app"),
     "sessions": Action("ctrl+o", "Sessions view; in it, the archived ones", "app"),
-    "next_needing": Action("alt+down", "Next session that needs you", "app"),
-    "go_back": Action("alt+up", "The session before", "app"),
+    "next_needing_you": Action("alt+down", "Next session that needs you", "app"),
+    "previous_session": Action("alt+up", "The session before", "app"),
     "page_up": Action("pageup", "Scroll the transcript up", "session"),
     "page_down": Action("pagedown", "Scroll the transcript down", "session"),
     "to_end": Action("ctrl+end", "Go to the end and follow it", "session"),
-    "folds": Action("ctrl+t", "Open or close every command's output", "session"),
+    "toggle_folds": Action("ctrl+t", "Open or close every command's output",
+                           "session"),
     "interrupt": Action(
         "ctrl+c", "Copy the selection, else stop the turn or clear the input",
         "app",
@@ -45,8 +46,12 @@ ACTIONS = {
     "rename": Action("ctrl+r", "Rename the chosen session", "sessions"),
     "archive": Action("ctrl+a", "Archive or unarchive it", "sessions"),
     "trash": Action("delete", "Move it to the trash", "sessions"),
-    "elsewhere": Action("ctrl+n", "New session in another folder", "sessions"),
+    "new_elsewhere": Action("ctrl+n", "New session in another folder",
+                            "sessions"),
 }
+# Actions named otherwise before 0.6.2.8, read under their names now
+RENAMED = {"elsewhere": "new_elsewhere", "folds": "toggle_folds",
+           "next_needing": "next_needing_you", "go_back": "previous_session"}
 # The key bindings view's groups, in order
 PLACES = {
     "input": "Writing",
@@ -56,7 +61,7 @@ PLACES = {
 }
 # Keys the views keep for themselves: Esc goes back or cancels a capture; the
 # arrows, Home, End and Backspace move in the lists and edit the input
-KEPT = ("escape", "up", "down", "left", "right", "home", "end", "backspace")
+RESERVED_KEYS = ("escape", "up", "down", "left", "right", "home", "end", "backspace")
 # What each place's keys can't share a key with
 OVERLAPS = {
     "input": ("input", "session", "app"),
@@ -71,7 +76,7 @@ def split(keys):
     return tuple(key.strip() for key in keys.split(",") if key.strip())
 
 
-def current(overrides=None):
+def current_keys(overrides=None):
     """Each action's keys as a tuple: the user's where set, else the defaults."""
     overrides = overrides or {}
     return {
@@ -92,7 +97,7 @@ def clashes(id, key, overrides=None):
     """The other actions that `key` already does where `id` works."""
     places = OVERLAPS[ACTIONS[id].where]
     return [
-        other for other, keys in current(overrides).items()
+        other for other, keys in current_keys(overrides).items()
         if other != id and key in keys and ACTIONS[other].where in places
     ]
 
@@ -108,6 +113,6 @@ def shown(keys):
     return ", ".join(pretty(key) for key in keys)
 
 
-def first(id, overrides=None):
+def first_key(id, overrides=None):
     """The action's first key, as the views' hints name it."""
-    return pretty(current(overrides)[id][0])
+    return pretty(current_keys(overrides)[id][0])

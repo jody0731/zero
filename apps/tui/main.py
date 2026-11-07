@@ -1,6 +1,6 @@
 """The full screen's own entry: `zero`, `zero new` and `zero -r`. The command
 line (apps/cli/main.py) execs this file in its place with the words it was
-given, as it does host/main.py and apps/mcp/main.py, so the command line never
+given, as it does server/main.py and apps/mcp/main.py, so the command line never
 loads the full screen, nor the full screen the command line.
 
 Usage:
@@ -20,10 +20,10 @@ import settings  # noqa: E402
 from apps.tui import config  # noqa: E402
 from client import session_list  # noqa: E402
 from client.connection import Connection, NotRunning, ProtocolError  # noqa: E402
-from client.launcher import Hung, ensure_host  # noqa: E402
+from client.launcher import Hung, ensure_server  # noqa: E402
 from paths import Paths  # noqa: E402
 
-# The host checks a mode's name: the full screen knows no modes of its own
+# The server checks a mode's name: the full screen knows no modes of its own
 MODES_HELP = "the mode the session starts in (/mode in zero lists them)"
 
 
@@ -35,7 +35,8 @@ def parser():
     )
     parser.add_argument("new", nargs="?", choices=("new",),
                         help="a new session, this folder its workspace")
-    parser.add_argument("-r", action="store_true", help="open the session list")
+    parser.add_argument("-r", "--resume", dest="r", action="store_true",
+                        help="open the session list")
     parser.add_argument("--mode", help=MODES_HELP)
     parser.add_argument("--model", help="the model the session starts with")
     return parser
@@ -53,13 +54,13 @@ def interactive(connection, args, workspace, older):
     session, show_list = None, False
     if not args.new:
         live = connection.sessions(archived=False)
-        session, show_list = session_list.opening(workspace, greeting.get("last"),
-                                                  live)
+        session, show_list = session_list.session_to_open(
+            workspace, greeting.get("last_session"), live)
         show_list = show_list or args.r
     # Textual loads only here, once the words are known to be right
-    from apps.tui.app import terminal
+    from apps.tui.app import run_full_screen
 
-    return terminal(
+    return run_full_screen(
         connection, workspace, session=session, mode=args.mode, model=args.model,
         defaults=defaults, show_list=show_list, older=older,
     )
@@ -75,10 +76,10 @@ def main(argv=None):
         print(text, file=sys.stderr)
 
     try:
-        # The full screen's own settings under [cli], once
+        # The full screen's own settings under [tui], once
         config.move()
         connection = Connection(paths,
-                                ensure=lambda: ensure_host(paths, report=report))
+                                ensure=lambda: ensure_server(paths, report=report))
         return interactive(
             connection, args, str(Path.cwd().resolve()),
             older=lambda: any("replaced once it is idle" in n for n in notes),

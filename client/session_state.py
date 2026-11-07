@@ -14,15 +14,15 @@ from client.render import command_of
 class SessionState:
     def __init__(self, connection, session=None, mode=None, model=None,
                  workspace=None):
-        """`mode` and `model` None: the host's defaults. `workspace`: the folder
+        """`mode` and `model` None: the server's defaults. `workspace`: the folder
         a new session gets, made when the first line is sent."""
         self.connection = connection
         self.session = session
         self.mode = mode
         self.model = model
         self.workspace = workspace
-        # A new session's thinking effort; None: the host's default
-        self.effort = None
+        # A new session's thinking effort; None: the server's default
+        self.thinking_effort = None
         self.running = False
         # The open ask's `ask` record, from the log
         self.ask = None
@@ -32,7 +32,7 @@ class SessionState:
         self.since = None
         # The `retry` record of a model call that failed, until a reply
         self.retry = None
-        # The reply streaming in (the host's `draft`: step, text, reasoning,
+        # The reply streaming in (the server's `draft`: step, text, reasoning,
         # calls), until the next record replaces it
         self.draft = None
         # Lines a stop gave back, for the input
@@ -118,8 +118,8 @@ class SessionState:
                 "session": self.session, "mode": self.mode, "model": self.model,
                 "reply_to": reply_to, "workspace": self.workspace,
             }
-            if self.session is None and self.effort is not None:
-                options["effort"] = self.effort
+            if self.session is None and self.thinking_effort is not None:
+                options["thinking_effort"] = self.thinking_effort
             if follow_up:
                 options["when_busy"] = "queue"
             if choice is not None and reply_to is not None:

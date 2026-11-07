@@ -1,5 +1,5 @@
-"""The settings views, through the host's `setting/list` and `setting/set`
-messages (ZERO's) and config.py (the CLI's own [cli] table), the session in
+"""The settings views, through the server's `setting/list` and `setting/set`
+messages (ZERO's) and config.py (the full screen's own [tui] table), the session in
 view through `session/set`, and the key bindings view."""
 
 import threading
@@ -16,32 +16,34 @@ from textual.widgets import Static
 import paths
 import settings
 from apps.tui import config, controller, keybindings
-from apps.tui.connect_screen import ServersView
-from apps.tui.dialogs import CaptureView, ChoiceView, PromptView
+from apps.tui.connect_view import ServersView
+from apps.tui.dialogs import KeyCaptureView, ChoiceView, PromptView
 from apps.tui.widgets import ERRORS, Plain
 from client import session_list
 
 
 # The rows that open another view: the model servers and their keys, the key
-# bindings, and Dev
-MODELS, KEYS, DEV = "models", "keys", "dev"
-LINKS = {MODELS: "Models and keys…", KEYS: "Key bindings…", DEV: "Dev…"}
+# bindings, and Advanced
+MODELS, KEYS, ADVANCED = "models", "keys", "advanced"
+LINKS = {MODELS: "Models and keys…", KEYS: "Key bindings…",
+         ADVANCED: "Advanced…"}
 # What each view lists: the session in view's rows, then the settings of
 # these groups, then the links. The judge is a design choice, not a user's
-# knob, so it sits in Dev with the limits and the host
-PLACES = {
-    "main": (("mode", "model", "effort"), ("Default", "TUI"),
-             (MODELS, KEYS, DEV)),
-    "dev": (("judge_model", "judge_effort"), ("Judge", "Limits", "Host"), ()),
-    "model": (("model", "effort"), (), ()),
+# knob, so it sits in Advanced with the limits and the server
+VIEW_ROWS = {
+    "main": (("mode", "model", "thinking_effort"), ("Default", "TUI"),
+             (MODELS, KEYS, ADVANCED)),
+    "advanced": (("judge_model", "judge_thinking_effort"),
+                 ("Judge", "Limits", "Server"), ()),
+    "model": (("model", "thinking_effort"), (), ()),
 }
-TITLES = {"main": "Settings", "dev": "Settings · Dev",
+TITLES = {"main": "Settings", "advanced": "Settings · Advanced",
           "model": "This session's model"}
 HEADINGS = {"Judge": "The judge"}
 
 
 @dataclass(frozen=True)
-class Current:
+class SessionRow:
     """A row for the session in view: what its next turn runs with, set
     through `session/set`; `setting` says what it takes."""
 
@@ -70,8 +72,8 @@ class Scrolled:
 class SettingsView(Scrolled, Screen):
     """One of the settings views (`place`): "main", /settings (the session
     in view, new sessions' defaults, the TUI's own, and rows that open the
-    model servers, the key bindings and Dev); "dev" (the judge, for the
-    session in view and by default, the limits and the host); "model",
+    model servers, the key bindings and Advanced); "advanced" (the judge, for
+    the session in view and by default, the limits and the server); "model",
     /model (the session's model and thinking). A setting's change is written
     at once; a session's goes to its next turn."""
 
@@ -88,14 +90,14 @@ class SettingsView(Scrolled, Screen):
         self.zero = zero
         self.place = place
         self.selected = 0
-        # ZERO's settings as the host has them: name → value, each one's
+        # ZERO's settings as the server has them: name → value, each one's
         # Setting, and what is wrong with config.toml, if anything
         self.values = {}
         self.known = {s.name: s for s in settings.SETTINGS}
         self.error = None
         # What the session in view runs with from its next turn
         self.now = {}
-        # What each model honours of its API's features, as the host
+        # What each model honours of its API's features, as the server
         # measured it (model/features): model → feature → True, False or
         # None; a model asked for and not answered yet maps to {}
         self.features = {}
@@ -104,7 +106,7 @@ class SettingsView(Scrolled, Screen):
         self.lines = []
 
     def fetch(self):
-        """ZERO's settings and their values, from the host, and what the
+        """ZERO's settings and their values, from the server, and what the
         session in view runs with."""
         try:
             listed, self.error = self.zero.connection.settings()
@@ -128,11 +130,11 @@ class SettingsView(Scrolled, Screen):
             self.known[setting.name] = setting
             if setting.shown:
                 shown.append(setting)
-        current, groups, links = PLACES[self.place]
+        current, groups, links = VIEW_ROWS[self.place]
         # A session not made yet takes its judge from the defaults
         made = self.zero.client.session is not None
-        rows = [Current(self.known[name]) for name in current
-                if name in self.known and (made or self.place != "dev")]
+        rows = [SessionRow(self.known[name]) for name in current
+                if name in self.known and (made or self.place != "advanced")]
         rows += sorted(
             (s for s in [*config.SETTINGS, *shown] if s.group in groups),
             key=lambda s: groups.index(s.group),
@@ -140,7 +142,7 @@ class SettingsView(Scrolled, Screen):
         self.rows = [*rows, *links]
 
     def value(self, row):
-        if isinstance(row, Current):
+        if isinstance(row, SessionRow):
             if row.name in self.now:
                 return self.now[row.name]
             return self.values.get(row.name)
@@ -149,13 +151,13 @@ class SettingsView(Scrolled, Screen):
         return self.values[row.name]
 
     def problem(self):
-        """What is wrong with config.toml, as the CLI or the host read it."""
+        """What is wrong with config.toml, as the CLI or the server read it."""
         return self.zero.config_error or self.error
 
     def compose(self):
         title = TITLES[self.place]
         if self.place != "model":
-            title += f" · {session_list.short(str(paths.config_file()))}"
+            title += f" · {session_list.tilde_path(str(paths.config_file()))}"
         yield Plain(title, classes="view-title")
         yield VerticalScroll(Plain(id="rows"))
         yield Plain(id="preview")
@@ -176,16 +178,16 @@ class SettingsView(Scrolled, Screen):
     def runs_on(self, row):
         """The model a row's value goes to (its setting's `runs_on`, the
         session's model where that is unset), or None."""
-        setting = row.setting if isinstance(row, Current) else row
+        setting = row.setting if isinstance(row, SessionRow) else row
         if not isinstance(setting, settings.Setting) or not setting.runs_on:
             return None
-        if isinstance(row, Current):
+        if isinstance(row, SessionRow):
             return self.now.get(setting.runs_on) or self.now.get("model")
         return (self.values.get(setting.runs_on)
                 or self.values.get("model"))
 
     def measure(self):
-        """What the rows' models honour, asked of the host off the screen's
+        """What the rows' models honour, asked of the server off the screen's
         thread (a model never measured is measured then: a few calls), each
         row drawn again when its answer comes."""
         wanted = {self.runs_on(row) for row in self.rows} - {None}
@@ -200,7 +202,7 @@ class SettingsView(Scrolled, Screen):
                 try:
                     reply = self.zero.connection.features(model)
                 except ERRORS:
-                    # Nothing shown unavailable: the host couldn't say
+                    # Nothing shown unavailable: the server couldn't say
                     continue
                 self.features[model] = reply.get("features") or {}
                 try:
@@ -212,10 +214,10 @@ class SettingsView(Scrolled, Screen):
         threading.Thread(target=run, daemon=True,
                          name="model-features").start()
 
-    def unavailable(self, row, value):
+    def unavailable_note(self, row, value):
         """" (unavailable on MODEL)" when the row's model is measured not to
         honour what `value` needs; "" otherwise."""
-        setting = row.setting if isinstance(row, Current) else row
+        setting = row.setting if isinstance(row, SessionRow) else row
         feature = dict(getattr(setting, "needs", ())).get(value)
         model = self.runs_on(row)
         if feature is None or model is None:
@@ -225,8 +227,8 @@ class SettingsView(Scrolled, Screen):
         return ""
 
     def heading(self, row):
-        if isinstance(row, Current):
-            return "The judge" if self.place == "dev" else "Current session"
+        if isinstance(row, SessionRow):
+            return "The judge" if self.place == "advanced" else "Current session"
         if row in LINKS:
             return ""
         return HEADINGS.get(row.group, row.group)
@@ -234,12 +236,12 @@ class SettingsView(Scrolled, Screen):
     def label(self, row):
         if row in LINKS:
             return LINKS[row]
-        # Dev has the judge twice: the session's, then the default
-        if isinstance(row, Current):
-            if self.place == "dev":
+        # Advanced has the judge twice: the session's, then the default
+        if isinstance(row, SessionRow):
+            if self.place == "advanced":
                 return f"{row.setting.label} (this session)"
             return row.setting.label
-        if self.place == "dev" and row.group == "Judge":
+        if self.place == "advanced" and row.group == "Judge":
             return f"{row.label} (default)"
         return row.label
 
@@ -251,18 +253,18 @@ class SettingsView(Scrolled, Screen):
         if row == KEYS:
             mine = self.zero.config["keys"]
             return (f"{len(mine)} changed" if mine else "defaults"), bool(mine)
-        if row == DEV:
-            return "the judge, the limits, the host", False
-        if isinstance(row, Current):
+        if row == ADVANCED:
+            return "the judge, the limits, the server", False
+        if isinstance(row, SessionRow):
             setting, now = row.setting, self.value(row)
             # The judge's model, unset, is the session's own
             model = self.now.get("model") if row.name == "judge_model" else None
             text = controller.setting_text(setting, now, model)
-            return text + self.unavailable(row, now), False
+            return text + self.unavailable_note(row, now), False
         now = self.value(row)
         default_model = self.zero.default_model()
         text = controller.setting_text(row, now, default_model)
-        return text + self.unavailable(row, now), now != row.default
+        return text + self.unavailable_note(row, now), now != row.default
 
     def draw(self):
         self.selected = max(0, min(self.selected, len(self.rows) - 1))
@@ -301,27 +303,27 @@ class SettingsView(Scrolled, Screen):
                     "a new key, a test, remove. Enter opens them.")
         if row == KEYS:
             return "Each action's keys: Enter opens them."
-        if row == DEV:
+        if row == ADVANCED:
             return ("The judge (for this session and by default), the limits "
-                    "and the host. Enter opens them.")
-        note = controller.NOTES.get(row.name)
-        missing = self.measured_missing(row)
-        if isinstance(row, Current):
-            when = controller.WHEN["Current session"]
+                    "and the server. Enter opens them.")
+        note = controller.SETTING_NOTES.get(row.name)
+        missing = self.missing_feature_text(row)
+        if isinstance(row, SessionRow):
+            when = controller.WHEN_IT_APPLIES["Current session"]
             if row.name.startswith("judge_"):
-                when = controller.WHEN["Judge"]
+                when = controller.WHEN_IT_APPLIES["Judge"]
             lines = [when, note, missing]
             return "\n".join(line for line in lines if line)
         default = controller.setting_text(row, row.default,
                                           self.zero.default_model())
-        lines = [controller.WHEN[row.group], note, f"Default: {default}.",
+        lines = [controller.WHEN_IT_APPLIES[row.group], note, f"Default: {default}.",
                  missing]
         return "\n".join(line for line in lines if line)
 
-    def measured_missing(self, row):
+    def missing_feature_text(self, row):
         """The preview's words for a value its model doesn't honour."""
         value = self.value(row)
-        if not self.unavailable(row, value):
+        if not self.unavailable_note(row, value):
             return ""
         model = self.runs_on(row)
         return (f'{model}\'s server was measured not to honour "{value}": '
@@ -340,17 +342,17 @@ class SettingsView(Scrolled, Screen):
         if row == MODELS:
             self.app.push_screen(ServersView(self.zero))
             return
-        if row == DEV:
-            self.app.push_screen(SettingsView(self.zero, place="dev"))
+        if row == ADVANCED:
+            self.app.push_screen(SettingsView(self.zero, place="advanced"))
             return
-        if isinstance(row, Current):
+        if isinstance(row, SessionRow):
             self.change_session(row)
             return
         if self.problem():
             self.notify("config.toml can't be read: fix it first", severity="error")
             return
         if row == KEYS:
-            self.app.push_screen(KeysView(self.zero))
+            self.app.push_screen(KeyBindingsView(self.zero))
             return
         now = self.value(row)
         if row.kind in ("choice", "mode"):
@@ -367,7 +369,7 @@ class SettingsView(Scrolled, Screen):
                             unset=row.name != "model")
         else:
             shown = "" if now is None else controller.setting_text(row, now)
-            empty = row.off or controller.setting_text(row, row.default)
+            empty = row.unset_means or controller.setting_text(row, row.default)
             self.app.push_screen(
                 PromptView(f"{row.label} (empty: {empty})", shown),
                 lambda text: self.typed(row, text),
@@ -461,9 +463,9 @@ class SettingsView(Scrolled, Screen):
         self.set(row, row.default)
 
 
-class KeysView(Scrolled, Screen):
+class KeyBindingsView(Scrolled, Screen):
     """Each action's keys, grouped by where they work. Enter takes the next
-    key pressed for the chosen action (CaptureView); Del puts its default
+    key pressed for the chosen action (KeyCaptureView); Del puts its default
     back. A key one action already has where this one works is moved only
     when asked, and never from an action it would leave with none."""
 
@@ -528,7 +530,7 @@ class KeysView(Scrolled, Screen):
     def action_change(self):
         id = self.ids[self.selected]
         self.app.push_screen(
-            CaptureView(keybindings.ACTIONS[id].what),
+            KeyCaptureView(keybindings.ACTIONS[id].what),
             lambda key: self.captured(id, key),
         )
 

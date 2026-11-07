@@ -1,14 +1,14 @@
-"""Find ZERO's host, or start one: the host on demand.
+"""Find ZERO's server, or start one: the server on demand.
 
-`host/hello` with a short timeout says whether a host runs. When none does, the
+`server/hello` with a short timeout says whether a server runs. When none does, the
 client takes start.lock, says hello again (another terminal may have just
 started one) and only then starts it: as a transient systemd user unit named
-after its home (`zero-host` for ~/.zero), where the user's systemd answers,
+after its home (`zero-server` for ~/.zero), where the user's systemd answers,
 else as a detached process. It
-polls until the host answers. A host that takes the connection but never
-answers is reported with its pid, never replaced by a second one. A host with
+polls until the server answers. A server that takes the connection but never
+answers is reported with its pid, never replaced by a second one. A server with
 another build (the code changed since it started) is restarted when it is
-idle, and only said to run older code while it is busy; so is a host of
+idle, and only said to run older code while it is busy; so is a server of
 protocol 1, which names a request's message in "verb", as an installed ZERO
 runs until its first update past it.
 """
@@ -23,32 +23,39 @@ from pathlib import Path
 from client.connection import NoAnswer, NotRunning, ProtocolError, request
 from protocol import messages, version
 
-# One hello's wait; a host still starting gets as long as a start
+# One hello's wait; a server still starting gets as long as a start
 PROBE_SECONDS = 2
 START_SECONDS = 10
 POLL_SECONDS = 0.05
-# Protocol 1's hello and restart, for a host that runs it still
+# Protocol 2's hello and restart (ZERO's server was its host until 0.6.2.8),
+# then protocol 1's, for a server that runs one still
+HOST_HELLO = {"message": "host/hello"}
+HOST_RESTART = {"message": "host/stop", "force": False, "reason": "restart"}
 OLD_HELLO = {"verb": "hello"}
 OLD_RESTART = {"verb": "shutdown", "reason": "restart"}
-# The host's own entry, so a client never loads the host's code
-SCRIPT = Path(__file__).resolve().parents[1] / "host" / "main.py"
+# Their replies' fields, under the names protocol 3 gives them
+OLD_FIELDS = {"busy": "busy_with", "started": "started_at", "last": "last_session"}
+# The server's own entry, so a client never loads the server's code
+SERVER_SCRIPT = Path(__file__).resolve().parents[1] / "server" / "main.py"
 
 
 class Hung(Exception):
-    """A host holds the socket but doesn't answer."""
+    """A server holds the socket but doesn't answer."""
 
 
 def hello(paths, timeout=PROBE_SECONDS):
-    """The running host's hello, or None when no host answers the socket.
-    Raises NoAnswer for a host that took the connection and said nothing."""
-    payload = messages.request("host/hello", protocol=version.PROTOCOL)
+    """The running server's hello, or None when no server answers the socket.
+    Raises NoAnswer for a server that took the connection and said nothing."""
+    payload = messages.request("server/hello", protocol=version.PROTOCOL)
     try:
         reply = request(paths.socket, payload, timeout)
         if not reply.get("ok") and "protocol" not in reply:
-            # A protocol 1 host knows no "message"; its own hello tells
-            old = request(paths.socket, OLD_HELLO, timeout)
-            if old.get("ok"):
-                return {**old, "protocol": old.get("protocol", 1)}
+            # An older server knows no server/hello; its own hello tells
+            for old_hello, number in ((HOST_HELLO, 2), (OLD_HELLO, 1)):
+                old = request(paths.socket, old_hello, timeout)
+                if old.get("ok"):
+                    return {**renamed(old),
+                            "protocol": old.get("protocol", number)}
     except NoAnswer:
         raise
     except NotRunning:
@@ -58,8 +65,13 @@ def hello(paths, timeout=PROBE_SECONDS):
     return reply
 
 
-def host_pid(paths):
-    """The pid host.lock names, for a host that doesn't answer."""
+def renamed(reply):
+    """An older server's reply under protocol 3's names."""
+    return {OLD_FIELDS.get(name, name): value for name, value in reply.items()}
+
+
+def server_pid(paths):
+    """The pid server.lock names, for a server that doesn't answer."""
     try:
         return paths.lock.read_text().strip() or "?"
     except OSError:
@@ -67,7 +79,7 @@ def host_pid(paths):
 
 
 def busy_text(busy):
-    """'1 turn and 2 jobs are running', from busy()'s reasons."""
+    """'1 turn and 2 jobs are running', from busy_with()'s reasons."""
     parts = []
     for name, one, many in (("turns", "turn", "turns"),
                             ("queued", "queued message", "queued messages"),
@@ -83,7 +95,7 @@ def busy_text(busy):
 
 
 def probe(paths, seconds=START_SECONDS):
-    """hello, giving a host that takes connections but is still starting (its
+    """hello, giving a server that takes connections but is still starting (its
     boot repair) up to `seconds` to answer."""
     deadline = time.monotonic() + seconds
     while True:
@@ -92,77 +104,85 @@ def probe(paths, seconds=START_SECONDS):
         except NoAnswer:
             if time.monotonic() >= deadline:
                 raise Hung(
-                    f"ZERO's host (pid {host_pid(paths)}) doesn't answer; "
-                    "stop it with: zero host stop --force"
+                    f"ZERO's server (pid {server_pid(paths)}) doesn't answer; "
+                    "stop it with: zero server stop --force"
                 ) from None
 
 
-def ensure_host(paths, unit=None, command=None, popen=subprocess.Popen,
-                run=subprocess.run, systemd=None, seconds=START_SECONDS,
-                report=None):
-    """Make sure a host of this code answers. `unit`: the systemd unit's name,
+def ensure_server(paths, unit=None, command=None, popen=subprocess.Popen,
+                  run=subprocess.run, systemd=None, seconds=START_SECONDS,
+                  report=None):
+    """Make sure a server of this code answers. `unit`: the systemd unit's name,
     the home's own when None (tests pass a throwaway one). `command`: the
-    host's argv (tests: a scripted host). `systemd`: True or False to choose,
+    server's argv (tests: a scripted server). `systemd`: True or False to choose,
     None to ask the user's systemd."""
     report = report or (lambda text: print(text, file=sys.stderr))
     unit = unit or paths.unit
     reply = probe(paths, seconds)
-    if reply is not None and current(paths, reply, report, seconds):
+    if reply is not None and server_is_current(paths, reply, report, seconds):
         return reply
     paths.make()
-    with start_lock(paths, seconds):
+    with StartLock(paths, seconds):
         # Another terminal may have started one while this one waited
         reply = probe(paths, seconds)
         if reply is not None:
             return reply
-        argv = command if command is not None else [sys.executable, str(SCRIPT)]
+        argv = command if command is not None else [sys.executable, str(SERVER_SCRIPT)]
         if systemd is None:
-            systemd = systemd_answers(run)
+            systemd = systemd_usable(run)
         return start(paths, unit, argv, popen, run, systemd, seconds, report)
 
 
 def shutdown(paths, timeout=5, **fields):
-    """Ask the host to stop (`force`, `reason`: host/stop's fields): its
+    """Ask the server to stop (`force`, `reason`: server/stop's fields): its
     reply, stopping or what keeps it busy."""
-    return request(paths.socket, messages.request("host/stop", **fields), timeout)
+    reply = request(paths.socket, messages.request("server/stop", **fields), timeout)
+    if not reply.get("ok") and "unknown message" in reply.get("error", ""):
+        # A protocol 2 server stops on host/stop
+        reply = renamed(
+            request(paths.socket, {"message": "host/stop", **fields}, timeout)
+        )
+    return reply
 
 
-def current(paths, reply, report, seconds):
-    """True if the host runs this code, or is busy and stays for now; False
-    once an idle host of another build has gone, so a fresh one starts."""
+def server_is_current(paths, reply, report, seconds):
+    """True if the server runs this code, or is busy and stays for now; False
+    once an idle server of another build has gone, so a fresh one starts."""
     old = reply["protocol"] < version.PROTOCOL
-    if reply["protocol"] != version.PROTOCOL and (not old or reply.get("busy")):
+    if reply["protocol"] != version.PROTOCOL and (not old or reply.get("busy_with")):
         raise ProtocolError(
-            f"ZERO's host speaks protocol {reply['protocol']}, this zero "
+            f"ZERO's server speaks protocol {reply['protocol']}, this zero "
             f"{version.PROTOCOL}"
             + (": it is replaced once it is idle, or stop it now with "
-               "zero host stop --force" if old else
-               ": restart it with zero host stop --force")
+               "zero server stop --force" if old else
+               ": restart it with zero server stop --force")
         )
-    if reply["build"] == version.build():
+    if reply["build"] == version.build_hash():
         return True
-    if reply.get("busy"):
-        report("ZERO's host runs older code; it is replaced once it is idle.")
+    if reply.get("busy_with"):
+        report("ZERO's server runs older code; it is replaced once it is idle.")
         return True
-    if old:
+    if reply["protocol"] == 1:
         stopping = request(paths.socket, OLD_RESTART, PROBE_SECONDS)
+    elif reply["protocol"] == 2:
+        stopping = renamed(request(paths.socket, HOST_RESTART, PROBE_SECONDS))
     else:
         stopping = shutdown(paths, PROBE_SECONDS, reason="restart")
     if not stopping.get("stopping"):
         # It got busy in the meantime
-        report("ZERO's host runs older code; it is replaced once it is idle.")
+        report("ZERO's server runs older code; it is replaced once it is idle.")
         return True
-    report("ZERO's host runs older code: restarting it.")
+    report("ZERO's server runs older code: restarting it.")
     deadline = time.monotonic() + seconds
     while hello(paths) is not None:
         if time.monotonic() >= deadline:
-            raise NotRunning("ZERO's old host did not exit")
+            raise NotRunning("ZERO's old server did not exit")
         time.sleep(POLL_SECONDS)
     return False
 
 
-class start_lock:
-    """start.lock, held while a client starts a host, waited for up to
+class StartLock:
+    """start.lock, held while a client starts a server, waited for up to
     `seconds`."""
 
     def __init__(self, paths, seconds):
@@ -181,7 +201,7 @@ class start_lock:
                 if time.monotonic() >= deadline:
                     self.file.close()
                     raise NotRunning(
-                        "another zero has been starting ZERO's host for "
+                        "another zero has been starting ZERO's server for "
                         f"{self.seconds} s; try again"
                     ) from None
                 time.sleep(POLL_SECONDS)
@@ -190,7 +210,7 @@ class start_lock:
         self.file.close()
 
 
-def systemd_answers(run):
+def systemd_usable(run):
     """Whether the user's systemd can start a unit."""
     if not shutil.which("systemd-run") or not shutil.which("systemctl"):
         return False
@@ -203,16 +223,16 @@ def systemd_answers(run):
 
 
 def unit_command(paths, unit, argv):
-    """systemd-run's argv: a cgroup of its own, so a dead host's jobs die with
+    """systemd-run's argv: a cgroup of its own, so a dead server's jobs die with
     it; the client's folders passed on, since the user manager's environment,
-    not the terminal's, is what the host gets."""
+    not the terminal's, is what the server gets."""
     setenv = [f"--setenv={k}={v}" for k, v in paths.environment().items()]
-    # The host tells its own commands from the user's clients by its unit
-    # (host/peers.py)
-    setenv.append(f"--setenv=ZERO_HOST_UNIT={unit}")
+    # The server tells its own commands from the user's clients by its unit
+    # (server/peers.py)
+    setenv.append(f"--setenv=ZERO_SERVER_UNIT={unit}")
     return [
         "systemd-run", "--user", f"--unit={unit}", "--collect", "--quiet",
-        "--description=ZERO's host", "-p", "KillMode=mixed",
+        "--description=ZERO's server", "-p", "KillMode=mixed",
         f"--working-directory={paths.state}", *setenv, "--", *argv,
     ]
 
@@ -229,26 +249,26 @@ def start(paths, unit, argv, popen, run, systemd, seconds, report):
                 break
             if time.monotonic() >= deadline:
                 raise NotRunning(
-                    f"ZERO's host could not start as {unit}: "
+                    f"ZERO's server could not start as {unit}: "
                     f"{result.stderr.strip()}"
                 )
             time.sleep(0.2)
     else:
-        how = f"a detached process (log: {paths.host_log})"
+        how = f"a detached process (log: {paths.server_log})"
         try:
-            with open(paths.host_log, "ab") as output:
+            with open(paths.server_log, "ab") as output:
                 popen(argv, stdin=subprocess.DEVNULL, stdout=output,
                       stderr=subprocess.STDOUT, start_new_session=True,
                       cwd=paths.state)
         except (OSError, subprocess.SubprocessError) as error:
-            raise NotRunning(f"ZERO's host could not start: {error}") from error
+            raise NotRunning(f"ZERO's server could not start: {error}") from error
     while time.monotonic() < deadline:
         try:
             reply = hello(paths, timeout=0.5)
         except NoAnswer:
             reply = None
         if reply is not None:
-            report(f"Started ZERO's host as {how} (pid {reply['pid']}).")
+            report(f"Started ZERO's server as {how} (pid {reply['pid']}).")
             return reply
         time.sleep(POLL_SECONDS)
-    raise NotRunning(f"ZERO's host did not answer after starting as {how}")
+    raise NotRunning(f"ZERO's server did not answer after starting as {how}")

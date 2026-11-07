@@ -1,6 +1,6 @@
 """OpenAI's Chat Completions API (`POST /v1/chat/completions`), the one
 nearly every model server speaks: Ollama, llama-server, vLLM, and the
-OpenAI-shaped doors of the big providers.
+OpenAI-shaped doors of the big servers.
 
 ZERO's messages are kept in this API's shape (core/llm.py, Draft.message),
 so they go as they are. Its stream is chunks: deltas of text, reasoning and

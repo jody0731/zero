@@ -7,9 +7,9 @@ lists them. The harness writes no default of its own: the assembly hands
 each part its values from here.
 
 config.toml sits in ZERO's config folder (paths.py). Its top-level settings
-are ZERO's, with one writer, the host (the settings view sends each change
+are ZERO's, with one writer, the server (the settings view sends each change
 through it, `Config.set`); hand edits work too. A table in it is a face's own
-(the CLI's [cli]): this module skips it and keeps it as it is.
+(the full screen's [tui]): this module skips it and keeps it as it is.
 """
 
 import json
@@ -24,8 +24,8 @@ import paths
 class Setting:
     """One setting: its group and label in the settings view (/settings), what
     holds without it, and what it takes. `kind`: "choice" (one of `choices`),
-    "mode", "model", "int" (a whole number, `least` or more) or "number" (above
-    0). `off`: what None means, where a setting can be left unset. `shown`:
+    "mode", "model", "int" (a whole number, `minimum` or more) or "number" (above
+    0). `unset_means`: what None means, where a setting can be left unset. `shown`:
     False for a setting the view leaves out (config.toml may still set it).
     `needs`: (value, feature) pairs, the feature of its model's API each value
     needs (model/features.py); `runs_on`: the setting that names that model,
@@ -38,8 +38,8 @@ class Setting:
     default: object
     kind: str
     choices: tuple = ()
-    least: int = 1
-    off: str | None = None
+    minimum: int = 1
+    unset_means: str | None = None
     shown: bool = True
     needs: tuple = ()
     runs_on: str | None = None
@@ -81,7 +81,7 @@ def add(*declared, order=None):
     SHOWN[:] = [s for s in SETTINGS if s.shown]
 
 
-def limits():
+def default_limits():
     """A session's limits at their defaults: the "Limits" group, by name."""
     return {s.name: s.default for s in SETTINGS if s.group == "Limits"}
 
@@ -98,13 +98,13 @@ class SettingsError(Exception):
 
 def check(setting, value, mode=None):
     """What is wrong with `value` for `setting` (a Setting, or its name);
-    None if nothing. `mode`: the host's check of a mode's name, which raises
+    None if nothing. `mode`: the server's check of a mode's name, which raises
     ValueError; this module knows no modes of its own."""
     if not isinstance(setting, Setting):
         setting = BY_NAME[setting]
     name = setting.name
     if value is None:
-        return None if setting.off else f"{name} needs a value"
+        return None if setting.unset_means else f"{name} needs a value"
     # A bool is an int in Python, and never a count of steps or minutes
     if isinstance(value, bool):
         return f"{name} has the wrong type"
@@ -122,8 +122,8 @@ def check(setting, value, mode=None):
     if setting.kind == "int":
         if not isinstance(value, int):
             return f"{name} has the wrong type"
-        if value < setting.least:
-            return f"{name} must be {setting.least} or more"
+        if value < setting.minimum:
+            return f"{name} must be {setting.minimum} or more"
         return None
     if not isinstance(value, (int, float)):
         return f"{name} has the wrong type"
@@ -144,6 +144,7 @@ def load(path=None, mode=None):
         raise SettingsError(f"can't read {path}: {e}") from e
     data = {name: value for name, value in data.items()
             if not isinstance(value, dict)}
+    data = renamed(data)
     unknown = set(data) - set(DEFAULTS)
     if unknown:
         raise SettingsError(
@@ -154,6 +155,29 @@ def load(path=None, mode=None):
         if problem:
             raise SettingsError(f"{path}: {problem}")
     return {**DEFAULTS, **data}
+
+
+# Settings named otherwise before 0.6.2.8, still read under their old names;
+# the next save writes the new ones
+RENAMED = {
+    "effort": "thinking_effort", "judge_effort": "judge_thinking_effort",
+    "idle_minutes": "server_idle_minutes", "max_format_errors": "max_broken_replies",
+    "output_limit": "bash_output_chars", "web_chars": "web_fetch_chars",
+    "web_results": "web_search_results", "retry_base": "model_retry_seconds",
+    "step_grant": "extra_steps", "bash_timeout": "bash_foreground_seconds",
+    "judge_timeout": "judge_silence_seconds", "model_timeout": "model_silence_seconds",
+    "consent_timeout": "consent_silence_seconds",
+}
+
+
+def renamed(values):
+    """`values` under the settings' names as they are now; a new name beats
+    its old one where a file has both."""
+    out = {RENAMED.get(name, name): value for name, value in values.items()
+           if name in RENAMED}
+    out.update({name: value for name, value in values.items()
+                if name not in RENAMED})
+    return out
 
 
 def save(values, path=None):
@@ -218,9 +242,9 @@ def stamp(path):
 
 class Config:
     """config.toml as it stands, read again whenever the file changes, for
-    the host: new sessions, the idle time, the settings view. A broken edit
+    the server: new sessions, the idle time, the settings view. A broken edit
     keeps the settings it had, and `error` says what is wrong; a file broken
-    at the first read starts the host on the defaults, the error said."""
+    at the first read starts the server on the defaults, the error said."""
 
     def __init__(self, path=None, mode=None):
         self.path = Path(path) if path else paths.config_file()
@@ -232,7 +256,7 @@ class Config:
         except SettingsError as e:
             self.values = dict(DEFAULTS)
             self.error = str(e)
-            print(f"ZERO's host: {e}; starting on the defaults", flush=True)
+            print(f"ZERO's server: {e}; starting on the defaults", flush=True)
 
     def __call__(self):
         now = stamp(self.path)
@@ -243,12 +267,12 @@ class Config:
                 self.error = None
             except SettingsError as e:
                 self.error = str(e)
-                print(f"ZERO's host: {e}; keeping the settings it had", flush=True)
+                print(f"ZERO's server: {e}; keeping the settings it had", flush=True)
         return self.values
 
     def listing(self):
         """Every setting with its value, for the settings view: its name,
-        group, label, default, kind, choices, least, off, shown, needs and
+        group, label, default, kind, choices, minimum, unset_means, shown, needs and
         runs_on."""
         values = self()
         return [{**asdict(s), "choices": list(s.choices),

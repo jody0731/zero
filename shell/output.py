@@ -1,6 +1,6 @@
 """Command output as the model reads it: the start and the end kept, the middle
 cut, under a header saying how much there was (a job's look clips with
-jobs/process.py's `clip`). The limit is the session's output_limit, passed in.
+jobs/process.py's `clip`). The limit is the session's bash_output_chars, passed in.
 """
 
 import codecs

@@ -1,7 +1,7 @@
 """Who answers when a rule says "ask": one approver per mode, on the `approve` hook.
 
 The loop calls `approve` only after every check passed, and these act only on
-calls the rules plugin marked "ask"; anything else runs. Modes (modes.py),
+calls the rules hook marked "ask"; anything else runs. Modes (modes.py),
 least to most permissive: readOnly (Refuse), default (Approval, or Refuse with
 nobody there), auto and auto+ (the judge, judge/), bypassPermissions
 (none: no rules are loaded). auto+ has no rules either: Permissions marks each
@@ -9,8 +9,8 @@ call that needs permission, and the judge answers.
 """
 
 from core import tools
-from core.asking import DECLINED, PARK, asks, put_to_user
-from core.hooks import Deny, Park, Plugin
+from core.asking import DECLINED, PARK, ask_of, put_to_user
+from core.hooks import Deny, Park, Hook
 
 REFUSED = "Not run: a rule says to ask first ({reason}), and nobody is here to answer."
 READ_ONLY = (
@@ -29,7 +29,7 @@ def ask_user(call, why):
     return answer in ("y", "yes")
 
 
-class Refuse(Plugin):
+class Refuse(Hook):
     """readOnly, or default with nobody there: every ask is a no, so a run gives
     the same answer every time."""
 
@@ -38,7 +38,7 @@ class Refuse(Plugin):
         self.text = text
 
     def approve(self, call):
-        hit = asks(call)
+        hit = ask_of(call)
         if hit:
             return Deny(self.text.format(reason=hit["reason"]))
 
@@ -48,7 +48,7 @@ class Refuse(Plugin):
 NEEDS_PERMISSION = "the call needs permission"
 
 
-class Permissions(Plugin):
+class PermissionAsks(Hook):
     """auto+: every call that needs permission (core/tools.py,
     needs_permission) is marked to ask, as a rule would mark it."""
 
@@ -60,14 +60,14 @@ class Permissions(Plugin):
         return None
 
 
-class Approval(Plugin):
+class UserApproval(Hook):
     """default: the user answers y/n."""
 
     def __init__(self, ask=ask_user):
         self._ask = ask
 
     def approve(self, call):
-        hit = asks(call)
+        hit = ask_of(call)
         if not hit:
             return None
         if self._ask is PARK:

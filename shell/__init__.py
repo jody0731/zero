@@ -9,8 +9,8 @@ line as the simple commands it runs (the grants' prefixes).
 from settings import Setting
 
 SETTINGS = (
-    Setting("bash_timeout", "Limits",
+    Setting("bash_foreground_seconds", "Limits",
             "Seconds before a command moves to the background", 30, "number"),
-    Setting("output_limit", "Limits", "Characters kept of a command's output",
-            4000, "int", least=100),
+    Setting("bash_output_chars", "Limits", "Characters kept of a command's output",
+            4000, "int", minimum=100),
 )

@@ -1,32 +1,33 @@
-"""What a component adds to the host: its part (jobs/host.py,
-permissions/host.py).
+"""What a component adds to the server: its service (jobs/service.py,
+permissions/service.py).
 
-The assembly makes the parts and host/main.py hands them to the runtime, which
-attaches each one, so the kernel names no component. A part may bring a table
+The assembly makes the services and server/main.py hands them to the runtime, which
+attaches each one, so the kernel names no component. A service may bring a table
 in the one database, messages (described in protocol/messages.py; those
 that only look named in `looking`), something to start and stop with the
-host, what keeps the host up, a session's share of it, and the reply step. Every hook does nothing until a part says otherwise, as core's
-plugins do. Refused is the host's no, from the kernel or a part.
+server, what keeps the server up, a session's share of it, and the reply
+step. Every hook does nothing until a service says otherwise, as core's
+hooks do. Refused is the server's no, from the kernel or a service.
 """
 
 
 class Refused(Exception):
-    """A request the host won't take; the reason goes back to its sender."""
+    """A request the server won't take; the reason goes back to its sender."""
 
 
-class Part:
-    # The part's name: the runtime's `parts` key
+class Service:
+    # The service's name: the runtime's `services` key
     name = ""
     # SQL creating its tables, run when the store opens
     schema = ""
     # Its tables with a `session` column: a deleted session's rows go too
     tables = ()
     # Its messages that only look, which ZERO's own commands may send too
-    # (host/peers.py)
-    looking = ()
+    # (server/peers.py)
+    looking_messages = ()
 
     def attach(self, runtime):
-        """The runtime it is part of, once its store is open."""
+        """The runtime it is service of, once its store is open."""
         self.runtime = runtime
 
     def messages(self):
@@ -40,12 +41,12 @@ class Part:
     def shutdown(self):
         """A clean stop, once running turns had their time."""
 
-    def busy(self):
-        """What of it keeps the host up: {reason: [ids]}, empty for nothing."""
+    def busy_with(self):
+        """What of it keeps the server up: {reason: [ids]}, empty for nothing."""
         return {}
 
-    def give(self, sid, session):
-        """A harness the host built for this session."""
+    def session_built(self, sid, session):
+        """A harness the server built for this session."""
 
     def refuse_delete(self, sid):
         """Why the session can't be deleted now, or None."""

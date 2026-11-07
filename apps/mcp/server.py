@@ -22,7 +22,7 @@ from typing import Any
 from pathlib import Path
 
 from client.connection import Connection, NotRunning, ProtocolError
-from client.launcher import ensure_host
+from client.launcher import ensure_server
 from client.result import CHOICES, Result, latest_turn
 from paths import Paths
 
@@ -31,7 +31,7 @@ SOURCE = "mcp"
 ERRORS = (ValueError, LookupError, ProtocolError, NotRunning)
 # How long zero_wait waits by default, and at most
 WAIT_SECONDS = 300
-MOST_SECONDS = 3600
+MAX_WAIT_SECONDS = 3600
 
 INSTRUCTIONS = (
     "Z.E.R.O. is a general purpose agent on this machine with its own tools "
@@ -46,7 +46,7 @@ INSTRUCTIONS = (
 )
 
 
-class Worker:
+class ZeroTools:
     """The four tools as plain methods over a Connection, for any face."""
 
     def __init__(self, connection):
@@ -73,7 +73,7 @@ class Worker:
 
     def wait(self, session, seconds=WAIT_SECONDS):
         sid = self.session(session)["id"]
-        seconds = max(1, min(int(seconds), MOST_SECONDS))
+        seconds = max(1, min(int(seconds), MAX_WAIT_SECONDS))
         records, _ = self.connection.history(sid, limit=None)
         result = Result(sid)
         stream = self.connection.watch(sid, after=latest_turn(records))
@@ -92,7 +92,7 @@ class Worker:
         threading.Thread(target=read, daemon=True).start()
         done.wait(seconds)
         stream.close()
-        return result.object()
+        return result.as_json()
 
     def reply(self, session, text=None, choice=None):
         info = self.session(session)
@@ -108,14 +108,14 @@ class Worker:
             reply_to=None if ask is None else ask["id"], choice=choice,
         )
         return {"ok": True, "session": info["id"],
-                "disposition": sent.get("disposition")}
+                "handled_as": sent.get("handled_as")}
 
     def stop(self, session):
         reply = self.connection.stop(self.session(session)["id"])
         return {"ok": True, "stopped": reply.get("stopped", False)}
 
 
-def said(work):
+def reply_or_error(work):
     """`work()`'s reply, or its error as the tool's (mcp's ToolError)."""
     from mcp.server.mcpserver.exceptions import ToolError
 
@@ -140,7 +140,7 @@ def server(worker):
     ))
     def zero_start(task: str, workspace: str, mode: str | None = None,
                    model: str | None = None) -> dict[str, Any]:
-        return said(lambda: worker.start(task, workspace, mode, model))
+        return reply_or_error(lambda: worker.start(task, workspace, mode, model))
 
     @mcp.tool(description=(
         "Wait for a ZERO session to settle, up to `seconds` (300; 3600 at "
@@ -149,7 +149,7 @@ def server(worker):
         "out), answer, ask, tokens and seconds."
     ))
     def zero_wait(session: str, seconds: int = WAIT_SECONDS) -> dict[str, Any]:
-        return said(lambda: worker.wait(session, seconds))
+        return reply_or_error(lambda: worker.wait(session, seconds))
 
     @mcp.tool(description=(
         "Answer the question waiting in a ZERO session, in words (`text`) or "
@@ -159,11 +159,11 @@ def server(worker):
     ))
     def zero_reply(session: str, text: str | None = None,
                    choice: str | None = None) -> dict[str, Any]:
-        return said(lambda: worker.reply(session, text, choice))
+        return reply_or_error(lambda: worker.reply(session, text, choice))
 
     @mcp.tool(description="Stop a ZERO session's running turn.")
     def zero_stop(session: str) -> dict[str, Any]:
-        return said(lambda: worker.stop(session))
+        return reply_or_error(lambda: worker.stop(session))
 
     return mcp
 
@@ -172,7 +172,7 @@ def serve():
     """`zero mcp serve` (main.py): serve on stdio until the caller closes it."""
     paths = Paths()
     # What the launcher reports goes to stderr: stdout is the protocol's
-    connection = Connection(paths, ensure=lambda: ensure_host(paths),
+    connection = Connection(paths, ensure=lambda: ensure_server(paths),
                             source=SOURCE)
-    server(Worker(connection)).run("stdio")
+    server(ZeroTools(connection)).run("stdio")
     return 0

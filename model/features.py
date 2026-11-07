@@ -13,7 +13,7 @@ with the API they were measured on: a server switched to another API is
 measured again. A model never measured is taken to honour all of its API's
 features, so ZERO sends the standard field: unmeasured is never patched
 around. Measured when a face asks for a model's features and none are kept,
-and on its "Test" (model/host.py, `model/features`).
+and on its "Test" (model/service.py, `model/features`).
 """
 
 import json
@@ -24,7 +24,7 @@ import openai
 
 import paths
 from core.llm import complete
-from model import EFFORT_FEATURES
+from model import THINKING_EFFORT_FEATURES
 
 # Each feature: what it is, in words, as the screens say it
 FEATURES = {
@@ -34,7 +34,7 @@ FEATURES = {
     "json_mode": "JSON mode",
 }
 # Output tokens a test may take: enough for a thinking model's short thought
-OUTPUT = 1024
+OUTPUT_TOKENS = 1024
 # A sum a model thinks about when it thinks at all
 SUM = [{"role": "user", "content": "What is 23 times 17?"}]
 # A greeting the schema below never fits unless the server holds the reply
@@ -62,15 +62,15 @@ class FeatureError(Exception):
     is kept, so it is measured again next time."""
 
 
-def for_effort(effort):
+def for_thinking_effort(effort):
     """The feature a thinking effort needs; None for none sent."""
-    return EFFORT_FEATURES.get(effort)
+    return THINKING_EFFORT_FEATURES.get(effort)
 
 
-def effort_sent(model, api, effort):
+def thinking_effort_sent(model, api, effort):
     """The effort to send: the one chosen, unless the model is measured not
     to honour it (then none: the chosen one is kept, not sent)."""
-    if honoured(model, api, for_effort(effort)) is False:
+    if honoured(model, api, for_thinking_effort(effort)) is False:
         return None
     return effort
 
@@ -91,7 +91,8 @@ CACHE = {}
 
 
 def records():
-    """Every model's record: model → {"api", "measured", "features"}."""
+    """Every model's record: model → {"api", "measured_at", "features"}; a record
+    kept before 0.6.2.8 says `measured`."""
     path = Path(paths.model_features_file())
     try:
         info = path.stat()
@@ -100,11 +101,22 @@ def records():
         return {}
     if CACHE.get("stamp") != stamp:
         try:
-            CACHE["records"] = json.loads(path.read_text())
+            CACHE["records"] = {
+                model: renamed(found)
+                for model, found in json.loads(path.read_text()).items()
+            }
         except (OSError, ValueError):
             CACHE["records"] = {}
         CACHE["stamp"] = stamp
     return CACHE["records"]
+
+
+def renamed(found):
+    """A record under today's names."""
+    if isinstance(found, dict) and "measured" in found:
+        found = {**found, "measured_at": found.get("measured_at", found["measured"])}
+        del found["measured"]
+    return found
 
 
 def record(model, api):
@@ -143,7 +155,7 @@ def measure(model, api, client, server_model, timeout):
 
     def ask(messages, **standard):
         return complete(api, client, server_model, messages, silence=timeout,
-                        max_output_tokens=OUTPUT, **standard)
+                        max_output_tokens=OUTPUT_TOKENS, **standard)
 
     found = {}
 
@@ -181,14 +193,14 @@ def measure(model, api, client, server_model, timeout):
         ask(JSON_GREETING, json_mode=True, **quiet).content) is not None)
     row = {
         "api": api.NAME,
-        "measured": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "features": found,
     }
-    keep(model, row)
+    save_record(model, row)
     return row
 
 
-def keep(model, row):
+def save_record(model, row):
     """The record written whole, through a file beside it."""
     path = Path(paths.model_features_file())
     path.parent.mkdir(parents=True, exist_ok=True)

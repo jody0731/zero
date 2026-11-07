@@ -15,7 +15,7 @@ class SessionView(Screen):
     BINDINGS = [
         Binding("pageup", "page(-1)", show=False, id="page_up"),
         Binding("pagedown", "page(1)", show=False, id="page_down"),
-        Binding("ctrl+t", "folds", show=False, id="folds"),
+        Binding("ctrl+t", "toggle_folds", show=False, id="toggle_folds"),
         Binding("ctrl+end", "to_end", show=False, priority=True, id="to_end"),
         # While a / list shows: choose in it, complete the chosen one
         Binding("up", "choose(-1)", show=False, priority=True),
@@ -88,7 +88,7 @@ class SessionView(Screen):
             yield MessageBox(id="message", placeholder=placeholder(self.app.keys))
             yield Plain(id="status")
 
-    def action_folds(self):
+    def action_toggle_folds(self):
         self.query_one(Transcript).toggle_folds()
 
     def action_to_end(self):

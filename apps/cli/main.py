@@ -1,5 +1,5 @@
 """ZERO's command line: the plain commands, and the words that start the full
-screen, `zero mcp serve` and the host, each an entry of its own.
+screen, `zero mcp serve` and the server, each an entry of its own.
 
 Usage:
     zero                     open this folder's latest session (at /: the last
@@ -13,10 +13,10 @@ Usage:
     zero session|job|grant|model|setting ...
                              the plain commands, one for each of the
                              protocol's messages (commands.py)
-    zero host status         whether the host runs, and what keeps it busy
-                             (zero host hello the same; --json its reply)
-    zero host stop [--force] stop it (asked first if busy)
-    zero host [--model NAME] run the host in this terminal
+    zero server status         whether the server runs, and what keeps it busy
+                             (zero server hello the same; --json its reply)
+    zero server stop [--force] stop it (asked first if busy)
+    zero server [--model NAME] run the server in this terminal
     zero mcp serve           ZERO as an MCP server on stdio, for other agents
     zero install [--bin DIR] put the zero command on the PATH (~/.local/bin)
     zero uninstall           remove the command
@@ -31,10 +31,10 @@ gives back what it hadn't taken, Ctrl+D leaves; / lists the slash commands,
 /help the keys. An ask is a box in place of the input: answer it in your own
 words.
 
-Every turn runs in the host, and every command reaches it through its socket.
-A command starts the host when none answers: a transient systemd user unit,
-zero-host, or a detached process where there is no systemd. Nothing starts at
-login, and the host leaves after its idle minutes with no turn, job, queued
+Every turn runs in the server, and every command reaches it through its socket.
+A command starts the server when none answers: a transient systemd user unit,
+zero-server, or a detached process where there is no systemd. Nothing starts at
+login, and the server leaves after its idle minutes with no turn, job, queued
 message or client. A session's workspace is a folder, / for the whole machine;
 its commands run there, read-only in the sandbox until file tools come.
 Background jobs outlive their turn and the terminal; their session is told.
@@ -54,8 +54,8 @@ use), config.toml (what /settings sets: the theme, new sessions' mode and
 models, the limits, the idle time, the keys), keys.toml (API keys),
 models.toml (the model servers you added) and permissions.toml (what you saved
 from an ask). ~/.zero/state/ holds state.sqlite, sessions/, locks/, jobs/ (each
-job's output) and host.log (a detached host's output). ~/.zero/run/ holds the
-socket (zero.sock) and the locks (host.lock, start.lock). Install writes
+job's output) and server.log (a detached server's output). ~/.zero/run/ holds the
+socket (zero.sock) and the locks (server.lock, start.lock). Install writes
 ~/.local/bin/zero. ZERO's code is wherever it was cloned (install.sh makes its
 .venv there); an update changes the code, never the home.
 """
@@ -78,14 +78,14 @@ if __name__ == "__main__":
 from apps.cli import commands, update  # noqa: E402
 # The readers live with the commands; tests and the evals reach them here
 from apps.cli.commands import (  # noqa: E402, F401
-    ending, find, history_text, list_sessions, print_turn, read_session, show,
+    ending, match_session, history_text, list_sessions, print_turn, read_session, show,
 )
 from client import launcher  # noqa: E402
 from client.connection import (  # noqa: E402
     Connection, NoAnswer, NotRunning, ProtocolError,
 )
 from client.launcher import (  # noqa: E402
-    Hung, busy_text, ensure_host, hello, host_pid,
+    Hung, busy_text, ensure_server, hello, server_pid,
 )
 from paths import Paths  # noqa: E402
 
@@ -129,57 +129,57 @@ def uninstall():
     print(f"Removed {launcher}. ZERO's home stays in {Paths().home}.")
 
 
-def host_status(paths, as_json=False):
-    """`zero host hello` (and `status`): whether the host runs, never
+def server_status(paths, as_json=False):
+    """`zero server hello` (and `status`): whether the server runs, never
     starting one; `as_json`, its hello as one object."""
     try:
         reply = hello(paths)
     except NoAnswer:
         reply = None
-        said = (f"ZERO's host (pid {host_pid(paths)}) doesn't answer; stop it "
-                "with: zero host stop --force")
+        said = (f"ZERO's server (pid {server_pid(paths)}) doesn't answer; stop it "
+                "with: zero server stop --force")
     else:
-        said = "ZERO's host isn't running."
+        said = "ZERO's server isn't running."
     if reply is None:
         print(json.dumps({"ok": False, "error": said}) if as_json else said)
         return 1
     if as_json:
         print(json.dumps(reply, ensure_ascii=False))
         return 0
-    started = datetime.fromtimestamp(reply["started"]).astimezone()
-    print(f"ZERO's host is running (pid {reply['pid']}, since {started:%H:%M}, "
-          f"build {reply['build']}): {busy_text(reply['busy'])}.")
+    started = datetime.fromtimestamp(reply["started_at"]).astimezone()
+    print(f"ZERO's server is running (pid {reply['pid']}, since {started:%H:%M}, "
+          f"build {reply['build']}): {busy_text(reply['busy_with'])}.")
     return 0
 
 
-def host_stop(paths, force=False, confirm=None, seconds=20, as_json=False):
-    """Stop the host cleanly, asking first while anything runs. `force`: for a
-    host that doesn't answer, SIGTERM and then SIGKILL. `as_json`: one
-    host/stop, its reply printed, nothing asked."""
+def server_stop(paths, force=False, confirm=None, seconds=20, as_json=False):
+    """Stop the server cleanly, asking first while anything runs. `force`: for a
+    server that doesn't answer, SIGTERM and then SIGKILL. `as_json`: one
+    server/stop, its reply printed, nothing asked."""
     if force:
-        return kill_host(paths)
+        return kill_server(paths)
     if as_json:
         try:
             reply = launcher.shutdown(paths)
         except NotRunning:
-            reply = {"ok": False, "error": "ZERO's host isn't running."}
+            reply = {"ok": False, "error": "ZERO's server isn't running."}
         print(json.dumps(reply, ensure_ascii=False))
         return 0 if reply.get("stopping") else 1
     try:
         reply = launcher.shutdown(paths)
     except NoAnswer:
-        print(f"ZERO's host (pid {host_pid(paths)}) doesn't answer; stop it with: "
-              "zero host stop --force")
+        print(f"ZERO's server (pid {server_pid(paths)}) doesn't answer; stop it with: "
+              "zero server stop --force")
         return 1
     except NotRunning:
-        print("ZERO's host isn't running.")
+        print("ZERO's server isn't running.")
         return 0
     if not reply.get("ok"):
         raise ProtocolError(reply.get("error", "shutdown refused"))
     cut = not reply["stopping"]
     if cut:
         confirm = confirm or ask_yes
-        if not confirm(f"{busy_text(reply['busy'])}: stop them? [y/N] "):
+        if not confirm(f"{busy_text(reply['busy_with'])}: stop them? [y/N] "):
             print("Left running.")
             return 1
         launcher.shutdown(paths, force=True)
@@ -187,14 +187,14 @@ def host_stop(paths, force=False, confirm=None, seconds=20, as_json=False):
     while time.monotonic() < deadline:
         try:
             if hello(paths, timeout=0.5) is None:
-                print("Stopped ZERO's host." + (
+                print("Stopped ZERO's server." + (
                     " What it cut off resumes at the next start." if cut else ""
                 ))
                 return 0
         except NoAnswer:
             pass
         time.sleep(0.1)
-    print("ZERO's host is still stopping; if it hangs: zero host stop --force")
+    print("ZERO's server is still stopping; if it hangs: zero server stop --force")
     return 1
 
 
@@ -207,36 +207,36 @@ def ask_yes(question):
         return False
 
 
-def kill_host(paths, grace=10):
+def kill_server(paths, grace=10):
     """SIGTERM, then SIGKILL after `grace` seconds (OpenCode's)."""
-    pid = host_pid(paths)
+    pid = server_pid(paths)
     if not pid.isdigit():
-        print("ZERO's host isn't running.")
+        print("ZERO's server isn't running.")
         return 0
     pid = int(pid)
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        print("ZERO's host isn't running.")
+        print("ZERO's server isn't running.")
         return 0
     deadline = time.monotonic() + grace
     while time.monotonic() < deadline:
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
-            print(f"Stopped ZERO's host (pid {pid}).")
+            print(f"Stopped ZERO's server (pid {pid}).")
             return 0
         time.sleep(0.1)
     os.kill(pid, signal.SIGKILL)
-    print(f"Killed ZERO's host (pid {pid}); what it cut off resumes at the next "
+    print(f"Killed ZERO's server (pid {pid}); what it cut off resumes at the next "
           "start.")
     return 0
 
 
-def run_host(model=None):
-    """The host in this terminal: host/main.py in this process's place, so
-    this command never loads the host's code."""
-    argv = [sys.executable, str(launcher.SCRIPT)]
+def run_server(model=None):
+    """The server in this terminal: server/main.py in this process's place, so
+    this command never loads the server's code."""
+    argv = [sys.executable, str(launcher.SERVER_SCRIPT)]
     argv += ["--model", model] if model else []
     os.execv(sys.executable, argv)
 
@@ -260,17 +260,17 @@ def run_mcp():
 
 COMMANDS = ("zero", "zero new", "zero -r", "zero -p TEXT", "zero session …",
             "zero job …", "zero grant …", "zero model …", "zero setting …",
-            "zero host hello|stop|status|run", "zero mcp serve",
+            "zero server hello|stop|status|run", "zero mcp serve",
             "zero install|uninstall", "zero update")
-OWN = ("host", "mcp", "install", "uninstall", "update")
+OWN_COMMANDS = ("server", "mcp", "install", "uninstall", "update")
 # The full screen's word; its flags are its own (apps/tui/main.py)
-TUI_WORDS = ("new",)
+TUI_COMMANDS = ("new",)
 
 
 def parser_for(argv):
-    """(parser, args): `args.command` is one of OWN, "family" (commands.py's
+    """(parser, args): `args.command` is one of OWN_COMMANDS, "family" (commands.py's
     families), "tui" (`zero new`) or None (a bare `zero`, `-r` or `-p`)."""
-    if argv and argv[0] in TUI_WORDS:
+    if argv and argv[0] in TUI_COMMANDS:
         parser = argparse.ArgumentParser(prog="zero")
         args = argparse.Namespace(command="tui", p=None, words=[])
         return parser, args
@@ -279,15 +279,15 @@ def parser_for(argv):
         args = parser.parse_args(argv)
         args.command = "family"
         return parser, args
-    if argv and argv[0] in OWN:
+    if argv and argv[0] in OWN_COMMANDS:
         parser = argparse.ArgumentParser(prog=f"zero {argv[0]}")
-        if argv[0] == "host":
+        if argv[0] == "server":
             parser.add_argument("action", nargs="?", default="run",
                                 choices=("run", "hello", "status", "stop"))
             parser.add_argument("--model", help="run: new sessions' default model")
             parser.add_argument(
                 "--force", action="store_true",
-                help="stop: SIGTERM, then SIGKILL, for a host that hangs",
+                help="stop: SIGTERM, then SIGKILL, for a server that hangs",
             )
             parser.add_argument("--json", action="store_true",
                                 help="hello, status, stop: the reply as one "
@@ -308,8 +308,9 @@ def parser_for(argv):
         description="Z.E.R.O., a general purpose agent. Commands: "
         + ", ".join(COMMANDS),
     )
-    parser.add_argument("-r", action="store_true", help="open the session list")
-    parser.add_argument("-p", metavar="TEXT",
+    parser.add_argument("-r", "--resume", dest="r", action="store_true",
+                        help="open the session list")
+    parser.add_argument("-p", "--print", dest="p", metavar="TEXT",
                         help="zero session send TEXT: send, wait until the "
                              "session settles, print the answer (for scripts); "
                              "- reads stdin")
@@ -327,7 +328,7 @@ def argv_of(argv):
 def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
          systemd=None):
     """`start_command`, `start_popen`, `unit` and `systemd` are for tests: the
-    host's argv, how a detached one is spawned, a throwaway unit name, and
+    server's argv, how a detached one is spawned, a throwaway unit name, and
     whether to use systemd (None: ask it)."""
     parser, args = parser_for(argv_of(argv))
     if args.command is None and args.words:
@@ -354,14 +355,14 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
                "report": lambda text: print(text, file=sys.stderr)}
     if unit is not None:
         options["unit"] = unit
-    connection = Connection(paths, ensure=lambda: ensure_host(paths, **options))
+    connection = Connection(paths, ensure=lambda: ensure_server(paths, **options))
     try:
-        if args.command == "host":
+        if args.command == "server":
             if args.action in ("hello", "status"):
-                return host_status(paths, args.json)
+                return server_status(paths, args.json)
             if args.action == "stop":
-                return host_stop(paths, force=args.force, as_json=args.json)
-            run_host(args.model)
+                return server_stop(paths, force=args.force, as_json=args.json)
+            run_server(args.model)
         elif args.command == "family":
             return commands.run(argv_of(argv), connection)
         else:

@@ -1,9 +1,9 @@
 """The file tools: read with line ranges, write, exact-string edit.
 
-Their disk work runs in helper.py through the session's own sandbox,
+Their disk work runs in sandboxed_io.py through the session's own sandbox,
 as bash's commands do, so the walls are the same ones (Codex runs apply_patch
 this way): no second set of path checks. Where the mode has no sandbox, or a
-call's ask to leave it was approved, the helper runs bare, as the user. Each
+call's ask to leave it was approved, sandboxed_io runs bare, as the user. Each
 call notes the content's hash in its record (seen.py); no bytes are
 kept: undo isn't the harness's. The stale check: `write` and `edit` change no
 file that changed since this session's tools last read or wrote it, and
@@ -19,33 +19,33 @@ import sys
 from pathlib import Path
 
 from core.tools import Grant, tool
-from files import helper as filehelper
-from sandbox.sandbox import NOT_OUTSIDE, WALL, leaves
+from files import sandboxed_io
+from sandbox.sandbox import NOT_OUTSIDE, WALL, outside_crossing
 
 # Lines a read returns at most, and where it starts cutting a long line
-LINE_CAP = 2000
-LONG_LINE = 2000
+MAX_LINES = 2000
+LONG_LINE_CHARS = 2000
 # Files bigger than this are left to commands
-SIZE_CAP = 10 << 20
+MAX_FILE_BYTES = 10 << 20
 # A NUL byte in this much of a file's start makes it binary
-BINARY_PROBE = 8192
+BINARY_PROBE_BYTES = 8192
 HELPER_SECONDS = 30
-HELPER = Path(filehelper.__file__).read_text()
+SANDBOXED_IO_SOURCE = Path(sandboxed_io.__file__).read_text()
 # The system's own interpreter, not the venv's: the sandbox may hide the venv
-# (the evals hide the whole repository); the helper needs only the stdlib
+# (the evals hide the whole repository); sandboxed_io needs only the stdlib
 PYTHON = os.path.realpath(sys.executable)
 WALL_ERRORS = (errno.EROFS, errno.EACCES, errno.EPERM)
 
 
-class HelperError(Exception):
-    """The helper couldn't run, or said nothing readable."""
+class SandboxedIOError(Exception):
+    """sandboxed_io couldn't run, or said nothing readable."""
 
 
-def run_helper(box, request):
-    """One request to the helper, through `box` (a Sandbox, Unsandboxed or
+def run_sandboxed_io(box, request):
+    """One request to sandboxed_io, through `box` (a Sandbox, Unsandboxed or
     Outside). The sandbox raises rather than hand back a bare command."""
     done = subprocess.run(
-        box.command([PYTHON, "-I", "-c", HELPER]),
+        box.command([PYTHON, "-I", "-c", SANDBOXED_IO_SOURCE]),
         input=json.dumps(request),
         capture_output=True,
         text=True,
@@ -57,7 +57,7 @@ def run_helper(box, request):
         return json.loads(done.stdout)
     except json.JSONDecodeError:
         tail = done.stderr.strip()[-300:] or f"exit code {done.returncode}"
-        raise HelperError(f"the file helper failed: {tail}") from None
+        raise SandboxedIOError(f"the file helper failed: {tail}") from None
 
 
 def pick_box(sandbox, outside, outside_sandbox):
@@ -73,9 +73,9 @@ def pick_box(sandbox, outside, outside_sandbox):
 
 
 def real_path(box, path):
-    """Where a path the helper saw is on the machine: the same path, as the
+    """Where a path sandboxed_io saw is on the machine: the same path, as the
     sandbox binds the workspace and the scratch folder at their own; None
-    for one in the scratch folder, kept only until the host restarts, which
+    for one in the scratch folder, kept only until the server restarts, which
     the restart note doesn't look at."""
     inside = Path(path)
     if not box.sandboxed or inside.is_relative_to(box.workspace):
@@ -85,8 +85,8 @@ def real_path(box, path):
     return path
 
 
-def failed(box, answer, verb, path):
-    """A helper's OSError, as the model reads it; the sandbox's walls named
+def failure_text(box, answer, verb, path):
+    """sandboxed_io's OSError, as the model reads it; the sandbox's walls named
     when they are what stopped it."""
     text = f"Not {verb}: {path}: {answer['error']}."
     if box.sandboxed and answer.get("errno") in WALL_ERRORS:
@@ -94,7 +94,7 @@ def failed(box, answer, verb, path):
     return text
 
 
-def not_a_file(answer, verb, path):
+def not_a_file_text(answer, verb, path):
     found = answer["kind"]
     if found == "missing":
         return f"Not {verb}: {path} doesn't exist."
@@ -102,7 +102,7 @@ def not_a_file(answer, verb, path):
         return f"Not {verb}: {path} is a directory."
     if found == "too_big":
         size = answer["size"] / (1 << 20)
-        most = SIZE_CAP >> 20
+        most = MAX_FILE_BYTES >> 20
         return (
             f"Not {verb}: {path} is {size:.0f} MB; the file tools take {most} MB "
             "at most."
@@ -123,13 +123,13 @@ def note(text, extra):
 
 
 # How much of a write's content or an edit's strings an ask and the judge see
-SHOWN = 2000
+SHOWN_CHARS = 2000
 
 
 def clipped(text):
-    if len(text) <= SHOWN:
+    if len(text) <= SHOWN_CHARS:
         return text
-    return f"{text[:SHOWN]}… [{len(text) - SHOWN:,} more characters]"
+    return f"{text[:SHOWN_CHARS]}… [{len(text) - SHOWN_CHARS:,} more characters]"
 
 
 def read_summary(args):
@@ -159,7 +159,7 @@ def read_describe(limits):
     return (
         "Read a text file. Each line comes as its number, an arrow and the "
         f"line (12→text); the number and arrow aren't part of the file. At "
-        f"most {LINE_CAP} lines and {most} a call; `offset` (the first line, "
+        f"most {MAX_LINES} lines and {most} a call; `offset` (the first line, "
         "from 1) and `limit` (how many lines) pick a range."
     )
 
@@ -172,11 +172,11 @@ def read_describe(limits):
     needs_permission=lambda args: False,
     path=("string", "The file: relative to the workspace, or absolute"),
     offset=("integer", "The first line to read, from 1"),
-    limit=("integer", f"How many lines to read, {LINE_CAP} at most"),
+    limit=("integer", f"How many lines to read, {MAX_LINES} at most"),
 )
 def read(path, offset=None, limit=None, sandbox=None, limits=None, notes=None):
     """`sandbox`, `limits` and `notes` come from the session, never the model:
-    its sandbox, its limits (assembly.LIMITS) and the call's notes, where the
+    its sandbox, its limits (assembly.DEFAULT_LIMITS) and the call's notes, where the
     content's hash goes for the stale check."""
     box = sandbox
     for name, value in (("offset", offset), ("limit", limit)):
@@ -184,14 +184,14 @@ def read(path, offset=None, limit=None, sandbox=None, limits=None, notes=None):
             not isinstance(value, int) or isinstance(value, bool) or value < 1
         ):
             return f"Not read: {name} is a whole number from 1."
-    answer = run_helper(box, {"op": "load", "path": path, "cap": SIZE_CAP})
+    answer = run_sandboxed_io(box, {"op": "load", "path": path, "cap": MAX_FILE_BYTES})
     if "error" in answer:
-        return failed(box, answer, "read", path)
+        return failure_text(box, answer, "read", path)
     shown = answer["path"]
     if answer["kind"] != "file":
-        return not_a_file(answer, "read", shown)
+        return not_a_file_text(answer, "read", shown)
     data = base64.b64decode(answer["data"])
-    if b"\0" in data[:BINARY_PROBE]:
+    if b"\0" in data[:BINARY_PROBE_BYTES]:
         return f"Not read: {shown} is binary ({len(data):,} bytes)."
     if notes is not None:
         notes["file"] = {
@@ -206,13 +206,13 @@ def read(path, offset=None, limit=None, sandbox=None, limits=None, notes=None):
             f"Not read: {shown} has {len(lines)} lines; offset {start} is past "
             "its end."
         )
-    count = min(limit or LINE_CAP, LINE_CAP)
+    count = min(limit or MAX_LINES, MAX_LINES)
     budget = limits["read_chars"]
     out = []
     for number in range(start, min(start + count, len(lines) + 1)):
         line = lines[number - 1]
-        if len(line) > LONG_LINE:
-            line = f"{line[:LONG_LINE]}… [line cut: {len(line):,} characters]"
+        if len(line) > LONG_LINE_CHARS:
+            line = f"{line[:LONG_LINE_CHARS]}… [line cut: {len(line):,} characters]"
         text = f"{number}→{line}"
         if out and budget - len(text) - 1 < 0:
             break
@@ -226,7 +226,7 @@ def read(path, offset=None, limit=None, sandbox=None, limits=None, notes=None):
     return body
 
 
-def stale(memory, answer, shown):
+def stale_reason(memory, answer, shown):
     """Why an existing file must not change, or None: it changed since this
     session's tools last saw it."""
     if memory is None:
@@ -240,17 +240,17 @@ def stale(memory, answer, shown):
 def store(box, shown, before, data, notes):
     """Write `data` over `before` (the bytes loaded, or None for a new
     file) and note the change, as hashes. Returns an error text, or None."""
-    expect = None if before is None else filehelper.sha(before)
-    answer = run_helper(box, {
+    expect = None if before is None else sandboxed_io.sha(before)
+    answer = run_sandboxed_io(box, {
         "op": "store", "path": shown, "expect": expect,
         "data": base64.b64encode(data).decode(),
     })
     if "error" in answer:
-        return failed(box, answer, "changed", shown)
+        return failure_text(box, answer, "changed", shown)
     if answer.get("changed"):
         return f"Not changed: {shown} changed while it was being written."
     if answer["kind"] != "file":
-        return not_a_file(answer, "changed", shown)
+        return not_a_file_text(answer, "changed", shown)
     real = real_path(box, answer["path"])
     change = {
         "path": shown, "real": real, "before": expect, "after": answer["sha"],
@@ -260,14 +260,14 @@ def store(box, shown, before, data, notes):
     return None
 
 
-LEAVE = (
+OUTSIDE_SANDBOX_TEXT = (
     "Run this one call outside the sandbox, as the user. It is asked about "
     "first"
 )
-WHY = "With outside_sandbox: why the task needs it"
+REASON_TEXT = "With outside_sandbox: why the task needs it"
 
 
-def written(args):
+def written_path(args):
     """The file a write or an edit writes: its path, as the call names it."""
     path = args.get("path")
     return [path] if isinstance(path, str) and path else []
@@ -287,24 +287,24 @@ PATHS = Grant(
     "changed since.",
     optional=("outside_sandbox", "reason"),
     summary=write_summary,
-    crosses=leaves,
+    crossing=outside_crossing,
     grant=PATHS,
-    writes=written,
+    written_files=written_path,
     path=("string", "The file: relative to the workspace, or absolute"),
     content=("string", "The file's whole new content"),
-    outside_sandbox=("boolean", LEAVE),
-    reason=("string", WHY),
+    outside_sandbox=("boolean", OUTSIDE_SANDBOX_TEXT),
+    reason=("string", REASON_TEXT),
 )
 def write(path, content, outside_sandbox=False, reason="", sandbox=None,
           outside=None, notes=None, files=None):
-    """`files`: the session's FileMemory (seen.py), for the stale
+    """`files`: the session's SeenFiles (seen.py), for the stale
     check; None for none (tests calling the tool directly)."""
     box, extra = pick_box(sandbox, outside, outside_sandbox)
     if not isinstance(content, str):
         return "Not changed: content is a string."
-    answer = run_helper(box, {"op": "load", "path": path, "cap": SIZE_CAP})
+    answer = run_sandboxed_io(box, {"op": "load", "path": path, "cap": MAX_FILE_BYTES})
     if "error" in answer:
-        return note(failed(box, answer, "changed", path), extra)
+        return note(failure_text(box, answer, "changed", path), extra)
     shown = answer["path"]
     before = None
     if answer["kind"] == "file":
@@ -313,12 +313,12 @@ def write(path, content, outside_sandbox=False, reason="", sandbox=None,
                 f"Not changed: {shown} exists, and this session hasn't read it.",
                 extra,
             )
-        problem = stale(files, answer, shown)
+        problem = stale_reason(files, answer, shown)
         if problem:
             return note(problem, extra)
         before = base64.b64decode(answer["data"])
     elif answer["kind"] != "missing":
-        return note(not_a_file(answer, "changed", shown), extra)
+        return note(not_a_file_text(answer, "changed", shown), extra)
     data = content.encode("utf-8")
     problem = store(box, shown, before, data, notes)
     if problem:
@@ -339,15 +339,15 @@ def write(path, content, outside_sandbox=False, reason="", sandbox=None,
     "that changed since this session last read or wrote it isn't changed.",
     optional=("replace_all", "outside_sandbox", "reason"),
     summary=edit_summary,
-    crosses=leaves,
+    crossing=outside_crossing,
     grant=PATHS,
-    writes=written,
+    written_files=written_path,
     path=("string", "The file: relative to the workspace, or absolute"),
     old_string=("string", "The exact text to replace"),
     new_string=("string", "The text to put in its place"),
     replace_all=("boolean", "Replace every occurrence"),
-    outside_sandbox=("boolean", LEAVE),
-    reason=("string", WHY),
+    outside_sandbox=("boolean", OUTSIDE_SANDBOX_TEXT),
+    reason=("string", REASON_TEXT),
 )
 def edit(path, old_string, new_string, replace_all=False, outside_sandbox=False,
          reason="", sandbox=None, outside=None, notes=None, files=None):
@@ -358,13 +358,13 @@ def edit(path, old_string, new_string, replace_all=False, outside_sandbox=False,
         return "Not changed: old_string is empty; write makes or replaces a whole file."
     if old_string == new_string:
         return "Not changed: old_string and new_string are the same."
-    answer = run_helper(box, {"op": "load", "path": path, "cap": SIZE_CAP})
+    answer = run_sandboxed_io(box, {"op": "load", "path": path, "cap": MAX_FILE_BYTES})
     if "error" in answer:
-        return note(failed(box, answer, "changed", path), extra)
+        return note(failure_text(box, answer, "changed", path), extra)
     shown = answer["path"]
     if answer["kind"] != "file":
-        return note(not_a_file(answer, "changed", shown), extra)
-    problem = stale(files, answer, shown)
+        return note(not_a_file_text(answer, "changed", shown), extra)
+    problem = stale_reason(files, answer, shown)
     if problem:
         return note(problem, extra)
     before = base64.b64decode(answer["data"])

@@ -1,6 +1,6 @@
 """The CLI's meaning of lines and keys; no terminal needed to drive it.
 
-`SessionClient` is the session in view: what a line, Ctrl+C or Ctrl+D does
+`SessionInput` is the session in view: what a line, Ctrl+C or Ctrl+D does
 there, over the session's state (client/session_state.py). The functions below
 it decide what the CLI shows around it: the slash commands and help, an ask's
 box, the status and progress lines, the mode Shift+Tab steps to, /model's
@@ -13,14 +13,14 @@ import time
 from pathlib import Path
 
 from apps.tui import keybindings
-from client.session_list import brief
+from client.session_list import short_path
 from client.session_state import SessionState
 
 # Typed alone, these leave the session as Ctrl+D does
 LEAVE = ("exit", "quit", "/bye")
 WAITING = "Nothing is running: a question is waiting. Answer it, or type a message."
 # How long after the last keystroke an ask's box may take the input's place
-BOX_DELAY = 1.0
+BOX_DELAY_SECONDS = 1.0
 # What Shift+Tab steps through (Claude Code's key); bypassPermissions only by
 # name, typed, so no key lands on it by accident
 MODE_CYCLE = ("default", "auto", "auto+", "readOnly")
@@ -40,7 +40,7 @@ COMMANDS = {
               "or pick",
     "/cd": "the folder its commands run in, from the next turn: /cd FOLDER",
     "/settings": "this session, new sessions' defaults, the TUI, models and "
-                 "keys, key bindings, Dev",
+                 "keys, key bindings, Advanced",
     "/init": "ZERO looks over you and this machine and fills in its ZERO.md",
     "/help": "keys and commands",
     "/quit": "leave; turns and jobs go on in ZERO",
@@ -56,8 +56,8 @@ INIT = (
 HELP = """Sending: a new turn, or a steer while one runs; a \\ just before the
 send key starts a new line too. A follow-up waits for the answer. /mode, /model
 and /cd change the session from its next turn; /settings sets this session, what
-new sessions start with, the theme and these keybindings, and in Dev the judge
-and the limits. Scrolling to the top brings earlier records. Click a command to
+new sessions start with, the theme and these keybindings, and in Advanced the
+judge and the limits. Scrolling to the top brings earlier records. Click a command to
 unfold it; drag over text and Ctrl+C copies it (Shift+drag: the terminal's own
 selection); Ctrl+V pastes, Ctrl+A selects the input. The mouse wheel scrolls.
 Leaving, turns and jobs go on. Esc leaves a view."""
@@ -66,7 +66,7 @@ Leaving, turns and jobs go on. Esc leaves a view."""
 def help_text(overrides=None):
     """The help view: what sending means, the keys as the user has them, and
     the commands."""
-    bound = keybindings.current(overrides)
+    bound = keybindings.current_keys(overrides)
     width = max(len(keybindings.shown(k)) for k in bound.values())
     lines = [HELP, "", "Keys:"]
     for id, now in bound.items():
@@ -77,7 +77,7 @@ def help_text(overrides=None):
     return "\n".join(lines)
 
 
-class SessionClient(SessionState):
+class SessionInput(SessionState):
     """The session in view: what a line, Ctrl+C or Ctrl+D does there."""
 
     def __init__(self, connection, session=None, mode=None, model=None,
@@ -126,7 +126,7 @@ class SessionClient(SessionState):
         """Whether the ask's box shows: an ask is open and the user hasn't
         typed for a second, so typing can't fall into it (Codex)."""
         now = time.monotonic() if now is None else now
-        return self.ask is not None and now - last_key >= BOX_DELAY
+        return self.ask is not None and now - last_key >= BOX_DELAY_SECONDS
 
 
 # The one question every ask ends with (Claude Code's); what it is about and
@@ -171,14 +171,14 @@ def completions(text):
 
 def status_pieces(client, row, defaults, home=None, older=False, now=None):
     """The status line's pieces, most important first: mode, model,
-    workspace, state, jobs, and a note when the host runs older code."""
+    workspace, state, jobs, and a note when the server runs older code."""
     now = time.monotonic() if now is None else now
     mode = (row or {}).get("mode") or client.mode or defaults.get("mode") or "?"
     model = (row or {}).get("model") or client.model or defaults.get("model") or "?"
     if "/" in model:
         model = model.rsplit("/", 1)[-1]
-    workspace = brief((row or {}).get("workspace") or client.workspace or "/", 30,
-                      home)
+    workspace = short_path((row or {}).get("workspace") or client.workspace or "/", 30,
+                           home)
     # What a running or waiting turn still holds from before: its next turn
     pending = (row or {}).get("pending") or ()
     mode, model, workspace = (
@@ -188,7 +188,7 @@ def status_pieces(client, row, defaults, home=None, older=False, now=None):
     )
     pieces = [mode, model, workspace, state_text(client, row)]
     if older:
-        pieces.append("the host runs older code")
+        pieces.append("the server runs older code")
     return pieces
 
 
@@ -238,8 +238,8 @@ def next_mode(mode):
 
 
 def mode_named(name, modes):
-    """The host's spelling of a mode typed in any case; as typed if unknown,
-    for the host to refuse."""
+    """The server's spelling of a mode typed in any case; as typed if unknown,
+    for the server to refuse."""
     for mode in modes:
         if mode.lower() == name.lower():
             return mode
@@ -254,8 +254,8 @@ def model_choices(default, sessions, served=()):
 
 
 def served_models(reply):
-    """The models every server lists, from the host's `models` reply; none
-    from a host that couldn't list them."""
+    """The models every server lists, from the server's `models` reply; none
+    from a server that couldn't list them."""
     if not reply.get("ok"):
         return []
     return [name for row in reply.get("servers", ()) for name in row["models"]]
@@ -282,7 +282,7 @@ def resolve_workspace(text, cwd):
 
 
 # What the settings views say under each section: when a change counts
-WHEN = {
+WHEN_IT_APPLIES = {
     "Current session": "Applies from this session's next turn, as /mode and "
                        "/model do.",
     "Default": (
@@ -299,16 +299,16 @@ WHEN = {
         "For sessions made from now: a session keeps the limits it was made "
         "with. Evals keep their own."
     ),
-    "Host": "Counts at the host's next look, within a second.",
+    "Server": "Counts at the server's next look, within a second.",
 }
 # A line more for a setting whose effect depends on the server
-NOTES = {
-    "effort": "Sent to DeepSeek; other servers get none.",
-    "judge_effort": "Sent to DeepSeek; other servers get none.",
+SETTING_NOTES = {
+    "thinking_effort": "Sent to DeepSeek; other servers get none.",
+    "judge_thinking_effort": "Sent to DeepSeek; other servers get none.",
 }
 # How a switch names what it changed, in a notice
-SWITCHED = {"effort": "thinking effort", "judge_model": "the judge's model",
-            "judge_effort": "the judge's thinking"}
+SWITCHED = {"thinking_effort": "thinking effort", "judge_model": "the judge's model",
+            "judge_thinking_effort": "the judge's thinking"}
 
 
 def switched_text(changes):
@@ -327,9 +327,9 @@ def setting_text(setting, value, default_model=None):
     """A setting's value as the settings view shows it."""
     if value is None:
         if setting.name in ("model", "judge_model") and default_model:
-            return f"{setting.off} ({default_model})"
+            return f"{setting.unset_means} ({default_model})"
         # An effort the session was made without: none was sent
-        return setting.off or "the API's default"
+        return setting.unset_means or "the API's default"
     if isinstance(value, float):
         return f"{value:g}"
     return str(value)

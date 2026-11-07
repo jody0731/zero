@@ -21,7 +21,7 @@ class Grant:
 
 def tool(description, optional=(), summary=None, ready=None,
          needs_permission=None, validate=None, changing=False, starts_job=None,
-         crosses=None, grant=None, writes=None, **params):
+         crossing=None, grant=None, written_files=None, **params):
     """Register a function as a tool the model can call.
 
     Each keyword is one argument: name=(json_type, description), where
@@ -43,15 +43,15 @@ def tool(description, optional=(), summary=None, ready=None,
     job's output), so the same call made again runs again.
     `starts_job(args)`: True for a call that starts a background job, which
     counts against the session's cap on running jobs; by default none does.
-    `crosses(args)`: what a call crosses that is asked about first (leaving
+    `crossing(args)`: what a call crosses that is asked about first (leaving
     the sandbox, reaching the local network), or None: a dict of its "rule",
     the one sentence that says what is crossed ("fact") and the model's
     reason ("why"). Whoever answers the ask (the user, the consent check, the
-    judge) reads the same sentence (`inside` puts it inside theirs); the
+    judge) reads the same sentence (`as_clause` puts it inside theirs); the
     tool says what is crossed, in its words.
     `grant`: a Grant, what "don't ask again" grants for its calls; None
     offers none.
-    `writes(args)`: the files a call writes, as the call names them (a
+    `written_files(args)`: the files a call writes, as the call names them (a
     write's or an edit's path), so files no tool may change can be refused by
     whoever keeps them; by default none.
     """
@@ -75,9 +75,9 @@ def tool(description, optional=(), summary=None, ready=None,
             "validate": validate,
             "changing": changing,
             "starts_job": starts_job,
-            "crosses": crosses,
+            "crossing": crossing,
             "grant": grant,
-            "writes": writes,
+            "written_files": written_files,
             "schema": {
                 "type": "function",
                 "function": {
@@ -126,22 +126,22 @@ def starts_job(name, args):
 
 
 def crossing(name, args):
-    """What the call crosses (its tool's `crosses`), or None."""
+    """What the call crosses (its tool's `crossing`), or None."""
     found = TOOLS.get(name)
-    if found is None or found["crosses"] is None:
+    if found is None or found["crossing"] is None:
         return None
-    return found["crosses"](args)
+    return found["crossing"](args)
 
 
-def writes(name, args):
-    """The files the call writes (its tool's `writes`); [] for none."""
+def written_files(name, args):
+    """The files the call writes (its tool's `written_files`); [] for none."""
     found = TOOLS.get(name)
-    if found is None or found["writes"] is None:
+    if found is None or found["written_files"] is None:
         return []
-    return list(found["writes"](args) or [])
+    return list(found["written_files"](args) or [])
 
 
-def inside(fact):
+def as_clause(fact):
     """A crossing's fact as part of another sentence: its first letter small,
     without its full stop."""
     return fact[:1].lower() + fact[1:].rstrip(".")
@@ -212,12 +212,15 @@ def run(name, args, context=None):
     """Run a checked call. A tool that fails returns its error as text.
 
     `context`: what the session hands its tools (its sandbox); a tool gets the
-    parts its function names. The model can't set them: check() refuses any
-    argument the schema doesn't list.
+    parts its function names, except a name that is one of its arguments (the
+    job tool's `stop` is the model's, not the turn's stop flag). The model
+    can't set them: check() refuses any argument the schema doesn't list.
     """
     fn = TOOLS[name]["fn"]
     wanted = inspect.signature(fn).parameters
-    extra = {k: v for k, v in (context or {}).items() if k in wanted}
+    arguments = TOOLS[name]["schema"]["function"]["parameters"]["properties"]
+    extra = {k: v for k, v in (context or {}).items()
+             if k in wanted and k not in arguments}
     try:
         return str(fn(**args, **extra))
     except Exception as e:

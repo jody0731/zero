@@ -21,7 +21,7 @@ from core.control import Stopped
 HEAD_BYTES = 8 << 20
 TAIL_BYTES = 8 << 20
 # After SIGTERM, how long a command gets to clean up before SIGKILL
-KILL_GRACE = 1.0
+KILL_GRACE_SECONDS = 1.0
 DRAIN_SECONDS = 2.0
 
 
@@ -207,7 +207,7 @@ def stop_group(proc):
     except ProcessLookupError:
         return
     try:
-        proc.wait(timeout=KILL_GRACE)
+        proc.wait(timeout=KILL_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         pass
     # Children may outlive bash itself, so kill whatever is left in the group

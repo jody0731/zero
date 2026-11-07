@@ -3,6 +3,34 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.8
+
+Every name says what it is. Your files keep working: old names still read, and nothing is rewritten until you
+save a setting.
+
+- **ZERO's host is now its server:** `zero server status|stop|hello|run` (was `zero host …`). The systemd user
+  unit is `zero-server-<hash>`, and its log `state/server.log`. The first command after the update restarts
+  the old host once ("ZERO's server runs older code: restarting it."). A busy one is left running and named.
+- **"Provider" is now "model server":** `zero model server list|connect|disconnect|probe` (was
+  `zero model provider …`). In `models.toml` a server's display name is `title` and its window
+  `context_window` (old `name` and `context` still read).
+- **Settings renamed** (old names still read; a new name wins when both are set): `idle_minutes` →
+  `server_idle_minutes`, `effort` → `thinking_effort`, `judge_effort` → `judge_thinking_effort`,
+  `output_limit` → `bash_output_chars`, `web_chars` → `web_fetch_chars`, `web_results` → `web_search_results`,
+  `retry_base` → `model_retry_seconds`, `step_grant` → `extra_steps`, `bash_timeout` →
+  `bash_foreground_seconds`, `model_timeout`, `judge_timeout`, `consent_timeout` → `*_silence_seconds` (each
+  counts only silence), `max_format_errors` → `max_broken_replies`.
+- **The full screen's table is `[tui]`** (was `[cli]`, still read; the next save writes `[tui]`). Key ids
+  `elsewhere`, `folds`, `next_needing`, `go_back` → `new_elsewhere`, `toggle_folds`, `next_needing_you`,
+  `previous_session`.
+- **Commands:** `--thinking-effort`, `--judge-thinking-effort`, `--context-window` (`--effort`, `--judge-effort`,
+  `--context` still work); `-r` is also `--resume`, `-p` also `--print`.
+- **In `/settings`, "Dev…" is "Advanced…",** and its "Host" group "Server".
+- **The job tool's `kill` is `stop`.**
+- The protocol is 3: `server/hello`, `server/stop`, `model/server/*`, `session/mark_seen`, and fields renamed
+  where they misled (`not_ready_reason`, `key_state`, `busy_with`, `started_at`, `measured_at`,
+  `context_window`, `thinking_effort`, …). A client of 3 still talks to a server of 2 until it restarts it.
+
 ## 0.6.2.7
 
 ZERO speaks each server's own API, and measures what a model honours.

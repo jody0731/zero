@@ -36,10 +36,10 @@ SOUL = HERE / "SOUL.md"
 ZERO = HERE / "ZERO.md"
 # The file a project's folders hold for ZERO, and other agents' own
 PROJECT_FILE = "ZERO.md"
-OTHERS = ("AGENTS.md", "CLAUDE.md")
+OTHER_AGENT_FILES = ("AGENTS.md", "CLAUDE.md")
 # The characters each file gives the prompt at most; the project's files
 # share theirs
-CAPS = {"soul": 4000, "user": 8000, "project": 16000}
+MAX_CHARS_BY_FILE = {"soul": 4000, "user": 8000, "project": 16000}
 # The code's own lines, the same for every user. What ZERO is and runs on,
 # before anything a file says
 HARNESS = (
@@ -61,7 +61,7 @@ TURN_RULE = (
     "\nWhen you have the answer, reply in plain text without calling a tool.\n"
 )
 # The longest piece of a line a cut quotes
-QUOTED = 60
+QUOTED_CHARS = 60
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 HEADING = re.compile(r"^#{1,6} ")
 
@@ -79,7 +79,7 @@ class Instructions:
 
 
 @dataclass
-class Read:
+class InstructionsRead:
     """What a session read at its start: the text that leads its system
     prompt, the files it came from, where the project's ZERO.md is (None for
     a workspace of /, which has no project) and the other agents' files the
@@ -140,7 +140,7 @@ def cut(body, room, path, limit):
         return body
     kept = []
     for line in body.split("\n"):
-        quoted = line.strip()[:QUOTED]
+        quoted = line.strip()[:QUOTED_CHARS]
         note = (
             f"[Cut at {limit:,} characters: {path} goes on from the line "
             f"“{quoted}”.]"
@@ -175,25 +175,28 @@ def walk(root, workspace):
 
 def read(instructions, workspace):
     """What a session with these instructions reads in `workspace`."""
-    found = Read(soul=instructions.soul, user=instructions.user)
+    found = InstructionsRead(soul=instructions.soul, user=instructions.user)
     parts = []
     for path, cap in ((instructions.soul, "soul"), (instructions.user, "user")):
         if path is not None:
             body = text(path)
             if body:
-                parts.append(cut(body, CAPS[cap], path, CAPS[cap]))
+                limit = MAX_CHARS_BY_FILE[cap]
+                parts.append(cut(body, limit, path, limit))
     root = project_root(workspace) if instructions.project else None
     if root is not None:
         found.project_file = root / PROJECT_FILE
-        room = CAPS["project"]
+        room = MAX_CHARS_BY_FILE["project"]
         for folder in walk(root, workspace):
-            found.others += [folder / n for n in OTHERS if (folder / n).is_file()]
+            found.others += [folder / n for n in OTHER_AGENT_FILES
+                             if (folder / n).is_file()]
             path = folder / PROJECT_FILE
             body = text(path) if path.is_file() else ""
             if not body or room <= 0:
                 continue
             label = f"The project's ZERO.md ({path}):\n"
-            block = label + cut(body, room - len(label), path, CAPS["project"])
+            block = label + cut(body, room - len(label), path,
+                                MAX_CHARS_BY_FILE["project"])
             parts.append(block)
             found.project.append(path)
             room -= len(block) + 2
@@ -204,7 +207,7 @@ def read(instructions, workspace):
 def system_prompt(found, model):
     """The system prompt's start: what ZERO is and runs on (`model`, the
     session's) and when it acts, what the session read
-    (`found`, a Read; None for nothing), then how a turn ends; the plugins'
+    (`found`, a Read; None for nothing), then how a turn ends; the hooks'
     parts follow."""
     opening = f"{HARNESS.format(model=model)}\n{INTENT}"
     read_in = found.text if found is not None else ""
@@ -213,9 +216,9 @@ def system_prompt(found, model):
     return f"{opening}\n\n{read_in}\n{TURN_RULE}"
 
 
-def users():
+def user_instructions():
     """The user's own files, written from the templates on first use, the
-    project's, and the memory tool to change them: what a host's session
+    project's, and the memory tool to change them: what a server's session
     reads."""
     return Instructions(
         soul=ensure(paths.soul_file(), SOUL),
@@ -225,7 +228,7 @@ def users():
     )
 
 
-def shipped():
+def shipped_instructions():
     """The soul ZERO ships with and nothing else: the evals' yardstick, which
     the user's files never move."""
     return Instructions(soul=SOUL)

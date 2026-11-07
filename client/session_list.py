@@ -6,7 +6,7 @@ import time
 
 
 # The attention line names this many sessions, then "+N more"
-ATTENTION = 3
+ATTENTION_SESSIONS = 3
 
 
 def needs_you(sessions, current=None):
@@ -32,14 +32,14 @@ def attention_line(sessions, current=None, home=None):
     if not rows:
         return ""
     parts = []
-    for row in rows[:ATTENTION]:
-        place = brief(row["workspace"], 24, home)
+    for row in rows[:ATTENTION_SESSIONS]:
+        place = short_path(row["workspace"], 24, home)
         if row.get("ask") is not None:
             parts.append(f"? {row['title']} ({place}) waits for you")
         else:
             parts.append(f"● {row['title']} ({place}) has news")
-    if len(rows) > ATTENTION:
-        parts.append(f"+{len(rows) - ATTENTION} more")
+    if len(rows) > ATTENTION_SESSIONS:
+        parts.append(f"+{len(rows) - ATTENTION_SESSIONS} more")
     return "   ".join(parts) + "   Alt+↓"
 
 
@@ -63,7 +63,7 @@ def groups(sessions, typed=""):
     return waiting, rest
 
 
-def opening(cwd, last, sessions):
+def session_to_open(cwd, last, sessions):
     """Which session a bare `zero` opens: at /, the last one
     the user worked in, else the list; anywhere else, the latest session
     whose workspace is exactly that folder, else a new one made on the first
@@ -79,7 +79,7 @@ def opening(cwd, last, sessions):
     return max(here, key=lambda row: row["updated"])["id"], False
 
 
-def short(path, home=None):
+def tilde_path(path, home=None):
     """A folder as the user would write it: ~ for their home."""
     home = home or os.path.expanduser("~")
     if path == home:
@@ -89,9 +89,9 @@ def short(path, home=None):
     return path
 
 
-def brief(path, width=28, home=None):
+def short_path(path, width=28, home=None):
     """A folder short enough for a line: ~ for home, then its end kept."""
-    text = short(path, home)
+    text = tilde_path(path, home)
     if len(text) <= width:
         return text
     return "…" + text[-(width - 1):]

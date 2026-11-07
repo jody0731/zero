@@ -6,7 +6,9 @@ servers they added, and any line of a shipped one they changed, by naming
 the same provider). A model name picks its provider by its prefix
 ("deepseek/deepseek-flash", "myserver/some-model"); a name without a known
 prefix goes to Ollama ("qwen3.5:9b"). A model's window is its own line, else
-its provider's; a model with neither can't start.
+its provider's; a model with neither can't start. A provider's line `api`
+names the API its server speaks (apis/), the Chat Completions API when it
+names none.
 
 An API key comes from the provider's environment variable or from the keys
 file (paths.py), straight into the client; the harness never puts it in the
@@ -21,19 +23,20 @@ from openai import OpenAI
 
 import paths
 from core.llm import complete
+from model import features
+from model.apis import APIS, DEFAULT
 
 CATALOG = Path(__file__).with_name("catalog.toml")
 # Where a name without a known provider's prefix goes
 BARE = "ollama"
-# How to ask for JSON: strict, or any JSON object
-JSON_FORMATS = ("json_schema", "json_object")
 # A provider's lines, and the ones a model may have of its own
 FIELDS = {
-    "name": str, "url": str, "key_env": str, "json_format": str,
-    "thinking": bool, "context": int, "context_stop": int, "price": list,
-    "models": dict,
+    "name": str, "url": str, "key_env": str, "api": str, "context": int,
+    "context_stop": int, "price": list, "models": dict,
 }
 MODEL_FIELDS = ("context", "context_stop", "price")
+# Lines a provider had before 0.6.2.7: what a model honours is measured now
+RETIRED = ("json_format", "thinking")
 # Where the context guard stops a turn when no line says
 STOP = 0.8
 # What a keyless server is sent for a key: the client needs one
@@ -61,14 +64,13 @@ class Provider:
         self.context_stop = merged.get("context_stop")
         if self.context_stop is None and self.context is not None:
             self.context_stop = int(self.context * STOP)
-        self.json_format = entry.get("json_format", "json_schema")
+        # The API its server speaks (apis/)
+        self.api = APIS[entry.get("api", DEFAULT)]
         # None: no key needed
         self.key_env = entry.get("key_env")
         # USD per 1M tokens at peak price: (cache hit, cache miss, output)
         price = merged.get("price")
         self.price = tuple(price) if price else None
-        # Whether it takes DeepSeek's thinking options (effort_options)
-        self.thinking = entry.get("thinking", False)
 
 
 def load(path, where):
@@ -92,13 +94,16 @@ def check(name, entry):
         return f"{name} isn't a provider's table ([{name}] with its url)"
     for field, value in entry.items():
         kind = FIELDS.get(field)
+        if field in RETIRED:
+            return (f"[{name}] {field} is gone: what a model honours is "
+                    "measured now (zero model features MODEL)")
         if kind is None:
             return (f"[{name}] has no line {field!r}; known: "
                     f"{', '.join(FIELDS)}")
         if not isinstance(value, kind) or (kind is int and value is True):
             return f"[{name}] {field} has the wrong type"
-    if entry.get("json_format", "json_schema") not in JSON_FORMATS:
-        return f"[{name}] json_format is one of {', '.join(JSON_FORMATS)}"
+    if entry.get("api", DEFAULT) not in APIS:
+        return f"[{name}] api is one of {', '.join(APIS)}"
     for model, line in entry.get("models", {}).items():
         if not isinstance(line, dict):
             return f"[{name}.models] {model!r} takes a table of its lines"
@@ -220,35 +225,31 @@ def make_client(model, timeout):
     )
 
 
-def effort_options(provider, effort):
-    """The request's options for a thinking effort: "off" turns
-    DeepSeek's thinking off, "low", "high" and "max" set reasoning_effort.
-    Nothing for None, or for a provider
-    without the options (Ollama: untested)."""
-    if effort is None or not provider.thinking:
-        return {}
-    if effort == "off":
-        return {"extra_body": {"thinking": {"type": "disabled"}}}
-    return {"reasoning_effort": effort}
-
-
 class Model:
     def __init__(self, name, client=None, *, timeout, effort=None):
         self.name = name
         # Seconds the model may stay silent (complete's `silence`)
         self.timeout = timeout
         self.provider, self.api_name = resolve(name)
+        self.api = self.provider.api
         self.client = client or make_client(name, timeout)
         # The agent's thinking effort; the judge and the consent check call
-        # complete themselves and send none
+        # complete themselves
         self.effort = effort
+
+    def json_request(self, schema):
+        """How to ask this model for JSON fitting `schema` (features.py)."""
+        return features.json_request(self.name, self.api, schema)
 
     def call(self, messages, schemas, check=None, on_delta=None):
         """One model call, streamed (complete). API errors, a silence past the
-        timeout and replies the server cut short are raised for the loop to
-        handle (MODEL_ERRORS); what `check` raises ends it at once."""
+        timeout and replies that didn't complete are raised for the loop to
+        handle (MODEL_ERRORS); what `check` raises ends it at once. The
+        effort is sent unless the model is measured not to honour it
+        (features.py): kept, not sent."""
         return complete(
-            self.client, self.api_name, messages, silence=self.timeout,
-            check=check, on_delta=on_delta, tools=schemas,
-            **effort_options(self.provider, self.effort),
+            self.api, self.client, self.api_name, messages,
+            silence=self.timeout, check=check, on_delta=on_delta,
+            tools=schemas,
+            effort=features.effort_sent(self.name, self.api, self.effort),
         )

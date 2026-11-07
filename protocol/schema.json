@@ -63,6 +63,9 @@
       "$ref": "#/$defs/model.list"
     },
     {
+      "$ref": "#/$defs/model.features"
+    },
+    {
       "$ref": "#/$defs/model.provider.list"
     },
     {
@@ -1037,6 +1040,49 @@
         "ok"
       ]
     },
+    "model.features": {
+      "type": "object",
+      "description": "What a model honours of its API's features (thinking_off, thinking_on, strict_json, json_mode), as measured: each true or false, null where never measured. Measured now when none are kept or `test` is true, a few small calls to the model.",
+      "properties": {
+        "message": {
+          "const": "model/features"
+        },
+        "model": {
+          "type": "string"
+        },
+        "test": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "model.features.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "model": {
+          "type": "string"
+        },
+        "api": {
+          "type": "string"
+        },
+        "measured": {
+          "type": "string"
+        },
+        "features": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
     "model.provider.list": {
       "type": "object",
       "description": "Every model server the host knows, whether its key is there, the default model, and why a session on it couldn't start (null: it can).",
@@ -1133,7 +1179,7 @@
     },
     "model.provider.connect": {
       "type": "object",
-      "description": "A server's model tested with a one-token call, then saved: the key in keys.toml, the server in models.toml; the first model connected becomes the default.",
+      "description": "A server's model tested with a call of a few tokens, then saved: the key in keys.toml, the server in models.toml; the first model connected becomes the default.",
       "properties": {
         "message": {
           "const": "model/provider/connect"
@@ -1243,7 +1289,7 @@
           "items": {
             "type": "object"
           },
-          "description": "name, group, label, default, kind, choices, least, off, shown, value"
+          "description": "name, group, label, default, kind, choices, least, off, shown, needs, runs_on, value"
         },
         "error": {
           "anyOf": [

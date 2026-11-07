@@ -2,6 +2,7 @@
 messages (ZERO's) and config.py (the CLI's own [cli] table), the session in
 view through `session/set`, and the key bindings view."""
 
+import threading
 from dataclasses import dataclass
 
 from rich.text import Text
@@ -94,6 +95,10 @@ class SettingsView(Scrolled, Screen):
         self.error = None
         # What the session in view runs with from its next turn
         self.now = {}
+        # What each model honours of its API's features, as the host
+        # measured it (model/features): model → feature → True, False or
+        # None; a model asked for and not answered yet maps to {}
+        self.features = {}
         self.rows = []
         # Each row's line in the list, for the scrolling
         self.lines = []
@@ -115,7 +120,10 @@ class SettingsView(Scrolled, Screen):
         shown = []
         for row in listed:
             fields = {k: v for k, v in row.items() if k != "value"}
-            setting = settings.Setting(**{**fields, "choices": tuple(row["choices"])})
+            setting = settings.Setting(**{
+                **fields, "choices": tuple(row["choices"]),
+                "needs": tuple(tuple(pair) for pair in row.get("needs", ())),
+            })
             self.values[setting.name] = row["value"]
             self.known[setting.name] = setting
             if setting.shown:
@@ -157,11 +165,64 @@ class SettingsView(Scrolled, Screen):
     def on_mount(self):
         self.fetch()
         self.draw()
+        self.measure()
 
     def on_screen_resume(self):
         # Back from another view, where the default may have changed
         self.fetch()
         self.draw()
+        self.measure()
+
+    def runs_on(self, row):
+        """The model a row's value goes to (its setting's `runs_on`, the
+        session's model where that is unset), or None."""
+        setting = row.setting if isinstance(row, Current) else row
+        if not isinstance(setting, settings.Setting) or not setting.runs_on:
+            return None
+        if isinstance(row, Current):
+            return self.now.get(setting.runs_on) or self.now.get("model")
+        return (self.values.get(setting.runs_on)
+                or self.values.get("model"))
+
+    def measure(self):
+        """What the rows' models honour, asked of the host off the screen's
+        thread (a model never measured is measured then: a few calls), each
+        row drawn again when its answer comes."""
+        wanted = {self.runs_on(row) for row in self.rows} - {None}
+        wanted -= set(self.features)
+        if not wanted:
+            return
+        for model in wanted:
+            self.features[model] = {}
+
+        def run():
+            for model in sorted(wanted):
+                try:
+                    reply = self.zero.connection.features(model)
+                except ERRORS:
+                    # Nothing shown unavailable: the host couldn't say
+                    continue
+                self.features[model] = reply.get("features") or {}
+                try:
+                    self.app.call_from_thread(self.draw)
+                except RuntimeError:
+                    # The full screen closed meanwhile
+                    return
+
+        threading.Thread(target=run, daemon=True,
+                         name="model-features").start()
+
+    def unavailable(self, row, value):
+        """" (unavailable on MODEL)" when the row's model is measured not to
+        honour what `value` needs; "" otherwise."""
+        setting = row.setting if isinstance(row, Current) else row
+        feature = dict(getattr(setting, "needs", ())).get(value)
+        model = self.runs_on(row)
+        if feature is None or model is None:
+            return ""
+        if self.features.get(model, {}).get(feature) is False:
+            return f" (unavailable on {model})"
+        return ""
 
     def heading(self, row):
         if isinstance(row, Current):
@@ -196,11 +257,12 @@ class SettingsView(Scrolled, Screen):
             setting, now = row.setting, self.value(row)
             # The judge's model, unset, is the session's own
             model = self.now.get("model") if row.name == "judge_model" else None
-            return controller.setting_text(setting, now, model), False
+            text = controller.setting_text(setting, now, model)
+            return text + self.unavailable(row, now), False
         now = self.value(row)
         default_model = self.zero.default_model()
-        return (controller.setting_text(row, now, default_model),
-                now != row.default)
+        text = controller.setting_text(row, now, default_model)
+        return text + self.unavailable(row, now), now != row.default
 
     def draw(self):
         self.selected = max(0, min(self.selected, len(self.rows) - 1))
@@ -243,17 +305,28 @@ class SettingsView(Scrolled, Screen):
             return ("The judge (for this session and by default), the limits "
                     "and the host. Enter opens them.")
         note = controller.NOTES.get(row.name)
+        missing = self.measured_missing(row)
         if isinstance(row, Current):
             when = controller.WHEN["Current session"]
             if row.name.startswith("judge_"):
                 when = controller.WHEN["Judge"]
-            return f"{when}\n{note}" if note else when
+            lines = [when, note, missing]
+            return "\n".join(line for line in lines if line)
         default = controller.setting_text(row, row.default,
                                           self.zero.default_model())
-        lines = [controller.WHEN[row.group], f"Default: {default}."]
-        if note:
-            lines.insert(1, note)
-        return "\n".join(lines)
+        lines = [controller.WHEN[row.group], note, f"Default: {default}.",
+                 missing]
+        return "\n".join(line for line in lines if line)
+
+    def measured_missing(self, row):
+        """The preview's words for a value its model doesn't honour."""
+        value = self.value(row)
+        if not self.unavailable(row, value):
+            return ""
+        model = self.runs_on(row)
+        return (f'{model}\'s server was measured not to honour "{value}": '
+                "the choice is kept, and not sent while it runs there. `zero "
+                f"model features {model} --test` measures it again.")
 
     def action_move(self, step):
         if self.rows:

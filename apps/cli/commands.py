@@ -11,8 +11,9 @@ A message only a screen needs has no command; NO_COMMAND says why.
         [--judge-model M] [--judge-effort E]
     zero job list [--session ID] · job stop JOB
     zero grant list ID · grant forget ID GRANT
-    zero model list · model provider list · probe NAME · connect NAME
-        --model M [--url URL] [--key-stdin] · disconnect NAME
+    zero model list · model features MODEL [--test] · model provider list ·
+        probe NAME · connect NAME --model M [--url URL] [--key-stdin] ·
+        disconnect NAME
     zero setting list · setting set NAME VALUE
     zero host hello · host stop (main.py's, with host status and host run)
 
@@ -409,6 +410,13 @@ def parser(prog="zero"):
     listing = actions.add_parser("list", help="every reachable server's models")
     json_flag(listing)
     listing.set_defaults(handler=model_list_command)
+    measured = actions.add_parser(
+        "features", help="what a model honours of its API's features")
+    measured.add_argument("model", metavar="MODEL")
+    measured.add_argument("--test", action="store_true",
+                          help="measure again now (a few calls to the model)")
+    json_flag(measured)
+    measured.set_defaults(handler=model_features_command)
     provider = actions.add_parser("provider", help="model servers and keys")
     verbs = provider.add_subparsers(dest="verb", required=True)
     listing = verbs.add_parser("list", help="every server ZERO knows")
@@ -613,6 +621,16 @@ def model_list_command(connection, args, out):
         else:
             lines += server["models"] or [f"{server['provider']}: no models"]
     return done(args, out, reply, "\n".join(lines) or "No servers reachable.")
+
+
+def model_features_command(connection, args, out):
+    reply = connection.features(args.model, test=args.test)
+    words = {True: "yes", False: "unavailable", None: "not measured"}
+    lines = [f"{reply['model']} on {reply['api']}, measured "
+             f"{reply['measured']}:"]
+    lines += [f"  {name}: {words[honoured]}"
+              for name, honoured in reply["features"].items()]
+    return done(args, out, reply, "\n".join(lines))
 
 
 def provider_list_command(connection, args, out):

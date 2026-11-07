@@ -41,21 +41,17 @@ Answer with JSON only:
 reason: a few words on how you read the reply.
 """.strip()
 
-RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "consent",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "yes": {"type": "boolean"},
-                "choice": {"type": "string", "enum": ["yes", "session", "saved"]},
-                "reason": {"type": "string"},
-            },
-            "required": ["yes", "choice", "reason"],
-            "additionalProperties": False,
+SCHEMA = {
+    "name": "consent",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "yes": {"type": "boolean"},
+            "choice": {"type": "string", "enum": ["yes", "session", "saved"]},
+            "reason": {"type": "string"},
         },
+        "required": ["yes", "choice", "reason"],
+        "additionalProperties": False,
     },
 }
 
@@ -116,9 +112,9 @@ def question(ask):
 
 
 class Consent:
-    """One model call per reply: strict JSON at temperature 0. `model`: the
-    model it asks, as the model component makes it (its name, API name,
-    provider, client and silence timeout)."""
+    """One model call per reply: JSON at temperature 0. `model`: the model
+    it asks, as the model component makes it (its name, its API, its name at
+    the server, its client, silence timeout and how to ask it for JSON)."""
 
     def __init__(self, model):
         self.model = model.name
@@ -126,9 +122,9 @@ class Consent:
         # Seconds the check may stay silent (complete's `silence`)
         self.timeout = model.timeout
         self.client = model.client
-        self.format = RESPONSE_FORMAT
-        if model.provider.json_format != "json_schema":
-            self.format = {"type": "json_object"}
+        self.api = model.api
+        # How to ask the model for JSON, as it honours it
+        self.json_request = model.json_request
 
     def message(self, asked, reply):
         return (
@@ -149,8 +145,9 @@ class Consent:
         tokens = thought = None
         try:
             reply = complete(
-                self.client, self.api_name, messages, silence=self.timeout,
-                temperature=0, response_format=self.format,
+                self.api, self.client, self.api_name, messages,
+                silence=self.timeout, temperature=0,
+                **self.json_request(SCHEMA),
             )
             tokens = [reply.prompt_tokens, reply.cached_tokens,
                       reply.completion_tokens]

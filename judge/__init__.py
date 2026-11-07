@@ -7,7 +7,7 @@ them in Dev. verdict.py: the judge itself, one model call per verdict.
 plugin.py: what it sees of a session, and the approver (AutoApproval).
 """
 
-from model import EFFORTS
+from model import EFFORT_NEEDS, EFFORTS
 from settings import Setting
 
 SETTINGS = (
@@ -17,7 +17,7 @@ SETTINGS = (
     # Off: the judge reasons in its answer, before its decision (verdict.py),
     # which is faster and doesn't circle as thinking can at temperature 0
     Setting("judge_effort", "Judge", "Thinking effort", "off", "choice",
-            choices=EFFORTS),
+            choices=EFFORTS, needs=EFFORT_NEEDS, runs_on="judge_model"),
     Setting("judge_timeout", "Limits", "Seconds the judge may stay silent", 60,
             "number"),
     # A reply that isn't a verdict is asked again; still none, a deny

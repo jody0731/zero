@@ -11,6 +11,10 @@ from settings import Setting
 
 # The agent's thinking effort, least to most
 EFFORTS = ("off", "low", "high", "max")
+# The feature of the model's API each effort needs (features.py)
+EFFORT_FEATURES = {"off": "thinking_off", "low": "thinking_on",
+                   "high": "thinking_on", "max": "thinking_on"}
+EFFORT_NEEDS = tuple(EFFORT_FEATURES.items())
 
 SETTINGS = (
     # The user's default: none until they connect a model; ZERO's code has
@@ -18,9 +22,9 @@ SETTINGS = (
     Setting("model", "Default", "Model", None, "model",
             off="none set"),
     # The agent's own calls only; the consent check stays on the API's
-    # default. DeepSeek's thinking; other providers get nothing
+    # default
     Setting("effort", "Default", "Thinking effort", "high",
-            "choice", choices=EFFORTS),
+            "choice", choices=EFFORTS, needs=EFFORT_NEEDS, runs_on="model"),
     # Silence, not the whole call: before the first token and between
     # tokens
     Setting("model_timeout", "Limits", "Seconds the model may stay silent", 45,

@@ -26,7 +26,11 @@ class Setting:
     holds without it, and what it takes. `kind`: "choice" (one of `choices`),
     "mode", "model", "int" (a whole number, `least` or more) or "number" (above
     0). `off`: what None means, where a setting can be left unset. `shown`:
-    False for a setting the view leaves out (config.toml may still set it)."""
+    False for a setting the view leaves out (config.toml may still set it).
+    `needs`: (value, feature) pairs, the feature of its model's API each value
+    needs (model/features.py); `runs_on`: the setting that names that model,
+    the session's model when it is unset. A value whose feature the model
+    doesn't honour shows unavailable there, and is kept but not sent."""
 
     name: str
     group: str
@@ -37,6 +41,8 @@ class Setting:
     least: int = 1
     off: str | None = None
     shown: bool = True
+    needs: tuple = ()
+    runs_on: str | None = None
 
 
 # Every setting ZERO knows, in the settings view's order (add); by name; what
@@ -242,9 +248,12 @@ class Config:
 
     def listing(self):
         """Every setting with its value, for the settings view: its name,
-        group, label, default, kind, choices, least, off and shown."""
+        group, label, default, kind, choices, least, off, shown, needs and
+        runs_on."""
         values = self()
-        return [{**asdict(s), "choices": list(s.choices), "value": values[s.name]}
+        return [{**asdict(s), "choices": list(s.choices),
+                 "needs": [list(pair) for pair in s.needs],
+                 "value": values[s.name]}
                 for s in SETTINGS]
 
     def set(self, name, value):

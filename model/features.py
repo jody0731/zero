@@ -1,0 +1,198 @@
+"""What a model honours of its API's features, measured, never assumed.
+
+Each API declares the features ZERO may ask through its standard fields
+(apis/, FEATURES). Whether a model's server honours one is measured by a
+small request whose effect shows: thinking off (no reasoning comes back),
+thinking on (reasoning comes back), strict JSON (a reply that must fit a
+schema a greeting never would) and JSON mode (a JSON object comes back; a
+model asked for JSON may give one anyway, so only a refusal or prose shows
+it missing). A server that refuses the field (400) doesn't honour it.
+
+The results are kept per model in ZERO's state (paths.model_features_file),
+with the API they were measured on: a server switched to another API is
+measured again. A model never measured is taken to honour all of its API's
+features, so ZERO sends the standard field: unmeasured is never patched
+around. Measured when a face asks for a model's features and none are kept,
+and on its "Test" (model/host.py, `model/features`).
+"""
+
+import json
+import time
+from pathlib import Path
+
+import openai
+
+import paths
+from core.llm import complete
+from model import EFFORT_FEATURES
+
+# Each feature: what it is, in words, as the screens say it
+FEATURES = {
+    "thinking_off": "thinking off",
+    "thinking_on": "thinking",
+    "strict_json": "strict JSON",
+    "json_mode": "JSON mode",
+}
+# Output tokens a test may take: enough for a thinking model's short thought
+OUTPUT = 1024
+# A sum a model thinks about when it thinks at all
+SUM = [{"role": "user", "content": "What is 23 times 17?"}]
+# A greeting the schema below never fits unless the server holds the reply
+# to it
+GREETING = [{"role": "user", "content": "Say hello."}]
+COLOURS = ("red", "green", "blue")
+SCHEMA = {
+    "name": "colour",
+    "schema": {
+        "type": "object",
+        "properties": {"colour": {"type": "string", "enum": list(COLOURS)}},
+        "required": ["colour"],
+        "additionalProperties": False,
+    },
+}
+# JSON mode's request names JSON, as some servers require
+JSON_GREETING = [
+    {"role": "system", "content": "Answer as a JSON object."},
+    {"role": "user", "content": "Say hello."},
+]
+
+
+class FeatureError(Exception):
+    """A model couldn't be measured (the server down, a wrong key): nothing
+    is kept, so it is measured again next time."""
+
+
+def for_effort(effort):
+    """The feature a thinking effort needs; None for none sent."""
+    return EFFORT_FEATURES.get(effort)
+
+
+def effort_sent(model, api, effort):
+    """The effort to send: the one chosen, unless the model is measured not
+    to honour it (then none: the chosen one is kept, not sent)."""
+    if honoured(model, api, for_effort(effort)) is False:
+        return None
+    return effort
+
+
+def json_request(model, api, schema):
+    """How to ask the model for JSON fitting `schema` ({"name", "schema"}):
+    strict JSON unless measured not honoured, else JSON mode unless that
+    isn't either, else nothing (the prompt asks for JSON itself)."""
+    if honoured(model, api, "strict_json") is not False:
+        return {"json_schema": schema}
+    if honoured(model, api, "json_mode") is not False:
+        return {"json_mode": True}
+    return {}
+
+
+# The file, read again whenever it changes
+CACHE = {}
+
+
+def records():
+    """Every model's record: model → {"api", "measured", "features"}."""
+    path = Path(paths.model_features_file())
+    try:
+        info = path.stat()
+        stamp = (path, info.st_mtime_ns, info.st_size)
+    except OSError:
+        return {}
+    if CACHE.get("stamp") != stamp:
+        try:
+            CACHE["records"] = json.loads(path.read_text())
+        except (OSError, ValueError):
+            CACHE["records"] = {}
+        CACHE["stamp"] = stamp
+    return CACHE["records"]
+
+
+def record(model, api):
+    """The model's record measured on `api`, or None."""
+    found = records().get(model)
+    if not isinstance(found, dict) or found.get("api") != api.NAME:
+        return None
+    return found
+
+
+def honoured(model, api, feature):
+    """True or False as measured; None for a model never measured on its
+    API, or no feature. A feature the API doesn't have is never honoured."""
+    if feature is None:
+        return None
+    if feature not in api.FEATURES:
+        return False
+    found = record(model, api)
+    if found is None:
+        return None
+    return found["features"].get(feature)
+
+
+def json_object(text):
+    try:
+        data = json.loads(text or "")
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def measure(model, api, client, server_model, timeout):
+    """Measure each of the API's features on the model, keep the record and
+    return it. `server_model`: the model's name at its server. FeatureError
+    when the server can't be asked."""
+
+    def ask(messages, **standard):
+        return complete(api, client, server_model, messages, silence=timeout,
+                        max_output_tokens=OUTPUT, **standard)
+
+    found = {}
+
+    def test(feature, run):
+        if feature not in api.FEATURES:
+            found[feature] = False
+            return
+        try:
+            found[feature] = run()
+        except (openai.BadRequestError, openai.UnprocessableEntityError):
+            # The server refuses the field
+            found[feature] = False
+        except Exception as e:
+            raise FeatureError(
+                f"couldn't measure {model}: {type(e).__name__}: {e}"
+            ) from e
+
+    test("thinking_off",
+         lambda: not ask(SUM, effort="off").reasoning)
+    test("thinking_on",
+         lambda: bool(ask(SUM, effort="high").reasoning))
+    # As the judge asks: at temperature 0, thinking off where it can be
+    quiet = {"temperature": 0}
+    if found["thinking_off"]:
+        quiet["effort"] = "off"
+
+    def fits():
+        data = json_object(ask(GREETING, json_schema=SCHEMA, **quiet).content)
+        return data is not None and set(data) == {"colour"} and (
+            data["colour"] in COLOURS
+        )
+
+    test("strict_json", fits)
+    test("json_mode", lambda: json_object(
+        ask(JSON_GREETING, json_mode=True, **quiet).content) is not None)
+    row = {
+        "api": api.NAME,
+        "measured": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "features": found,
+    }
+    keep(model, row)
+    return row
+
+
+def keep(model, row):
+    """The record written whole, through a file beside it."""
+    path = Path(paths.model_features_file())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    kept = {**records(), model: row}
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(kept, indent=1, sort_keys=True) + "\n")
+    temporary.replace(path)

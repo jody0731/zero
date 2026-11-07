@@ -224,6 +224,15 @@ MESSAGES = {
         "session takes, or why it lists none.",
         reply={"servers": rows("one row a server")},
     ),
+    "model/features": message(
+        "What a model honours of its API's features (thinking_off, "
+        "thinking_on, strict_json, json_mode), as measured: each true or "
+        "false, null where never measured. Measured now when none are kept "
+        "or `test` is true, a few small calls to the model.",
+        {"model": STRING, "test": BOOLEAN}, required=("model",),
+        reply={"model": STRING, "api": STRING, "measured": STRING,
+               "features": OBJECT},
+    ),
     "model/provider/list": message(
         "Every model server the host knows, whether its key is there, the "
         "default model, and why a session on it couldn't start (null: it can).",
@@ -238,8 +247,9 @@ MESSAGES = {
         reply={"url": STRING, "models": rows("id, context")},
     ),
     "model/provider/connect": message(
-        "A server's model tested with a one-token call, then saved: the key "
-        "in keys.toml, the server in models.toml; the first model connected "
+        "A server's model tested with a call of a few tokens, then saved: "
+        "the key in keys.toml, the server in models.toml; the first model "
+        "connected "
         "becomes the default.",
         {"name": STRING, "url": STRING, "key": STRING, "model": STRING,
          "context": {**INTEGER, "minimum": 1}, "title": STRING,
@@ -256,7 +266,7 @@ MESSAGES = {
         "ZERO's settings, each with its value, and what is wrong with "
         "config.toml (null: nothing).",
         reply={"settings": rows("name, group, label, default, kind, choices, "
-                                "least, off, shown, value"),
+                                "least, off, shown, needs, runs_on, value"),
                "error": maybe(STRING)},
     ),
     "setting/set": message(

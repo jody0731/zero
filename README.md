@@ -25,7 +25,7 @@
   </picture>
 </p>
 
-- **Any model:** any server that speaks the OpenAI chat API. ZERO ships a catalog (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter, Ollama) and takes servers of your own; no model is built in.
+- **Any model:** any server that speaks OpenAI's Chat Completions or Responses API. ZERO ships a catalog (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter, Ollama) and takes servers of your own; no model is built in. What a model honours of its API (thinking off, strict JSON) is measured, and a setting it can't honour shows unavailable.
 - **Many sessions:** each with its own workspace and history, opened, switched, renamed or archived from any terminal.
 - **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
 - **One host:** it runs every session. Turns, background jobs and waiting questions go on after the terminal closes, and every app reaches the host the same way.
@@ -48,7 +48,7 @@ The installer checks what ZERO needs, checks out the newest release, makes a Pyt
 
 - Linux, with `git`, Python 3.11 or newer (made and tested on 3.14) and its `venv` module
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`): ZERO's sandbox for the commands it runs
-- a model: an API key for a provider ZERO knows (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter), or a server of your own that speaks the OpenAI chat API, such as Ollama or llama-server
+- a model: an API key for a provider ZERO knows (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter), or a server of your own that speaks OpenAI's Chat Completions API, such as Ollama or llama-server
 
 </details>
 
@@ -79,7 +79,7 @@ url = "http://localhost:8080/v1"
 context = 65536
 ```
 
-Its models are then `myserver/<model>`. The catalog ZERO ships, with every field explained, is [model/catalog.toml](model/catalog.toml); a line in models.toml under the same name changes any of it.
+Its models are then `myserver/<model>`. A server that speaks the Responses API takes `api = "responses"`. The catalog ZERO ships, with every field explained, is [model/catalog.toml](model/catalog.toml); a line in models.toml under the same name changes any of it. `zero model features myserver/<model>` says what the model honours of its API (`--test` measures again).
 
 </details>
 
@@ -104,6 +104,7 @@ zero session list                                  # read, watch, stop, continue
 zero job list                                      # job stop JOB
 zero grant list ID                                 # grant forget ID GRANT
 zero model provider list                           # probe, connect, disconnect
+zero model features MODEL                          # what it honours of its API; --test
 zero setting set max_steps 80                      # setting list
 zero host status                                   # whether the host runs and what keeps it busy
 ```

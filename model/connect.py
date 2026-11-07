@@ -1,11 +1,14 @@
-"""Connecting a model: a server's models asked for, a one-token test call,
-and the server, its key and the user's default saved (model/host.py's messages).
+"""Connecting a model: a server's models asked for, a test call of a few
+tokens, and the server, its key and the user's default saved (model/host.py's
+messages).
 
-A server is asked through the OpenAI chat API's standard doors: /v1/models
-for its models (with each one's window where the server says: vLLM's
-max_model_len, LM Studio's and OpenRouter's context_length), then one token
-of a chat from the chosen model. A server that lists nothing (a 404 there)
-is proven by the call alone. Nothing is saved until the call answers.
+A server is asked for its models at the OpenAI APIs' standard door,
+/v1/models (with each one's window where the server says: vLLM's
+max_model_len, LM Studio's and OpenRouter's context_length), then for as
+few tokens as its API allows from the chosen model, in the API its entry
+names (apis/; a server of the user's own speaks the Chat Completions API).
+A server that lists nothing (a 404 there) is proven by the call alone.
+Nothing is saved until the call answers.
 
 What is saved: the key in keys.toml under the server's name (mode 600); in
 models.toml only the lines the catalog doesn't already give (a server of
@@ -23,7 +26,9 @@ import openai
 from openai import OpenAI
 
 import paths
+from core.llm import complete
 from model import providers
+from model.apis import APIS, DEFAULT
 
 # What a server's name may be: what a model's name starts with
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -89,19 +94,14 @@ def probe(url, key):
         ) from e
 
 
-def test_call(url, key, model, options=None):
-    """One token from the model; ConnectError if it doesn't come. `options`:
-    the request's own (a thinking model's thinking off, which would spend
-    the one token)."""
+def test_call(url, key, model, api):
+    """As few output tokens as the server's API allows, from the model, in
+    that API (apis/); ConnectError if they don't come."""
     client = OpenAI(base_url=url, api_key=key, timeout=TEST_SECONDS,
                     max_retries=0)
     try:
-        stream = client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": "Say OK."}],
-            max_tokens=1, stream=True, **(options or {}),
-        )
-        for _ in stream:
-            pass
+        complete(api, client, model, [{"role": "user", "content": "Say OK."}],
+                 silence=TEST_SECONDS, max_output_tokens=api.MIN_OUTPUT_TOKENS)
     except Exception as e:
         raise ConnectError(
             f"the test call to {model} at {url} failed: {said(e, key)}"
@@ -309,9 +309,8 @@ def connect(request):
             f"no context window for {model}: the server doesn't say, so give "
             "it (tokens)"
         )
-    options = (providers.effort_options(providers.Provider(name, entry), "off")
-               if entry else {})
-    test_call(url, key, model, options)
+    api = APIS[(entry or {}).get("api", DEFAULT)]
+    test_call(url, key, model, api)
     lines = own_lines(name)
     before = dict(lines)
     shipped = catalog().get(name)

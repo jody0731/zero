@@ -3,6 +3,18 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.7
+
+ZERO speaks each server's own API, and measures what a model honours.
+
+- **The Responses API:** a server's entry names the API it speaks, `api = "responses"` or `"chat_completions"` (the default) in `models.toml`. DeepSeek now goes through the Responses API, where it takes strict JSON; local servers (Ollama, llama-server) stay on the Chat Completions API.
+- **Thinking off reaches every server:** "off" is sent as each API's own field (`reasoning_effort: "none"`, `reasoning.effort: "none"`), so llama-server and Ollama turn thinking off too; before, only DeepSeek got it.
+- **What a model honours, measured:** thinking off, thinking, strict JSON and JSON mode, each by a small request, the first time a model's settings are shown (a few calls), kept per model. `zero model features MODEL` says what was measured; `--test` measures again. A value a model doesn't honour shows **unavailable on MODEL** on its row in `/settings`, following the model it runs on, and is kept but not sent.
+- **The judge and the consent check** ask for strict JSON wherever the model honours it, else JSON mode.
+- **Replies are read by each API's rules:** a reply that didn't complete (a finish reason the API doesn't name, a failed or incomplete response) is retried, whatever the server.
+- **models.toml:** the lines `thinking` and `json_format` are gone (measured now); a file that has them says so.
+- The protocol (still 2): `model/features`; `setting/list` rows say which feature each value needs (`needs`) and which setting names its model (`runs_on`).
+
 ## 0.6.2.6.1
 
 A fix release.

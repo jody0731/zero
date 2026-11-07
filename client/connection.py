@@ -46,6 +46,9 @@ def connect(path, timeout=30):
 
 # Seconds a connect may take: the host's test call waits up to a minute
 CONNECT_WAIT = 90
+# Seconds a model's features may take to measure: four small calls, each
+# with a short thought on a thinking model
+FEATURES_WAIT = 300
 
 
 def request(path, payload, timeout=30):
@@ -196,6 +199,14 @@ class Connection:
         """Every server the host can reach, with its models by the names a
         session takes, or why it lists none: the host's reply as it is."""
         return self.call(build("model/list"))
+
+    def features(self, model, test=False):
+        """What a model honours of its API's features, as the host measured
+        it (measured now when never, or `test`): the host's reply. Measuring
+        calls the model a few times, so the wait is long."""
+        fields = {"test": True} if test else {}
+        return self.call(build("model/features", model=model, **fields),
+                         timeout=FEATURES_WAIT)
 
     def providers(self):
         """Every model server the host knows, whether its key is there, the

@@ -1,15 +1,17 @@
 """The model's part in the host (host/parts.py): `model/list`, which asks
 every server ZERO can reach for its models, so any face lists them from the
-host (the full screen's /model menu today); and connecting one (connect.py),
-under `model/provider/`: `list` (every server and whether its key is there),
-`probe` (one server's models, for a face's pick list), `connect` (a test call,
-then saved) and `disconnect`. Each is whole in one request: the host keeps
-nothing between a face's steps, so a plain command sends the same. Only
-`model/list` and `model/provider/list` look; the rest are the user's own
-face's alone, since they send a key or change the user's files.
+host (the full screen's /model menu today); `model/features`, what a model
+honours of its API's features (features.py), measured when none are kept or
+when asked; and connecting one (connect.py), under `model/provider/`: `list`
+(every server and whether its key is there), `probe` (one server's models,
+for a face's pick list), `connect` (a test call, then saved) and
+`disconnect`. Each is whole in one request: the host keeps nothing between a
+face's steps, so a plain command sends the same. Only `model/list` and
+`model/provider/list` look; the rest are the user's own face's alone, since
+they send a key, change the user's files or call a model.
 
 A server is reachable when it needs no key or its key is there (providers.py);
-the others aren't asked. Each is asked through the OpenAI chat API's
+the others aren't asked. Each is asked through the OpenAI APIs'
 standard /v1/models, Ollama and llama-server alike, all at once, each for a
 few seconds at most. A model is listed by the name a session takes:
 "myserver/some-model", or a bare name for Ollama's.
@@ -20,10 +22,13 @@ from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
 
 from host.parts import Part
-from model import connect, providers
+from model import connect, features, providers
 
 # Seconds a server has to list its models; one that doesn't answer says so
 LIST_SECONDS = 3
+# Seconds a model may stay silent while its features are measured: a local
+# server may first load it
+FEATURE_SECONDS = 60
 
 
 class ModelList(Part):
@@ -42,6 +47,7 @@ class ModelList(Part):
 
     def messages(self):
         return {"model/list": self.models_message,
+                "model/features": self.features_message,
                 "model/provider/list": self.providers_message,
                 "model/provider/probe": self.probe_message,
                 "model/provider/connect": self.connect_message,
@@ -55,6 +61,26 @@ class ModelList(Part):
 
     def writable(self):
         return self.config if hasattr(self.config, "set") else None
+
+    def features_message(self, request):
+        model = request.get("model")
+        if not isinstance(model, str) or not model.strip():
+            return {"ok": False, "error": "model/features needs a model"}
+        model = model.strip()
+        try:
+            provider, server_model = providers.resolve(model)
+            api = provider.api
+            row = features.record(model, api)
+            if row is None or request.get("test") is True:
+                client = providers.make_client(model, FEATURE_SECONDS)
+                row = features.measure(model, api, client, server_model,
+                                       FEATURE_SECONDS)
+        except (providers.ProviderError, features.FeatureError) as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "model": model, "api": api.NAME,
+                "measured": row["measured"],
+                "features": {name: row["features"].get(name)
+                             for name in features.FEATURES}}
 
     def providers_message(self, request):
         try:

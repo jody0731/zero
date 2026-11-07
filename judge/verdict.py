@@ -40,7 +40,8 @@ import re
 import time
 
 from core.llm import MODEL_ERRORS, complete
-from model.providers import effort_options, make_client, resolve
+from model import features
+from model.providers import make_client, resolve
 
 DECISIONS = ("allow", "session", "deny")
 # What a model writes when there are no side effects ("None; read-only", say)
@@ -96,23 +97,19 @@ Answer with JSON only:
 # The answer's fields in the order the judge writes them
 FIELDS = ("reason", "side_effects", "second_look", "decision")
 
-# Strict structured output (Ollama): the reply can only be this shape. Providers
-# without it get plain JSON mode; the prompt carries the shape either way
-RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "verdict",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string"},
-                "side_effects": {"type": "string"},
-                "second_look": {"type": "string"},
-                "decision": {"type": "string", "enum": list(DECISIONS)},
-            },
-            "required": list(FIELDS),
+# Strict JSON where the model honours it, else JSON mode (model/features.py):
+# the reply can only be this shape; the prompt carries the shape either way
+SCHEMA = {
+    "name": "verdict",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "reason": {"type": "string"},
+            "side_effects": {"type": "string"},
+            "second_look": {"type": "string"},
+            "decision": {"type": "string", "enum": list(DECISIONS)},
         },
+        "required": list(FIELDS),
     },
 }
 
@@ -177,12 +174,14 @@ def parse(content):
 
 
 class Judge:
-    """One model call per verdict: strict JSON at temperature 0."""
+    """One model call per verdict: JSON at temperature 0, strict where the
+    model honours it (model/features.py)."""
 
     def __init__(self, model, client=None, name=None, *, timeout, retries=1,
                  effort=None, output_chars=None, outputs=0):
         self.model = model
         provider, self.api_name = resolve(model)
+        self.api = provider.api
         # Seconds the judge may stay silent (complete's `silence`)
         self.timeout = timeout
         # Tries after a reply that isn't a verdict (judge_retries)
@@ -190,15 +189,16 @@ class Judge:
         # Its thinking (judge_effort); None sends nothing, so the
         # API's default holds
         self.effort = effort
-        self.options = effort_options(provider, effort)
         # What it sees of output (judge_output_chars and judge_outputs);
         # None shows none
         self.output_chars = output_chars
         self.outputs = outputs
         self.client = client or make_client(model, timeout)
-        self.format = RESPONSE_FORMAT
-        if provider.json_format != "json_schema":
-            self.format = {"type": "json_object"}
+        # The verdict's JSON schema, asked for as the model honours it
+        self.schema = SCHEMA
+        # A cap on each call's output: none, but the judge eval's
+        # --max-tokens sets one
+        self.max_output_tokens = None
         self.user = name or "the user"
         self.system = prompt(name)
 
@@ -234,9 +234,12 @@ class Judge:
         for _ in range(self.retries + 1):
             try:
                 reply = complete(
-                    self.client, self.api_name, messages, silence=self.timeout,
-                    check=check, temperature=0, response_format=self.format,
-                    **self.options,
+                    self.api, self.client, self.api_name, messages,
+                    silence=self.timeout, check=check, temperature=0,
+                    effort=features.effort_sent(self.model, self.api,
+                                                self.effort),
+                    max_output_tokens=self.max_output_tokens,
+                    **features.json_request(self.model, self.api, self.schema),
                 )
                 used = (reply.prompt_tokens, reply.cached_tokens,
                         reply.completion_tokens)

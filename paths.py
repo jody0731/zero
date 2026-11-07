@@ -71,6 +71,12 @@ def permissions_file():
     return home() / "permissions.toml"
 
 
+def model_features_file():
+    """What each model was measured to honour of its API's features
+    (model/features.py): ZERO's own record, not the user's to edit."""
+    return Paths().state / "model_features.json"
+
+
 def config_file():
     return home() / "config.toml"
 

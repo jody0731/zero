@@ -1,10 +1,12 @@
 """Connecting a model: the servers ZERO knows, from the host's `providers`.
 
 One view, two doors: "Connect a model" opens in front of the session view
-when new sessions' model can't start (none set, its key missing, no window),
-and "Models and keys" from the settings. A connect is a few small steps (a
-key, the server's models, a name, a window: only those the server doesn't
-already answer), then the host's `connect` with all of them in one request:
+when new sessions' model can't start (its key missing, no window, or none
+set with no server connected), and "Models and keys" from the settings.
+With a server connected and none set, new sessions' model is picked
+instead (`pick_default`). A connect is a few small steps (a key, the
+server's models, a name, a window: only those the server doesn't already
+answer), then the host's `connect` with all of them in one request:
 the host keeps nothing between the steps, so the same request could come
 from anywhere. A key is typed into a masked line and goes straight to the
 host, which keeps it in keys.toml; the view never shows it.
@@ -21,6 +23,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 import paths
+from apps.tui import controller
 from apps.tui.dialogs import ChoiceView, PromptView
 from apps.tui.widgets import ERRORS, Plain
 from client import session_list
@@ -29,6 +32,9 @@ from client import session_list
 OWN = "Your own server…"
 # The model list's last choice
 OTHER = "another model…"
+# The pick of new sessions' model: its title and its last choice
+PICK = "New sessions' model"
+CONNECT = "Connect a model…"
 KEY_STATE = {"there": "key saved", "none needed": "no key needed",
              "missing": "needs a key"}
 URL_LABEL = ("Its URL (OpenAI-style servers serve under /v1, as "
@@ -54,6 +60,57 @@ def provider_of(model, names):
         return None
     prefix, _, rest = model.partition("/")
     return prefix if rest and prefix in names and prefix != "ollama" else "ollama"
+
+
+def connected_servers(listed):
+    """The servers of a `providers` reply a model can be picked from: a key
+    saved, or one of the user's own that needs none."""
+    return [row for row in listed if row["key"] == "there"
+            or (row["own"] and row["key"] != "missing")]
+
+
+def pick_default(zero):
+    """New sessions' model, picked where a server is connected and none is
+    set: the models the sessions used, then the servers' (asked off the
+    screen's thread, since a server may be slow to list), another typed, and
+    "Connect a model…" last. The pick is the default."""
+
+    def listed():
+        zero.wait_for_list(1)
+        return controller.model_choices(None, zero.lists.sessions,
+                                        zero.served_models())
+
+    def offer(named):
+        zero.push_screen(ChoiceView(PICK, [*named, OTHER, CONNECT]), chosen)
+
+    def chosen(value):
+        if value == CONNECT:
+            zero.push_screen(ServersView(zero, first=True))
+        elif value == OTHER:
+            zero.push_screen(PromptView(f"{PICK}: its name", ""),
+                             lambda text: text and text.strip()
+                             and take(text.strip()))
+        elif value is not None:
+            take(value)
+
+    def take(model):
+        try:
+            zero.set_setting("model", model)
+        except ERRORS as error:
+            zero.notify(str(error), severity="error")
+            return
+        zero.note(f"ZERO: new sessions use {model}; /settings changes it.")
+        zero.focus_input()
+
+    def run():
+        named = listed()
+        try:
+            zero.call_from_thread(offer, named)
+        except RuntimeError:
+            # The full screen closed meanwhile
+            pass
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 def tokens(text):
@@ -373,7 +430,7 @@ class ServersView(Screen):
             return
         said = f"Removed {row['title']}'s key and your lines for it."
         if reply["default_unset"]:
-            said += " New sessions have no model until you connect one."
+            said += " New sessions have no model: pick one in Default → Model."
             self.zero.defaults["model"] = None
         self.notify(said)
         self.fetch()

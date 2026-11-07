@@ -288,7 +288,10 @@ class SettingsView(Scrolled, Screen):
                 lambda value: value and self.set(row, value),
             )
         elif row.kind == "model":
-            self.pick_model(row, now, lambda value: self.set(row, value))
+            # New sessions' model has no unset choice: none set, they
+            # can't start; the judge's unset is the session's own model
+            self.pick_model(row, now, lambda value: self.set(row, value),
+                            unset=row.name != "model")
         else:
             shown = "" if now is None else controller.setting_text(row, now)
             empty = row.off or controller.setting_text(row, row.default)
@@ -377,8 +380,12 @@ class SettingsView(Scrolled, Screen):
         if not self.rows:
             return
         row = self.rows[self.selected]
-        if isinstance(row, settings.Setting) and not self.problem():
-            self.set(row, row.default)
+        if not isinstance(row, settings.Setting) or self.problem():
+            return
+        if row.name == "model":
+            self.notify("New sessions need a model: Enter picks another.")
+            return
+        self.set(row, row.default)
 
 
 class KeysView(Scrolled, Screen):

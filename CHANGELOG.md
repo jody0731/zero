@@ -3,6 +3,13 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.2.6.1
+
+A fix release.
+
+- **No more "Connect a model" while models are connected:** with no default model set but a server connected, `zero` opens **New sessions' model**, a pick of the models your sessions used and the servers serve (another typed, or **Connect a model…** last); the pick is the default. "Connect a model" opens when nothing is connected or the default's key is missing; before, every start with no default landed there.
+- **New sessions' model can't be unset by a key:** `/settings` → Default → Model has no "none set" row, and Del leaves it as it is. Removing its server still unsets it, and says so. The judge's model keeps its unset choice, the session's own model.
+
 ## 0.6.2.6
 
 The settings in sections, `/model` with the thinking, and a judge that decides last.

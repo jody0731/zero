@@ -35,7 +35,7 @@ from textual.widgets import Static, TextArea
 import paths
 import settings
 from apps.tui import clipboard, config, controller, keybindings
-from apps.tui.connect_screen import ServersView
+from apps.tui.connect_screen import ServersView, connected_servers, pick_default
 from apps.tui.controller import SessionClient
 from apps.tui.dialogs import CaptureView, ChoiceView, PromptView, TextView
 from apps.tui.session_screen import SessionView
@@ -295,14 +295,21 @@ class Zero(SafeClicks, App):
         self.focus_input()
 
     def offer_connect(self):
-        """"Connect a model" in front when new sessions' model can't start:
-        none set, its key missing, no window. A host that can't say leaves
-        it to the first message's refusal."""
+        """When new sessions' model can't start: with none set and a server
+        connected, a pick of the models known (pick_default); otherwise
+        "Connect a model" in front (nothing connected, its key missing, no
+        window). A host that can't say leaves it to the first message's
+        refusal."""
         try:
             reply = self.connection.providers()
         except ERRORS:
             return
-        if reply.get("ready"):
+        if not reply.get("ready"):
+            return
+        servers = connected_servers(reply.get("providers", ()))
+        if not reply.get("default") and servers:
+            pick_default(self)
+        else:
             self.push_screen(ServersView(self, first=True))
 
     def connected(self, model):

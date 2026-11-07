@@ -56,7 +56,7 @@ The installer checks what ZERO needs, checks out the newest release, makes a Pyt
 
 ### Connect a model
 
-The first `zero` with no model opens **Connect a model**. Pick a provider and paste its API key, or choose **Your own server…** and give its URL, a key if it takes one, a model it serves and, where the server doesn't say, its context window. ZERO makes a one-token test call before it saves anything, and the first model connected becomes new sessions' default. Later, `/settings` → **Models and keys…** connects another model, takes a new key, tests a server or removes it.
+The first `zero` with no model opens **Connect a model**. Pick a provider and paste its API key, or choose **Your own server…** and give its URL, a key if it takes one, a model it serves and, where the server doesn't say, its context window. ZERO makes a one-token test call before it saves anything, and the first model connected becomes new sessions' default. With a server connected but no default (its server removed, say), `zero` opens **New sessions' model** instead: a pick of the models known. Later, `/settings` → **Models and keys…** connects another model, takes a new key, tests a server or removes it.
 
 <details>
 <summary><b>The same, by hand</b>: ZERO's files in <code>~/.zero/</code></summary>

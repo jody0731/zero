@@ -174,8 +174,9 @@ def completions(text):
 
 def status_pieces(client, row, defaults, home=None, older=False, now=None):
     """The status line's pieces, most important first: mode, model,
-    workspace, state, the context's meter, and a note when the server runs
-    older code."""
+    workspace, state, the context's meter, work in rounds (`round 3/8 ·
+    42 min of 2 h · $0.12 of $1.00`, the server's line), and a note when the
+    server runs older code."""
     now = time.monotonic() if now is None else now
     mode = (row or {}).get("mode") or client.mode or defaults.get("mode") or "?"
     model = (row or {}).get("model") or client.model or defaults.get("model") or "?"
@@ -194,6 +195,8 @@ def status_pieces(client, row, defaults, home=None, older=False, now=None):
     meter = render.meter_text(getattr(client, "context", None))
     if meter:
         pieces.append(meter)
+    if (row or {}).get("rounds"):
+        pieces.append(row["rounds"])
     if older:
         pieces.append("the server runs older code")
     return pieces

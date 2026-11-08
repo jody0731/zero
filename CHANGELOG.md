@@ -3,6 +3,40 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.4
+
+Long work in rounds.
+
+- **Work in rounds:** leave ZERO a long job ("I'll check back"), or send it with `--rounds` (`zero session
+  send` and `zero -p`), and ZERO starts work in rounds with its tool, with an estimate (rounds, minutes,
+  dollars) and a done check, a command such as `pytest -q`. Each round is a turn of the same session whose
+  context starts fresh from the last round's handoff (every handoff kept in the session's folder); the
+  server starts the next one until the work is done (the done check passes, run by the server), stuck
+  (ZERO says why, or two rounds in a row failed), stopped, or its budget is spent, when ZERO reports and
+  asks for a new one. A turn whose context was compacted twice is told it can go on in rounds.
+  - Nothing in a round waits on you: you approve the budget at the start and read the report at the
+    end. In between, a call that would ask you is refused with its reason (in auto and auto+ the judge
+    answers as before), and a round is bounded by the run's budget, not the turn's.
+  - `zero rounds list` and `zero rounds stop ID`; the status line shows `round 3/8 · 42 min of 2 h · $0.12
+    of $1.00`. Work in rounds survives a restart of the server.
+- **A budget for every turn:** **Minutes a turn runs before asking** (`standing_budget_minutes`, 120) and
+  **Dollars a turn spends before asking** (`standing_budget_dollars`, 2.00), under Limits. Minutes are
+  ZERO's own working time; dollars are its model calls at the model's price (nothing on a local server).
+  Past either, ZERO asks you to let the turn go on, in every mode, never the judge; a yes gives it as much
+  again. An estimate for work in rounds past it asks you too.
+  - It replaces the step limit: `max_steps` and `extra_steps` are retired (ignored in config.toml), and
+    `max_seconds` reads as the minutes. A turn's twenty refusals by the judge no longer end it; three in a
+    row still do.
+- **The judge's ceiling:** **Tokens a verdict may write** (`judge_reply_tokens`, 8,192, thinking included).
+  A verdict cut there is asked again once, then counts as a deny.
+- **A fallback model** (`fallback_model`, unset): when a call to the session's model fails past its
+  retries, the rest of the turn goes on with it, and the next turn tries the session's model again. A judge
+  whose model is down asks it too.
+- The protocol stays 4: `session/send` takes `rounds`, and `rounds/list` and `rounds/stop` are new.
+- **Fixed:** after an update, a session's next turn no longer counts its context several times high
+  and compacts it for nothing.
+- **Fixed:** the job tool finds a job by its id without the `job-` prefix.
+
 ## 0.6.3
 
 Long sessions keep going.

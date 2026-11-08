@@ -20,10 +20,11 @@ permissions/grants.py), and it answers plans (permissions/tool.py) as one call: 
 allowed plan's calls run unreviewed until the user's next message. Side
 effects the goal doesn't need get a deny with the clean way to do it, or, when
 they can't be avoided, an allow that names them; the agent sees them with the
-result. A reply that isn't a verdict (an API error, a silence, bad JSON, no
-reason) is asked again, `retries` times; a judge that still gives none is
-logged as failed and counts as a deny, so a broken check never lets a call
-through.
+result. A reply that isn't a verdict (an API error, a silence, a reply past
+its ceiling of tokens, bad JSON, no reason) is asked again, `retries` times;
+a judge whose model still fails to answer asks the fallback model, where
+there is one; a judge that still gives none is logged as failed and counts
+as a deny, so a broken check never lets a call through.
 
 Two placements (no root guard in either):
   auto   sandbox and rules on; the judge answers the rules' asks, including a
@@ -188,7 +189,8 @@ class Judge:
     model honours it (model/features.py)."""
 
     def __init__(self, model, client=None, name=None, *, timeout, retries=1,
-                 effort=None, output_chars=None, view_bytes=None):
+                 effort=None, output_chars=None, view_bytes=None,
+                 reply_tokens=None, fallback=None):
         self.model = model
         server, self.served_name = resolve(model)
         self.api = server.api
@@ -208,9 +210,12 @@ class Judge:
         self.client = client or make_client(model, timeout)
         # The verdict's JSON schema, asked for as the model honours it
         self.schema = SCHEMA
-        # A cap on each call's output: none, but the judge eval's
-        # --max-tokens sets one
-        self.max_output_tokens = None
+        # The ceiling on each verdict's reply, thinking included
+        # (judge_reply_tokens); the judge eval's --max-tokens sets its own
+        self.max_output_tokens = reply_tokens
+        # A judge on the fallback model, asked when this one's model fails to
+        # answer at all (an outage, not a bad verdict); None for none
+        self.fallback = fallback
         self.user = name or "the user"
         self.system = prompt(name)
 
@@ -244,6 +249,7 @@ class Judge:
         ]
         tokens, errors = [0, 0, 0], []
         thought = None
+        down = True
         for _ in range(self.retries + 1):
             try:
                 reply = complete(
@@ -259,13 +265,26 @@ class Judge:
                         reply.completion_tokens)
                 tokens = [a + b for a, b in zip(tokens, used)]
                 thought = reply.reasoning
+                if reply.finish_reason == "length":
+                    raise VerdictError(
+                        f"cut off at its ceiling of {self.max_output_tokens} "
+                        "tokens, thinking included"
+                    )
                 verdict = parse(reply.content)
                 if verdict["decision"] == "session" and not offer:
                     verdict["decision"] = "allow"
                 break
             except (*MODEL_ERRORS, VerdictError) as e:
                 errors.append(f"{type(e).__name__}: {e}")
+                # A reply that came back, whatever it held, isn't an outage
+                down = down and not isinstance(e, VerdictError)
         else:
+            if down and self.fallback is not None:
+                verdict = self.fallback.decide(history, command, check, offer)
+                verdict["retried"] = errors + verdict.get("retried", [])
+                verdict["fallback"] = self.fallback.model
+                verdict["seconds"] = round(time.monotonic() - t0, 1)
+                return verdict
             verdict = {"decision": "failed", "error": errors.pop()}
         if errors:
             verdict["retried"] = errors

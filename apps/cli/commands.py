@@ -10,6 +10,7 @@ A message only a screen needs has no command; NO_COMMAND says why.
     zero session set ID [--mode M] [--model M] [--cd DIR] [--thinking-effort E]
         [--judge-model M] [--judge-thinking-effort E]
     zero job list [--session ID] · job stop JOB
+    zero rounds list [--session ID] · rounds stop ID
     zero grant list ID · grant forget ID GRANT
     zero model list · model features MODEL [--test] · model server list ·
         probe NAME · connect NAME --model M [--url URL] [--key-stdin] ·
@@ -52,7 +53,7 @@ from client.result import CHOICES, Result
 
 NAME = "ZERO"
 # The families main.py hands here; `server` is main.py's own
-FAMILIES = ("session", "job", "grant", "model", "setting")
+FAMILIES = ("session", "job", "rounds", "grant", "model", "setting")
 # The messages with no command, and why: what only a screen needs
 NO_COMMAND = {
     "session/mark_seen": "a person's read mark, which the full screen sends for what "
@@ -245,6 +246,8 @@ def print_turn(connection, args, workspace, out=print):
         options["when_busy"] = args.when_busy
     if getattr(args, "choice", None):
         options["choice"] = args.choice
+    if getattr(args, "rounds", False):
+        options["rounds"] = True
     reply = connection.send(text_of(args.p), **options)
     sid = reply["session"]
     if getattr(args, "no_wait", False):
@@ -302,6 +305,9 @@ def send_flags(parser):
     parser.add_argument("--choice", choices=CHOICES,
                         help="answer the waiting question with one of its "
                              "choices")
+    parser.add_argument("--rounds", action="store_true",
+                        help="work on it in rounds: ZERO's estimate of the "
+                             "budget comes to you")
     follow_flags(parser)
 
 
@@ -405,6 +411,18 @@ def parser(prog="zero"):
     stop.add_argument("job", metavar="JOB", help="a job's id or the start of it")
     json_flag(stop)
     stop.set_defaults(handler=job_stop_command)
+
+    rounds = families.add_parser("rounds", help="work in rounds")
+    actions = rounds.add_subparsers(dest="action", required=True)
+    listing = actions.add_parser("list", help="every open run, or a session's, "
+                                              "ended ones too")
+    listing.add_argument("--session", metavar="ID")
+    json_flag(listing)
+    listing.set_defaults(handler=rounds_list_command)
+    stop = actions.add_parser("stop", help="stop work in rounds")
+    stop.add_argument("id", metavar="ID", help="a run's id or the start of it")
+    json_flag(stop)
+    stop.set_defaults(handler=rounds_stop_command)
 
     grant = families.add_parser("grant", help="what an ask's \"don't ask "
                                               "again\" allowed")
@@ -621,6 +639,27 @@ def job_stop_command(connection, args, out):
     reply = connection.stop_job(job)
     return print_reply(args, out, reply,
                        "Stopped." if reply["stopped"] else "It wasn't running.")
+
+
+def rounds_list_command(connection, args, out):
+    sid = session_id(connection, args.session) if args.session else None
+    runs = connection.rounds(sid)
+    lines = [f"  {run['id']}  {run['session'] + '  ' if sid is None else ''}"
+             f"{run['state']}  {run['summary']}  {run['objective']}"
+             for run in runs]
+    # Without a session, the list is the work under way (as job list's)
+    empty = "No work in rounds." if sid else "No work in rounds under way."
+    return print_reply(args, out, {"ok": True, "rounds": runs},
+                       "\n".join(lines) or empty)
+
+
+def rounds_stop_command(connection, args, out):
+    open_runs = [run["id"] for run in connection.rounds()
+                 if run["id"].startswith(args.id)]
+    run = open_runs[0] if len(open_runs) == 1 else args.id
+    reply = connection.stop_rounds(run)
+    return print_reply(args, out, reply,
+                       "Stopped." if reply["stopped"] else "It wasn't open.")
 
 
 def grant_list_command(connection, args, out):

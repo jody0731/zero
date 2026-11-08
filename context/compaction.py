@@ -235,6 +235,51 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens):
     )
 
 
+# What a round's handoff call reads after the conversation, when the round
+# ended without one of its own (rounds/): nothing of it stays
+ROUND = INSTRUCTIONS.replace(
+    "this conversation's context is near its line, so everything before the "
+    "newest steps is about to be replaced by a handoff that you write now. The "
+    "newest steps stay as they are after it.",
+    "this round of the work in rounds has ended, so the whole conversation is "
+    "about to be replaced by a handoff that you write now; the next round "
+    "starts from it.",
+)
+
+
+def fresh(session, handoff, at, tokens=room.tokens, check=None):
+    """A round's end: the context keeps nothing but the system message and
+    `handoff` (the round's own, from end_round); with none, the model writes
+    one from the whole conversation, as a compaction's. The log keeps
+    everything. Raises CompactionFailed when no handoff comes back."""
+    records = session.log.records()
+    before = room.measure(records, session.messages, session.tool_schemas(),
+                          tokens)
+    fields = {"reason": "round", "tokens_before": before.tokens, "line": at}
+    if not (handoff or "").strip():
+        ask = ROUND.format(saved="")
+        t0 = time.monotonic()
+        reply = handoff_call(session, session.messages + [
+            {"role": "user", "content": ask}], at, check)
+        handoff = (reply.content or "").strip()
+        if not handoff:
+            raise CompactionFailed("the round's handoff call came back empty")
+        fields["handoff_call"] = {
+            "prompt_tokens": reply.prompt_tokens,
+            "cached_tokens": reply.cached_tokens,
+            "completion_tokens": reply.completion_tokens,
+            "seconds": round(time.monotonic() - t0, 1),
+        }
+    after = tokens(session.messages[0]["content"]) + tokens(handoff)
+    after += tokens(json.dumps(session.tool_schemas(), ensure_ascii=False))
+    # Nothing before the compaction stays: the context starts at its own
+    # record, the next one appended
+    return session.compacted(
+        **fields, summary=handoff.strip(), kept_from=records[-1]["seq"] + 1,
+        cleared={}, tokens_after=after,
+    )
+
+
 def handoff_call(session, messages, at, check=None):
     """The handoff, written by the session's own model. The tools are sent as
     the last request sent them, so the cache serves the prefix; a reply that

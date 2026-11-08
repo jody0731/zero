@@ -127,6 +127,9 @@ MESSAGES = {
             "when_busy": one_of("steer", "queue"),
             "choice": {**one_of(*CHOICES), "description": "one of the open "
                        "ask's choices, as picked at its box"},
+            "rounds": {**BOOLEAN, "description": "the message is to be worked "
+                       "on in rounds: ZERO is told, and its estimate goes to "
+                       "the user"},
         },
         required=("id", "text", "source"),
         reply=ADMITTED,
@@ -228,6 +231,18 @@ MESSAGES = {
     "job/stop": message(
         "Stop a background job.",
         {"job": STRING}, required=("job",),
+        reply={"stopped": BOOLEAN},
+    ),
+    "rounds/list": message(
+        "A session's work in rounds, ended runs too; with none, every open "
+        "one.",
+        {"session": SESSION},
+        reply={"rounds": rows("one row a run, in a line in `summary`")},
+    ),
+    "rounds/stop": message(
+        "Stop work in rounds: no next round starts; a round under way ends its "
+        "turn.",
+        {"rounds": STRING}, required=("rounds",),
         reply={"stopped": BOOLEAN},
     ),
     "grant/list": message(

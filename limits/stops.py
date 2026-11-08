@@ -1,29 +1,8 @@
-"""What ends a turn with its reason: agent time (the evals' hard cap) and
-malformed replies in a row. Not in the chat's own limits: long jobs can
-rightly take hours; the steps are a soft cap (steps.py); a full context is
-compacted (context/)."""
+"""What ends a turn with its reason: malformed replies in a row. Long jobs
+can rightly take hours: a turn's time and spend are its budget, the user's
+(rounds/); a full context is compacted (context/)."""
 
 from core.hooks import Hook, Stop
-
-
-def hard_limits(limits):
-    """The hard caps a session's limits set: TimeLimit by `max_seconds`, when
-    there is one (the evals')."""
-    if limits["max_seconds"] is None:
-        return []
-    return [TimeLimit(limits["max_seconds"])]
-
-
-class TimeLimit(Hook):
-    """Agent time per turn; time spent waiting for the user doesn't count."""
-
-    def __init__(self, seconds):
-        self._seconds = seconds
-
-    def before_model(self, step):
-        used = step.turn.agent_seconds()
-        if used >= self._seconds:
-            return Stop("time_limit", f"{used:.0f} s of agent time")
 
 
 class BrokenReplyLimit(Hook):

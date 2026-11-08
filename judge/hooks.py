@@ -20,9 +20,10 @@ from core import tools
 from core.asking import ask_of
 from core.hooks import Deny, Hook, Stop
 
-# Claude Code's auto mode: this many refusals end the turn
+# Claude Code's auto mode, Codex and Hermes: this many refusals in a row end
+# the turn. None counted per turn: a long turn's length is its budget's
+# (rounds/), and refusals spread over hours aren't a loop
 MAX_REFUSAL_STREAK = 3
-MAX_REFUSALS_PER_TURN = 20
 # A command's result when it became a job (jobs/tool.py's started_text and
 # moved_status), so the judge can tell which job a later `job` call means
 JOB = re.compile(r"(Started in|moved to) (the background as job-[0-9a-f]+)\.")
@@ -49,11 +50,10 @@ def command_text(call, whole=False):
     if crossing is not None:
         reason = str(crossing["why"] or "").strip() or "none given"
         command += CROSSING.format(tools.as_clause(crossing["fact"]), reason)
-    # A call past a soft cap (limits/steps.py); the history has no notes
-    for name in ("limit", "step_limit"):
-        limit = getattr(call, "notes", {}).get(name)
-        if limit:
-            command += PAST_LIMIT.format(limit["reason"])
+    # A call past a soft cap (jobs/hooks.py); the history has no notes
+    limit = getattr(call, "notes", {}).get("limit")
+    if limit:
+        command += PAST_LIMIT.format(limit["reason"])
     return command
 
 
@@ -187,8 +187,7 @@ class JudgeApproval(Hook):
         return self.judge.decide(history, command, check=check, offer=offer)
 
     def step_end(self, step):
-        if (self._refusal_streak >= MAX_REFUSAL_STREAK
-                or self._refusals >= MAX_REFUSALS_PER_TURN):
+        if self._refusal_streak >= MAX_REFUSAL_STREAK:
             return Stop(
                 "judge_refusals",
                 f"{self._refusal_streak} in a row, {self._refusals} this turn",

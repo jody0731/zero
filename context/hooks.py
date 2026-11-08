@@ -99,7 +99,11 @@ class Context(Hook):
         self._refused = set()
 
     def _line(self, session):
-        return room.line(session.settings, self.window)
+        """The line under the window of the model the session runs on now: a
+        turn gone on with the fallback model (core/loop.py) has its window."""
+        server = getattr(session.model, "server", None)
+        window = getattr(server, "context_window", None) or self.window
+        return room.line(session.settings, window)
 
     def _size(self, session):
         return room.measure(session.log.records(), session.messages,
@@ -135,10 +139,19 @@ class Context(Hook):
             return None
         return Retry(0)
 
-    def compaction_asked(self, session, reason):
-        """A compaction now, between turns (the user's request); one that
-        fails is written down as `compaction_failed`."""
-        self._compact(session, reason)
+    def compaction_asked(self, session, reason, handoff=None):
+        """A compaction now, between turns (the user's request), or at a
+        round's end, keeping nothing but `handoff` (rounds/); one that fails
+        is written down as `compaction_failed`."""
+        if reason != "round":
+            self._compact(session, reason)
+            return
+        try:
+            compaction.fresh(session, handoff, self._line(session),
+                             counter(session))
+        except (CompactionFailed, *MODEL_ERRORS) as error:
+            session.write("compaction_failed", reason=reason,
+                          error=f"{type(error).__name__}: {error}")
 
     def _asked(self, session):
         """"user" or "zero" when a compaction was asked for since the last

@@ -34,7 +34,10 @@ NOT_ASKED = (
 # The call's own asks, which a grant in the permissions memory answers, and
 # the caps', which it never does
 CALL_ASKS = ("rule", "permission")
-LIMIT_ASKS = ("limit", "step_limit")
+LIMIT_ASKS = ("limit",)
+# The asks only the user answers, in every mode (rounds/hooks.py, Budget):
+# the mode's approver leaves them alone
+USER_ASKS = ("budget",)
 # What the user may answer at the box: "session" and "saved" only when
 # the call's ask has a grant to offer (permissions/grants.py)
 YES, SESSION, SAVED, NO = "yes", "session", "saved", "no"
@@ -43,16 +46,15 @@ CHOICES = (YES, SESSION, SAVED, NO)
 
 def ask_of(call):
     """The ask that wants an answer (permissions/asks.py, auto+'s Permissions
-    in permissions/approval.py, the caps in limits/steps.py and
-    jobs/hooks.py), or None; several at once ask once, with every reason. A
-    call the permissions memory grants (permissions/grants.py) asks only for
-    its caps."""
+    in permissions/approval.py, the jobs' cap in jobs/hooks.py), or None;
+    several at once ask once, with every reason. A call the permissions
+    memory grants (permissions/grants.py) asks only for its caps."""
     return waiting_ask(call.notes)
 
 
 def waiting_ask(notes, granted=True):
     """ask_of() from a call's notes; with granted=False, as if nothing were
-    granted."""
+    granted. A user's ask (USER_ASKS) isn't among them: its hook asks it."""
     names = CALL_ASKS + LIMIT_ASKS
     if granted and notes.get("granted") is not None:
         names = LIMIT_ASKS
@@ -79,14 +81,15 @@ PARK = _Park()
 def choices(notes):
     """The answers an ask offers: a grant's two only when the call's own ask
     is all that asks and it has one to offer."""
-    if notes.get("offer") and not any(notes.get(name) for name in LIMIT_ASKS):
+    if notes.get("offer") and not any(notes.get(name)
+                                      for name in LIMIT_ASKS + USER_ASKS):
         return list(CHOICES)
     return [YES, NO]
 
 
 def put_to_user(call, ask, why):
     """Pass on why, then ask. The wait is the user's time, not the
-    agent's (TimeLimit)."""
+    agent's (a turn's budget counts agent time)."""
     t0 = time.monotonic()
     try:
         return ask(call, why)

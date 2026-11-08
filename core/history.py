@@ -37,6 +37,9 @@ COMPACTED = "[Compacted {when}: {what}{size}]"
 CLEARED_ONLY = ("older outputs were saved whole and cleared from view, each in "
                 "the file its line names.")
 HANDED_OFF = "the conversation before the kept steps became the handoff above."
+# A round's end (rounds/): nothing is kept but the handoff
+ROUND_ENDED = ("a round ended, and the conversation before this point became "
+               "the handoff above.")
 SIZE = " The context is now about {tokens:,} tokens of the {line:,} it is kept under."
 
 
@@ -169,6 +172,8 @@ def sent(record):
 def compacted(record):
     """A compaction where it happened: what it did and the size it left."""
     what = CLEARED_ONLY if record.get("cleared_only") else HANDED_OFF
+    if record.get("reason") == "round":
+        what = ROUND_ENDED
     size = ""
     if record.get("tokens_after") and record.get("line"):
         size = SIZE.format(tokens=record["tokens_after"], line=record["line"])

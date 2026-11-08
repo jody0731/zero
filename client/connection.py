@@ -148,12 +148,13 @@ class Connection:
         return reply
 
     def send(self, text, session=None, mode=None, model=None, reply_to=None,
-             workspace=None, when_busy="steer", choice=None, thinking_effort=None):
+             workspace=None, when_busy="steer", choice=None, thinking_effort=None,
+             rounds=False):
         """`reply_to`: the open ask's id, for a line typed at its prompt.
         `workspace` and `thinking_effort`: a new session's folder and thinking.
         `when_busy`: "queue" makes a follow-up that waits for the running
         turn's answer. `choice`: one of the open ask's choices, picked at its
-        box."""
+        box. `rounds`: to be worked on in rounds."""
         msg_id = str(uuid.uuid4())
         request = build(
             "session/send", id=msg_id, text=text, session=session, mode=mode,
@@ -164,6 +165,8 @@ class Connection:
             request["thinking_effort"] = thinking_effort
         if choice is not None:
             request["choice"] = choice
+        if rounds:
+            request["rounds"] = True
         return {**self.call(request), "id": msg_id}
 
     def continue_session(self, session):
@@ -314,6 +317,16 @@ class Connection:
     def stop_job(self, job):
         """Whether the job was running and is stopped now."""
         return self.call(build("job/stop", job=job))
+
+    def rounds(self, session=None):
+        """A session's work in rounds, ended runs too; with none, every open
+        one."""
+        fields = {} if session is None else {"session": session}
+        return self.call(build("rounds/list", **fields))["rounds"]
+
+    def stop_rounds(self, rounds):
+        """Whether the work in rounds was open and is stopped now."""
+        return self.call(build("rounds/stop", rounds=rounds))
 
     def stream(self, payload):
         self.ready()

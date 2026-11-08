@@ -21,6 +21,12 @@ SETTINGS = (
     # none of its own
     Setting("model", "Default", "Model", None, "model",
             unset_means="none set"),
+    # The model a call goes to when the session's own fails past its
+    # retries (a server down): that turn goes on with it, the next turn
+    # tries the session's own again; a judge on the failing model asks it
+    # too. None: a failed call ends the turn
+    Setting("fallback_model", "Default", "Fallback model", None, "model",
+            unset_means="none"),
     # The agent's own calls only; the consent check stays on the API's
     # default
     Setting("thinking_effort", "Default", "Thinking effort", "high",

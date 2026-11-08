@@ -1,0 +1,317 @@
+"""`start_rounds` and `end_round`, and the texts the model reads of rounds:
+a round's opening message, the budget spent, a run's end.
+
+What a run is in the session's state (its row, the next round's message)
+belongs to the server that hands a session its `session_rounds`
+(service.py); without one there are no rounds.
+"""
+
+import subprocess
+import tempfile
+import time
+
+from core import history
+from core.tools import tool
+
+# A round's opening message to its session: a notice, not the user's words
+SOURCE = "rounds"
+history.NOTICES.add(SOURCE)
+
+STATUSES = ("going_on", "done", "stuck")
+# A done check still running after this is stopped and counts as failed: a
+# check that hangs would hold the round with nothing to show (a test suite
+# takes minutes, not this)
+CHECK_SECONDS = 30 * 60
+
+# The program a done check runs in, as the shell's commands do
+SHELL = "/bin/bash"
+
+NOT_HERE = "Work in rounds isn't available in this session."
+NO_RUN = "No work in rounds is under way in this session."
+FROM_ZERO = "(A message from ZERO, not from the user.)"
+
+
+def duration(minutes):
+    """Minutes as the model reads them: "45 min", "2 h 5 min"."""
+    whole = round(minutes)
+    if whole < 60:
+        return f"{max(whole, 0)} min"
+    hours, rest = divmod(whole, 60)
+    return f"{hours} h {rest} min" if rest else f"{hours} h"
+
+
+def dollars(amount):
+    return f"${amount:,.2f}"
+
+
+def budget_text(rounds, minutes, money):
+    return f"{rounds} rounds, {duration(minutes)}, {dollars(money)}"
+
+
+def describe(limits):
+    """start_rounds' description, with the session's standing amount."""
+    minutes = limits.get("standing_budget_minutes")
+    money = limits.get("standing_budget_dollars")
+    standing = (
+        f"the standing amount of {duration(minutes)} and {dollars(money)}"
+        if minutes and money else "the session's standing amount"
+    )
+    return (
+        "Work toward an objective in rounds. The server carries the work on "
+        "from round to round with no message from the user, within one budget "
+        "the user approves for the whole of it. Each round is a turn of this "
+        "session whose context starts fresh from the handoff the round before "
+        "left with end_round, so it holds that round's work and not every "
+        "earlier one's; the handoffs are kept in the session's folder, and the "
+        "workspace stays as it is between rounds. Done is checked from "
+        "outside: `done_check` is a command the server runs where this "
+        "session's commands run when you report done, and exit code 0 is "
+        "done. The turn that calls it is round 1; the server starts each next "
+        "one, until the work is done, stuck, stopped by the user, or its "
+        "budget is spent. The estimate (rounds, minutes of your own working "
+        f"time, dollars at the model's price) is the budget: within {standing} "
+        "it starts at once; past it, or while work in rounds is already under "
+        "way here, it goes first to the user, never the judge."
+    )
+
+
+def start_summary(args):
+    """A call as an ask and the judge show it."""
+    text = f"start rounds toward: {args.get('objective', '')}"
+    if args.get("done_check"):
+        text += f"; done check: `{args['done_check']}`"
+    rounds, minutes, money = (args.get(k) for k in ("rounds", "minutes", "dollars"))
+    if all(isinstance(v, (int, float)) for v in (rounds, minutes, money)):
+        text += f"; estimate {budget_text(int(rounds), minutes, money)}"
+    return text
+
+
+def check_estimate(rounds, minutes, money):
+    """An error for an estimate that isn't three positive numbers, else
+    None."""
+    for name, value in (("rounds", rounds), ("minutes", minutes),
+                        ("dollars", money)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"Error: {name} must be a number."
+        # Dollars may be 0: a model with no price
+        least_ok = value >= 0 if name == "dollars" else value > 0
+        if not least_ok:
+            return f"Error: {name} must be more than 0."
+    return None
+
+
+@tool(
+    describe,
+    optional=("done_check",),
+    summary=start_summary,
+    # The done check is a command: in auto+ the judge sees it first, as it
+    # sees bash's
+    needs_permission=lambda args: bool(args.get("done_check")),
+    objective=("string", "What the work is to achieve, in a sentence or two"),
+    done_check=("string", "A command whose exit code 0 means the work is done, "
+                          "e.g. a test suite"),
+    rounds=("integer", "Rounds the work needs, in all from now"),
+    minutes=("number", "Minutes of your working time it needs, in all from now"),
+    dollars=("number", "Dollars it costs at the model's price, in all from "
+                       "now; 0 for a model with no price"),
+)
+def start_rounds(objective, rounds, minutes, dollars, done_check=None,
+                 session_rounds=None, notes=None):
+    """`session_rounds`: the session's rounds, from its server; None means
+    there are none. While a run is open, a new estimate is its budget from
+    now (the budget spent, or the user's change). `notes`: the call's own,
+    where the hooks find that this turn is one of the run's rounds."""
+    if session_rounds is None:
+        return NOT_HERE
+    error = check_estimate(rounds, minutes, dollars)
+    if error:
+        return error
+    if not str(objective).strip():
+        return "Error: objective is empty."
+    check = str(done_check).strip() if done_check else None
+    run, extended = session_rounds.start(
+        str(objective).strip(), check, (int(rounds), float(minutes), float(dollars)),
+    )
+    if notes is not None:
+        notes["rounds_started"] = run["id"]
+    budget = budget_text(run["budget_rounds"], run["budget_minutes"],
+                         run["budget_dollars"])
+    if extended:
+        return (
+            f"The budget of {run['id']} is now {budget} in all, its spending "
+            "so far included. When end_round reports going_on, this turn "
+            "ends with its step and the next round starts."
+        )
+    tail = (f" The done check: `{check}`." if check
+            else " No done check: done is your word.")
+    return (
+        f"Started {run['id']}: this turn is round 1 of {run['budget_rounds']}, "
+        f"with a budget of {budget}.{tail} End each round with end_round: "
+        "going_on ends this turn with its step, and the next round starts "
+        "with a fresh context from your handoff."
+    )
+
+
+def run_check(command, sandbox, stop=None, now=time.monotonic):
+    """The done check, run where the session's commands run: (exit code, its
+    output, how long it took). A check past CHECK_SECONDS is stopped, exit
+    code None; a stop ends it at once."""
+    box = sandbox
+    t0 = now()
+    # The output to a file, not a pipe: a long one can't fill a pipe and hang
+    with tempfile.TemporaryFile() as out:
+        proc = subprocess.Popen(
+            box.command([SHELL, "-c", command]), stdin=subprocess.DEVNULL,
+            stdout=out, stderr=subprocess.STDOUT, env=box.env(),
+            cwd=box.workspace, start_new_session=True,
+        )
+        code = None
+        try:
+            while True:
+                try:
+                    code = proc.wait(timeout=0.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    if stop is not None and stop.is_set():
+                        raise KeyboardInterrupt
+                    if now() - t0 > CHECK_SECONDS:
+                        break
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        out.seek(0)
+        text = out.read().decode("utf-8", errors="replace")
+    return code, text, now() - t0
+
+
+def check_text(command, code, output, seconds):
+    if code is None:
+        head = (f"The done check `{command}` was still running after "
+                f"{duration(seconds / 60)} and was stopped")
+    else:
+        head = f"The done check `{command}` ended with exit code {code}"
+    return f"{head}. Its output:\n{output.strip() or '(none)'}"
+
+
+@tool(
+    "End this round of the work in rounds. `status` is the whole "
+    "objective's: going_on (it isn't met yet: this turn ends with this "
+    "step, and the next round starts from the handoff), done (it is met: the "
+    "server runs the done check first, and exit code 0 ends the work; with "
+    "no check, done is your word) or stuck (the work stops there, and the "
+    "user reads why). `handoff`: what "
+    "the next round reads in place of this conversation: what was done and "
+    "found, the state (files with their paths), what is next; for stuck, "
+    "why. Paths, commands, numbers and names in it are copied exactly.",
+    summary=lambda args: f"end round: {args.get('status')}",
+    # It changes nothing on the machine; a done check was the judge's to see
+    # when the work started
+    needs_permission=lambda args: False,
+    status=("string", "going_on, done or stuck"),
+    handoff=("string", "What the next round reads in place of this one"),
+)
+def end_round(status, handoff, session_rounds=None, sandbox=None, notes=None,
+              stop=None):
+    """`notes`: the call's own, where the hooks find the round's end (its
+    status, handoff and the check's outcome)."""
+    if session_rounds is None:
+        return NOT_HERE
+    run = session_rounds.open()
+    if run is None:
+        return NO_RUN
+    if status not in STATUSES:
+        return f"Error: status is one of {', '.join(STATUSES)}."
+    if not str(handoff).strip():
+        return "Error: handoff is empty."
+    end = {"run": run["id"], "status": status, "handoff": str(handoff).strip()}
+    number = run["round_count"]
+    text = ""
+    if status == "done" and run["done_check"] and sandbox is not None:
+        code, output, seconds = run_check(run["done_check"], sandbox, stop)
+        shown = check_text(run["done_check"], code, output, seconds)
+        path = session_rounds.save(run["id"], f"round-{number}-check.txt", shown)
+        end["check"] = {"exit_code": code, "path": str(path)}
+        if code != 0:
+            end["status"] = "going_on"
+            text = (
+                f"{shown}\n\nSo the work goes on: this turn ends with this "
+                f"step, and round {number + 1} starts; its message names {path}."
+            )
+        else:
+            text = f"{shown}\n\nSo the work is done."
+    elif status == "done":
+        text = "No done check was set, so the work is done on your word."
+    elif status == "stuck":
+        text = "The work in rounds stops here, as stuck; the user reads your handoff."
+    else:
+        text = (
+            f"Round {number} ended: this turn ends with this step, and round "
+            f"{number + 1} starts with a fresh context from your handoff; the "
+            "workspace stays as it is."
+        )
+    if notes is not None:
+        notes["round_end"] = end
+    return text
+
+
+def went_on(early):
+    """When the last round's context wasn't cut to its handoff (`early`: why,
+    "ended early (model_error)"), what the next message says instead."""
+    return (
+        f"The last round {early}, so the context goes on from it rather than "
+        "starting fresh"
+    )
+
+
+def round_text(run, folder, handoff_name, early=None):
+    """The message that opens a round: the work, its budget spent and left,
+    the done check's last result, and where the handoffs are. `early`: why
+    the last round's context was kept (went_on), None when it wasn't."""
+    number = run["round_count"]
+    spent = budget_text(number - 1, run["spent_minutes"], run["spent_dollars"])
+    budget = budget_text(run["budget_rounds"], run["budget_minutes"],
+                         run["budget_dollars"])
+    lines = [
+        f"[Round {number} of {run['budget_rounds']} of {run['id']}, toward: "
+        f"\"{run['objective']}\".",
+        f"Spent: {spent}, of a budget of {budget}.",
+    ]
+    if run["done_check"]:
+        check = f"Done check: `{run['done_check']}`"
+        if run["check_exit_code"] is not None or run["check_output_path"]:
+            check += (f"; it last ended with exit code {run['check_exit_code']}, "
+                      f"its output in {run['check_output_path']}")
+        lines.append(check + ".")
+    if early is None:
+        lines.append(
+            "The context started fresh: the handoff above is the last round's, "
+            f"and the workspace is as it left it. Each round's handoff is in "
+            f"{folder} ({handoff_name} the last). A round ends with end_round."
+        )
+    else:
+        lines.append(
+            f"{went_on(early)}; the workspace is as it left it. Each round's "
+            f"handoff is in {folder}. A round ends with end_round."
+        )
+    return "\n".join(lines) + f"\n{FROM_ZERO}]"
+
+
+def spent_text(run, folder, early=None):
+    """The message when the budget is spent: no round starts until the user
+    approves a new one. `early`: as round_text's."""
+    spent = budget_text(run["round_count"], run["spent_minutes"],
+                        run["spent_dollars"])
+    budget = budget_text(run["budget_rounds"], run["budget_minutes"],
+                         run["budget_dollars"])
+    context = (
+        went_on(early) if early is not None
+        else "The context started fresh: the handoff above is the last round's"
+    )
+    return (
+        f"[{run['id']}, toward \"{run['objective']}\", has spent its budget: "
+        f"{spent} of {budget}. No round starts without a new budget: "
+        "start_rounds with the same objective and an estimate of what the rest "
+        f"needs from now goes to the user. {context}; each round's is in "
+        f"{folder}.\n{FROM_ZERO}]"
+    )

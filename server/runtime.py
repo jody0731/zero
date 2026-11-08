@@ -663,6 +663,7 @@ class Runtime(SessionActions):
             turn = session.open_turn(
                 text, inbox=row["id"], source=row["source"], control=control,
                 continued=bool(payload.get("continue")),
+                rounds=bool(payload.get("rounds")),
             )
         self.store.begin(row["arrival"], sid)
         self.finish_turn(sid, session, turn, row)

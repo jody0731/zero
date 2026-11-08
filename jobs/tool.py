@@ -159,6 +159,10 @@ def job(id=None, stop=False, expect_minutes=None, jobs=None):
             f"{r['id']}  {state_text(r, now)}  {r['command']}" for r in rows
         )
     row = jobs.row(id)
+    if row is None and not str(id).startswith("job-"):
+        # The id as a model may write it, without its prefix
+        id = f"job-{id}"
+        row = jobs.row(id)
     if row is None:
         return f"Unknown job {id}."
     if stop is True:

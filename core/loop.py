@@ -27,6 +27,14 @@ CUT_OFF = "[Your last reply hit the output limit and was cut off.]"
 INTERRUPTED = "[The user interrupted this turn.]"
 NOT_STARTED = "Not run: the user interrupted the turn before this call started."
 EMPTY = "[Your last reply was empty.]"
+# The session's model failed (past its retries, when the error is retried)
+# and the turn goes on with the fallback model; the next turn tries the
+# session's own again
+FALLBACK = (
+    "[Harness note: {main} failed ({error}), so this turn goes on with the "
+    "fallback model, {fallback}.]"
+)
+MAIN_AGAIN = "[Harness note: this turn runs on {main} again, the session's model.]"
 
 class Parked(Exception):
     """A call waits for the user's reply: the turn stops here, its `ask` record
@@ -46,8 +54,12 @@ class Session:
     (`rebuild`, the system prompt's start read again: the user's files)."""
 
     def __init__(self, model, hooks, system_prompt, log, settings, tool_context=None,
-                 rebuild=None, code_mark=None):
+                 rebuild=None, code_mark=None, fallback=None):
         self.model = model
+        # The session's own model, and the one a turn goes on with when it
+        # fails past its retries (None: none)
+        self.main_model = model
+        self.fallback = fallback
         self.hooks = HookRunner(hooks)
         self.log = log
         self.settings = settings
@@ -84,12 +96,17 @@ class Session:
                    **self.marked())
         self.messages = history.replay(self.log.records())
 
-    def compact(self, reason):
+    def compact(self, reason, handoff=None):
         """A compaction now, between turns: what the hooks' crashes say when
-        it failed, else []. A turn's own come before its next model call."""
-        self.hooks.take_errors()
-        self.hooks.notify("compaction_asked", self, reason)
-        return self.hooks.take_errors()
+        it failed, else []. A turn's own come before its next model call.
+        "round": a round's end (rounds/), the context kept to `handoff`, or to
+        one the model writes when there is none."""
+        errors = self.hooks.take_errors()
+        self.hooks.notify("compaction_asked", self, reason, handoff)
+        found = self.hooks.take_errors()
+        # A round's end comes inside a turn: its earlier errors stay its own
+        self.hooks.errors = errors
+        return found
 
     def compacted(self, **fields):
         """Write a compaction (the context component's fields: its reason,
@@ -139,9 +156,11 @@ class Session:
         return record
 
     def open_turn(self, text, inbox=None, source=None, control=None,
-                  continued=False):
+                  continued=False, rounds=False):
         """`continued`: the turn is a server's `continue`, its text a
-        harness note the user asked for, not words they typed."""
+        harness note the user asked for, not words they typed. `rounds`: the
+        user sent it to be worked on in rounds (rounds/hooks.py tells the
+        model)."""
         records = self.log.records()
         if not records:
             fields = self.session_record()
@@ -159,8 +178,29 @@ class Session:
             fields["source"] = source
         if continued:
             fields["continue"] = True
+        if rounds:
+            fields["rounds"] = True
         self.write("user", **self.fitted(fields))
+        self.back_to_main(records)
         return Turn(self, text, inbox, source, control=control)
+
+    def back_to_main(self, records):
+        """A new turn runs on the session's own model; one the last turn left
+        on the fallback says so, so the note before isn't read as standing."""
+        self.model = self.main_model
+        last = next((r for r in reversed(records) if r["type"] == "note"
+                     and r.get("kind") in ("fallback", "main_again")), None)
+        if last is not None and last["kind"] == "fallback":
+            self.write("note", kind="main_again",
+                       text=MAIN_AGAIN.format(main=self.main_model.name))
+
+    def use_fallback(self, error):
+        """The rest of this turn on the fallback model, said in a note."""
+        self.model = self.fallback
+        self.write("note", kind="fallback", text=FALLBACK.format(
+            main=self.main_model.name, fallback=self.fallback.name,
+            error=f"{type(error).__name__}: {error}",
+        ))
 
     def run_turn(self, question):
         return self.run(self.open_turn(question))
@@ -184,11 +224,19 @@ class Session:
             if lost is not None:
                 self.write_reply(lost)
             self.write("note", kind="restarted", text=text)
+        self.back_to_main(self.log.records())
         number = max((r.get("step", 0) for r in records), default=0)
         turn = Turn(
             self, user["text"], user.get("inbox"), user.get("source"), number,
             control=control,
         )
+        # Its time up to the cut, the waits on the user not counted as the
+        # agent's; the time it was cut off isn't the turn's
+        cut = datetime.fromisoformat(records[-1]["time"])
+        before = (cut - datetime.fromisoformat(user["time"])).total_seconds()
+        waited = sum(r.get("waited", 0) for r in records if r["type"] == "answer")
+        turn.started -= before
+        turn.waiting = waited
         turn.answer = answer
         return turn
 
@@ -247,7 +295,11 @@ class Session:
         # No text and no call is an API hiccup (DeepSeek warns of them), not an
         # answer. It isn't kept in the messages, so the next step asks again
         step.empty = not step.calls and not (reply.content or "").strip()
-        self.write("assistant", **step.assistant_record())
+        fields = step.assistant_record()
+        if self.model is not self.main_model:
+            # Its price and its window are the fallback's
+            fields["fallback"] = self.model.name
+        self.write("assistant", **fields)
         bad_calls = bool(step.calls) and all(c.error for c in step.calls)
         step.malformed = step.cut_off or bad_calls or step.empty
         stop = self.run_calls(
@@ -302,6 +354,12 @@ class Session:
             except MODEL_ERRORS as e:
                 failure = ModelFailure(step, e, attempt)
                 retry = self.hooks.decide("model_error", failure)
+                if retry is None and self.fallback is not None and (
+                    self.model is not self.fallback
+                ):
+                    self.use_fallback(e)
+                    attempt = 0
+                    continue
                 if retry is None:
                     return Stop("model_error", f"{type(e).__name__}: {e}")
                 # Logged, so a client watching can say why the model is slow
@@ -425,9 +483,11 @@ class Session:
             self, user["text"], user.get("inbox"), user.get("source"), ask["step"],
             control=control,
         )
-        # Its wall time from the question, the wait not counted as the agent's
+        # Its wall time from the question; the waits on the user, this one and
+        # each earlier park's, not counted as the agent's
+        earlier = sum(r.get("waited", 0) for r in pending if r["type"] == "answer")
         turn.started -= before + waited
-        turn.waiting = waited
+        turn.waiting = waited + earlier
         step = Step(turn, ask["step"])
         message = next(
             r["message"] for r in pending

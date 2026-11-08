@@ -57,6 +57,12 @@
       "$ref": "#/$defs/job.stop"
     },
     {
+      "$ref": "#/$defs/rounds.list"
+    },
+    {
+      "$ref": "#/$defs/rounds.stop"
+    },
+    {
       "$ref": "#/$defs/grant.list"
     },
     {
@@ -322,6 +328,10 @@
             "no"
           ],
           "description": "one of the open ask's choices, as picked at its box"
+        },
+        "rounds": {
+          "type": "boolean",
+          "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
         }
       },
       "required": [
@@ -1035,6 +1045,72 @@
       "additionalProperties": false
     },
     "job.stop.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "stopped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "rounds.list": {
+      "type": "object",
+      "description": "A session's work in rounds, ended runs too; with none, every open one.",
+      "properties": {
+        "message": {
+          "const": "rounds/list"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "rounds.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "rounds": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "one row a run, in a line in `summary`"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "rounds.stop": {
+      "type": "object",
+      "description": "Stop work in rounds: no next round starts; a round under way ends its turn.",
+      "properties": {
+        "message": {
+          "const": "rounds/stop"
+        },
+        "rounds": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "rounds"
+      ],
+      "additionalProperties": false
+    },
+    "rounds.stop.reply": {
       "type": "object",
       "properties": {
         "ok": {

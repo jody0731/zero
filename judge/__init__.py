@@ -23,6 +23,14 @@ SETTINGS = (
     # long as half its model's window
     Setting("judge_silence_seconds", "Limits", "Seconds the judge may stay silent", 300,
             "number"),
+    # The ceiling on a verdict's reply, its thinking included: silence alone
+    # never stops a judge that keeps writing (Qwen3.6 wrote 41,840 tokens in
+    # 20 minutes; Ornith's thinking circled to 16,384 twice), and real
+    # verdicts take 77-124 tokens, 1,047 at most (8 Nov). Tokens, not
+    # seconds: a long view's reading on a slow server counts for nothing.
+    # Past it, no verdict: asked again, then a deny
+    Setting("judge_reply_tokens", "Limits", "Tokens a verdict may write", 8192,
+            "int", minimum=1024),
     # A reply that isn't a verdict is asked again; still none, a deny
     Setting("judge_retries", "Limits", "Retries after the judge gives no verdict",
             1, "int", minimum=0),

@@ -30,6 +30,8 @@
 - **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
 - **One server:** it runs every session. Turns, background jobs and waiting questions go on after the terminal closes, and every app reaches the server the same way.
 - **Long sessions keep going:** near its line (the model's context window, or the one you set), a session's context is compacted: older outputs are saved to files, then ZERO writes itself a handoff. Nothing ZERO reads has a fixed cap: a long result past its share of the room is saved whole, and ZERO reads its start and end and where the rest is.
+- **Long work in rounds:** leave ZERO a long job (or send it with `--rounds`) and it works in rounds, each a turn that starts fresh from the last one's handoff, until its done check passes, it is stuck, or its budget is spent. Nothing in a round waits on you: you approve the budget at the start and read the report at the end. Every other turn runs under a budget of time and dollars (2 h and $2.00 unless you set another); past it, ZERO asks you, in every mode, never the judge.
+- **A fallback model:** when the session's model fails, the turn goes on with the one you set (`fallback_model`).
 - **It trusts the model:** what the model reads states facts, never guardrails; the limits live in code; it is built for the models to come.
 
 > [!NOTE]
@@ -100,13 +102,14 @@ Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's
 Everything a caller does has a command, named as its message: a family, then the action.
 
 ```bash
-zero session send "a task" --cd ~/project --json   # one result object when it settles
+zero session send "a task" --cd ~/project --json   # one result object when it settles; --rounds
 zero session list                                  # read, watch, stop, continue, compact, rename, archive, delete, set
 zero job list                                      # job stop JOB
+zero rounds list                                   # rounds stop ID
 zero grant list ID                                 # grant forget ID GRANT
 zero model server list                             # probe, connect, disconnect
 zero model features MODEL                          # what it honours of its API; --test
-zero setting set max_steps 80                      # setting list
+zero setting set standing_budget_minutes 240       # setting list
 zero server status                                 # whether the server runs and what keeps it busy
 ```
 

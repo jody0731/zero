@@ -56,18 +56,27 @@ class Size:
 def measure(records, messages, schemas, tokens=tokens):
     """The context's size: the last call's count plus what came after it
     (`tokens`: text's tokens, the server's count where there is one), when
-    that call saw the context as it stands; else all of it so (no call yet,
-    or a rebuild or a compaction since)."""
-    last = None
+    that call saw the conversation as it stands; else all of it so (no call
+    yet, or a model switch or a compaction since). New code since that call
+    rewrote the system message and the tools around the same conversation
+    on the same model: the count holds, and those two are added whole, so
+    their old copies are counted twice, never low."""
+    last, rewritten = None, False
     for index, record in enumerate(records):
-        if record["type"] in history.SYSTEM_RECORDS:
+        if record["type"] == "system" and record.get("why") == "code":
+            rewritten = last is not None
+        elif record["type"] in history.SYSTEM_RECORDS:
             last = None
         elif record["type"] == "assistant" and record.get("prompt_tokens"):
-            last = index
+            last, rewritten = index, False
     if last is not None:
         after = [found for record in records[last:]
                  if (found := history.message(record)) is not None]
         guessed = sum(message_tokens(m, tokens) for m in after)
+        if rewritten:
+            guessed += sum(message_tokens(m, tokens) for m in messages
+                           if m["role"] == "system")
+            guessed += tokens(json.dumps(schemas, ensure_ascii=False))
         return Size(records[last]["prompt_tokens"] + guessed, guessed)
     guessed = sum(message_tokens(m, tokens) for m in messages)
     guessed += tokens(json.dumps(schemas, ensure_ascii=False))

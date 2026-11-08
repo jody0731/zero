@@ -431,8 +431,12 @@ class Server:
         for name, value in fields.items():
             if value is not None and not isinstance(value, str):
                 return error(f"{name} must be a string")
+        rounds = request.get("rounds")
+        if rounds is not None and not isinstance(rounds, bool):
+            return error("rounds must be true or false")
+        extra = {"rounds": True} if rounds else None
         try:
-            ack = self.runtime.admit(Message(msg_id, text, **fields))
+            ack = self.runtime.admit(Message(msg_id, text, **fields), extra)
         except Refused as e:
             return error(str(e))
         return {"ok": True, **ack}

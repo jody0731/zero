@@ -18,8 +18,11 @@ TITLE = "the Chat Completions API"
 
 # What ZERO may ask of a model through this API's standard fields
 # (features.py): thinking off and on (reasoning_effort), strict JSON
-# (response_format json_schema) and JSON mode (response_format json_object)
-FEATURES = ("thinking_off", "thinking_on", "strict_json", "json_mode")
+# (response_format json_schema) and JSON mode (response_format json_object);
+# and one field of llama.cpp's own, prompt progress (return_progress), sent
+# only to a model measured to honour it
+FEATURES = ("thinking_off", "thinking_on", "strict_json", "json_mode",
+            "prefill_progress")
 MIN_OUTPUT_TOKENS = 1
 # ZERO's thinking efforts as the API's reasoning_effort
 EFFORTS = {"off": "none", "low": "low", "high": "high", "max": "max"}
@@ -35,9 +38,11 @@ FINISHED = {
 
 
 def request(model, messages, *, tools=None, effort=None, json_schema=None,
-            json_mode=False, temperature=None, max_output_tokens=None):
+            json_mode=False, temperature=None, max_output_tokens=None,
+            prefill_progress=False):
     """The request's fields. `json_schema`: {"name", "schema"}, strict JSON;
-    `json_mode`: any JSON object."""
+    `json_mode`: any JSON object; `prefill_progress`: llama.cpp's progress
+    chunks while it reads the prompt."""
     fields = {
         "model": model, "messages": messages, "stream": True,
         "stream_options": {"include_usage": True},
@@ -58,6 +63,8 @@ def request(model, messages, *, tools=None, effort=None, json_schema=None,
         fields["temperature"] = temperature
     if max_output_tokens is not None:
         fields["max_completion_tokens"] = max_output_tokens
+    if prefill_progress:
+        fields["extra_body"] = {"return_progress": True}
     return fields
 
 
@@ -66,6 +73,12 @@ def open_stream(client, model, messages, **standard):
     return client.chat.completions.create(
         **request(model, messages, **standard)
     )
+
+
+def alive(chunk):
+    """Whether a chunk that carried nothing is still a sign of life: llama.cpp's
+    prompt progress, sent while it reads a long prompt."""
+    return bool((getattr(chunk, "model_extra", None) or {}).get("prompt_progress"))
 
 
 def fold(draft, chunk):

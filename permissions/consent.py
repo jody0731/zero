@@ -125,6 +125,8 @@ class Consent:
         self.api = model.api
         # How to ask the model for JSON, as it honours it
         self.json_request = model.json_request
+        # Prompt progress where the model honours it (model/features.py)
+        self.progress = model.progress
 
     def message(self, asked, reply):
         return (
@@ -147,7 +149,7 @@ class Consent:
             reply = complete(
                 self.api, self.client, self.served_name, messages,
                 silence=self.timeout, temperature=0,
-                **self.json_request(SCHEMA),
+                **self.json_request(SCHEMA), **self.progress(),
             )
             tokens = [reply.prompt_tokens, reply.cached_tokens,
                       reply.completion_tokens]

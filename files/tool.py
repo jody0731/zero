@@ -18,14 +18,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.asking import TO_APPROVER
 from core.tools import Grant, tool
 from files import sandboxed_io
 from sandbox.sandbox import NOT_OUTSIDE, WALL, outside_crossing
 
-# Lines a read returns at most, and where it starts cutting a long line
-MAX_LINES = 2000
-LONG_LINE_CHARS = 2000
-# Files bigger than this are left to commands
+# Files bigger than this are left to commands: the file tools carry a file
+# whole between the box and the server
 MAX_FILE_BYTES = 10 << 20
 # A NUL byte in this much of a file's start makes it binary
 BINARY_PROBE_BYTES = 8192
@@ -125,12 +124,13 @@ def note(text, extra):
     return f"{text}\n\n{extra}" if extra else text
 
 
-# How much of a write's content or an edit's strings an ask and the judge see
+# How much of a write's content or an edit's strings an ask shows; the judge
+# reads them whole
 SHOWN_CHARS = 2000
 
 
-def clipped(text):
-    if len(text) <= SHOWN_CHARS:
+def clipped(text, whole=False):
+    if whole or len(text) <= SHOWN_CHARS:
         return text
     return f"{text[:SHOWN_CHARS]}… [{len(text) - SHOWN_CHARS:,} more characters]"
 
@@ -142,45 +142,45 @@ def read_summary(args):
     return f"read {args['path']}" + (f" from line {start}" if start > 1 else "")
 
 
-def write_summary(args):
+def write_summary(args, whole=False):
     content = str(args.get("content", ""))
     count = len(lines_of(content))
-    return f"write {args['path']} ({count} lines):\n{clipped(content)}"
+    return f"write {args['path']} ({count} lines):\n{clipped(content, whole)}"
 
 
-def edit_summary(args):
+def edit_summary(args, whole=False):
     every = " (every occurrence)" if args.get("replace_all") is True else ""
-    return (
-        f"edit {args['path']}{every}: replace\n{clipped(str(args['old_string']))}"
-        f"\nwith\n{clipped(str(args['new_string']))}"
-    )
+    old = clipped(str(args["old_string"]), whole)
+    new = clipped(str(args["new_string"]), whole)
+    return f"edit {args['path']}{every}: replace\n{old}\nwith\n{new}"
 
 
-def read_describe(limits):
-    chars = limits.get("read_chars")
-    most = f"{chars:,} characters" if chars else "the session's limit of characters"
-    return (
-        "Read a text file. Each line comes as its number, an arrow and the "
-        f"line (12→text); the number and arrow aren't part of the file. At "
-        f"most {MAX_LINES} lines and {most} a call; `offset` (the first line, "
-        "from 1) and `limit` (how many lines) pick a range."
-    )
+READ_DESCRIPTION = (
+    "Read a text file. Each line comes as its number, an arrow and the line "
+    "(12→text); the number and arrow aren't part of the file. `offset` (the "
+    "first line, from 1) and `limit` (how many lines) pick a range. With a "
+    "limit, those lines come whole. Without one, the file from offset to its "
+    "end comes within its share of the context's room; past it, its start "
+    "and end come with its size."
+)
 
 
 @tool(
-    read_describe,
+    READ_DESCRIPTION,
     optional=("offset", "limit"),
     summary=read_summary,
     # It changes nothing on the machine
     needs_permission=lambda args: False,
     path=("string", "The file: relative to the workspace, or absolute"),
     offset=("integer", "The first line to read, from 1"),
-    limit=("integer", f"How many lines to read, {MAX_LINES} at most"),
+    limit=("integer", "How many lines to read"),
 )
-def read(path, offset=None, limit=None, sandbox=None, limits=None, notes=None):
-    """`sandbox`, `limits` and `notes` come from the session, never the model:
-    its sandbox, its limits (assembly.DEFAULT_LIMITS) and the call's notes, where the
-    content's hash goes for the stale check."""
+def read(path, offset=None, limit=None, sandbox=None, notes=None):
+    """`sandbox` and `notes` come from the session, never the model: its
+    sandbox and the call's notes, where the content's hash goes for the
+    stale check, and what the context component reads of the result: a read
+    with a limit is sized by ZERO (`sized`); one without names the file that
+    holds it whole (`whole_at`), so one past its share isn't copied."""
     box = sandbox
     for name, value in (("offset", offset), ("limit", limit)):
         if value is not None and (
@@ -209,23 +209,16 @@ def read(path, offset=None, limit=None, sandbox=None, limits=None, notes=None):
             f"Not read: {shown} has {len(lines)} lines; offset {start} is past "
             "its end."
         )
-    count = min(limit or MAX_LINES, MAX_LINES)
-    budget = limits["read_chars"]
-    out = []
-    for number in range(start, min(start + count, len(lines) + 1)):
-        line = lines[number - 1]
-        if len(line) > LONG_LINE_CHARS:
-            line = f"{line[:LONG_LINE_CHARS]}… [line cut: {len(line):,} characters]"
-        text = f"{number}→{line}"
-        if out and budget - len(text) - 1 < 0:
-            break
-        budget -= len(text) + 1
-        out.append(text)
-    last = start + len(out) - 1
-    body = "\n".join(out)
+    if notes is not None:
+        if limit is not None:
+            notes["sized"] = True
+        else:
+            notes["whole_at"] = shown
+    last = len(lines) if limit is None else min(start + limit - 1, len(lines))
+    body = "\n".join(f"{n}→{lines[n - 1]}" for n in range(start, last + 1))
     if last < len(lines):
-        total = len(lines)
-        body += f"\n\n[Lines {start}–{last} of {total}; offset {last + 1} goes on.]"
+        total, after = len(lines), last + 1
+        body += f"\n\n[Lines {start}–{last} of {total}; offset {after} goes on.]"
     return body
 
 
@@ -264,8 +257,8 @@ def store(box, shown, before, data, notes):
 
 
 OUTSIDE_SANDBOX_TEXT = (
-    "Run this one call outside the sandbox, as the user. It is asked about "
-    "first"
+    f"Run this one call outside the sandbox, as the user. It goes first to "
+    f"{TO_APPROVER}"
 )
 REASON_TEXT = "With outside_sandbox: why the task needs it"
 

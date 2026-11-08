@@ -1,6 +1,7 @@
-"""What ends a turn with its reason: agent time (the evals' hard cap), a
-full context, malformed replies in a row. Not in the chat's own limits: long
-jobs can rightly take hours; the steps are a soft cap (steps.py)."""
+"""What ends a turn with its reason: agent time (the evals' hard cap) and
+malformed replies in a row. Not in the chat's own limits: long jobs can
+rightly take hours; the steps are a soft cap (steps.py); a full context is
+compacted (context/)."""
 
 from core.hooks import Hook, Stop
 
@@ -23,20 +24,6 @@ class TimeLimit(Hook):
         used = step.turn.agent_seconds()
         if used >= self._seconds:
             return Stop("time_limit", f"{used:.0f} s of agent time")
-
-
-class ContextLimit(Hook):
-    """Stop before the model's window fills: Ollama would silently cut old
-    messages, an API would refuse. Profiles pass the server's numbers."""
-
-    def __init__(self, stop_at, limit):
-        self._stop_at = stop_at
-        self._limit = limit
-
-    def before_model(self, step):
-        tokens = step.turn.session.prompt_tokens
-        if tokens >= self._stop_at:
-            return Stop("context_full", f"{tokens}/{self._limit} tokens")
 
 
 class BrokenReplyLimit(Hook):

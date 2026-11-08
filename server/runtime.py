@@ -181,6 +181,8 @@ class Runtime(SessionActions):
         self.watchers = {}
         # The reply streaming in, per session: its latest draft event
         self.drafts = {}
+        # Each session's context meter, as its watchers last got it
+        self.meters = {}
         self.watch_lock = threading.Lock()
         self.lock = threading.Lock()
         self.changed = threading.Condition(self.lock)
@@ -247,6 +249,23 @@ class Runtime(SessionActions):
         # Any record ends the draft: the reply's own, a retry, a stop's note
         self.drafts.pop(sid, None)
         self.publish(sid, {"record": record})
+        self.meter(sid, record)
+
+    def meter(self, sid, record):
+        """The context's meter after a record, sent to the watchers when it
+        changes: from the whole log the first time this server sees the
+        session, then record by record (core/history.py)."""
+        before = self.meters.get(sid)
+        if before is None:
+            records = self.log(sid).records()
+            now = None
+            for each in records:
+                now = history.metered(now, each)
+        else:
+            now = history.metered(before, record)
+        self.meters[sid] = now
+        if now != before and now["tokens"]:
+            self.publish(sid, {"context": now})
 
     def draft(self, sid, step, draft):
         """The model's reply as it streams in (core/llm.py, Draft), to the
@@ -759,6 +778,10 @@ class Runtime(SessionActions):
                 "settings": session.fresh_settings,
             }
             seen = {k: v for k, v in changes.items() if k in history.MODEL_VISIBLE}
+            if "model" in changes:
+                # A new model loses the cache anyway: the system message is
+                # written again for it, which names it
+                session.rebuild_system("model")
             if seen:
                 # The model reads what changed of what it knows of itself
                 session.write("note", kind="switch",
@@ -883,6 +906,54 @@ class Runtime(SessionActions):
                 self.log(sid, lock).append(type, **fields)
             finally:
                 lock.release()
+
+    def compact(self, sid):
+        """The user's compaction of a session's context: at once for one at
+        rest, on a thread of its own held as its runner, so no turn starts
+        meanwhile and the client needn't wait for the handoff; before the
+        next step for one whose turn runs or waits for an answer. Its record
+        (or `compaction_failed`) reaches the watchers as any record does."""
+        with self.lock:
+            if not self.accepting:
+                raise Refused("the server is shutting down")
+            row = self.store.session(sid)
+            if row is None:
+                raise Refused(f"no session {sid!r}")
+            busy = (sid in self.runners or sid in self.store.waiting_sessions()
+                    or row["state"] in ("running", "waiting"))
+            if busy:
+                session = self.live.get(sid)
+                if session is None:
+                    raise Refused("its turn waits for an answer; a compaction "
+                                  "can be asked for once it runs again")
+                session.compact_asked = "user"
+                return {"compacting": "before_next_step"}
+            if not any(r["type"] == "user" for r in self.log(sid).records()):
+                raise Refused("the session has no conversation yet")
+            thread = threading.Thread(target=self._compact, args=(sid,),
+                                      name=f"compact-{sid}", daemon=True)
+            self.runners[sid] = thread
+        thread.start()
+        return {"compacting": "now"}
+
+    def _compact(self, sid):
+        lock = self.session_lock(sid)
+        try:
+            lock.acquire()
+            try:
+                self.harness(sid, self.log(sid, lock)).compact("user")
+            finally:
+                lock.release()
+        except Exception:
+            traceback.print_exc()
+        finally:
+            with self.changed:
+                del self.runners[sid]
+                self.changed.notify_all()
+        settled = self.settled(sid)
+        if settled is not None:
+            self.publish(sid, {"settled": settled})
+        self.dispatch()
 
     def busy_with(self):
         """What keeps the server up besides its clients: turns running or

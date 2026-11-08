@@ -23,6 +23,8 @@ sets before another reads it (the permissions memory's `granted`, read by
 the repeat guard); it never changes how decisions combine (core/hooks.py).
 """
 
+import hashlib
+import json
 from pathlib import Path
 
 import settings
@@ -34,6 +36,7 @@ import files.tool
 import memory.tool
 import permissions.tool
 import web.tool
+import context.tool
 from core import history
 from core.asking import PARK
 from core.loop import Session
@@ -42,6 +45,11 @@ from model.service import ModelService
 from model.servers import Model, resolve
 from model.retry import ModelRetry
 from limits import SETTINGS as LIMIT_SETTINGS
+from context import SETTINGS as CONTEXT_SETTINGS
+from context import room
+from context.hooks import Context
+from context.results import folder_of
+from context.service import ContextService
 from limits.repeats import RepeatGuard
 from limits.steps import StepLimit
 from jobs import SETTINGS as JOB_SETTINGS
@@ -64,7 +72,7 @@ from permissions.consent import Consent
 from permissions.grants import GrantCheck
 from permissions.service import PermissionsService
 from permissions.modes import JUDGED, MODES, UNSANDBOXED, answers_line, canonical
-from limits.stops import ContextLimit, BrokenReplyLimit, hard_limits
+from limits.stops import BrokenReplyLimit, hard_limits
 from prompt.hooks import Environment
 from prompt.instructions import PROJECT_FILE, read, system_prompt, user_instructions
 from memory.hooks import ZeroFilesGuard
@@ -81,23 +89,42 @@ from sandbox.sandbox import (
 SETTINGS_ORDER = (
     "mode", "model", "thinking_effort", "judge_model", "judge_thinking_effort",
     "max_steps", "extra_steps", "max_jobs", "bash_foreground_seconds",
-    "bash_output_chars", "read_chars", "web_fetch_chars", "web_search_results",
-    "web_timeout", "max_seconds", "context_stop", "model_silence_seconds",
+    "web_timeout", "max_seconds", "compact_at_tokens", "model_silence_seconds",
     "judge_silence_seconds", "judge_retries", "judge_output_chars",
-    "judge_outputs", "model_retries", "model_retry_seconds", "max_broken_replies",
+    "model_retries", "model_retry_seconds", "max_broken_replies",
     "server_idle_minutes", "consent_silence_seconds",
 )
 settings.add(
-    *MODEL_SETTINGS, *LIMIT_SETTINGS, *JOB_SETTINGS, *SHELL_SETTINGS,
+    *MODEL_SETTINGS, *LIMIT_SETTINGS, *CONTEXT_SETTINGS, *JOB_SETTINGS,
+    *SHELL_SETTINGS,
     *FILE_SETTINGS, *WEB_SETTINGS, *JUDGE_SETTINGS, *PERMISSION_SETTINGS,
     order=SETTINGS_ORDER,
 )
 
 # A session's limits at their defaults, from the services' settings, their one
 # home: max_steps (a soft cap; None for none), max_seconds (a hard cap, off
-# unless the evals set it), context_stop (None: the server's own), the
-# model's and judge's silence, retries, and bash's time and output
+# unless the evals set it), compact_at_tokens (None: the model's window), the
+# model's and judge's silence, retries, and bash's time
 DEFAULT_LIMITS = settings.default_limits()
+HERE = Path(__file__).resolve().parent
+# The files whose code writes the system message: a change in one, or in the
+# tools' schemas, is new code that changes what the model reads (code_mark)
+SYSTEM_MESSAGE_SOURCES = (
+    "prompt/instructions.py", "prompt/hooks.py", "permissions/modes.py",
+    "sandbox/sandbox.py", "memory/hooks.py",
+)
+
+
+def code_mark(session):
+    """What the model reads of the code, as a short hash: the session's
+    tools as it tells them, and the source of what writes its system
+    message. A new one rebuilds the system message when a turn opens."""
+    digest = hashlib.sha256(
+        json.dumps(session.tool_schemas(), sort_keys=True).encode()
+    )
+    for name in SYSTEM_MESSAGE_SOURCES:
+        digest.update((HERE / name).read_bytes())
+    return digest.hexdigest()[:12]
 
 
 def session_hooks(
@@ -111,11 +138,13 @@ def session_hooks(
     outside=None,
     saved=None,
     own=None,
+    results=None,
 ):
     """`outside`: where a call let out of the sandbox runs; None if it can't.
     `saved`: the user's saved permissions (permissions/grants.py), None for
     none. `own`: what the session knows of ZERO's own files (memory/), None
-    where the memory tool isn't offered."""
+    where the memory tool isn't offered. `results()`: the session's results
+    folder (context/results.py)."""
     mode = canonical(mode)
     spec = MODES[mode]
     hooks = [Environment(sandbox, answers_line(mode))]
@@ -123,7 +152,7 @@ def session_hooks(
         hooks.append(own)
     hooks += [
         ModelRetry(limits["model_retries"], limits["model_retry_seconds"]),
-        ContextLimit(limits["context_stop"], server.context_window),
+        Context(server.context_window, results),
     ]
     # The permissions memory where someone answers asks; before the
     # repeat guard, which lets a granted call through
@@ -221,14 +250,20 @@ def make_session(
     spec = MODES[mode]
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     server, _ = resolve(model)
-    if limits["context_stop"] is None:
-        limits["context_stop"] = server.context_stop
+    if log is None and folder is None:
+        raise ValueError("a session needs its log, or a folder to start one in")
+    session_log = log if log is not None else fresh_log(folder, model)
+
+    def results():
+        # A new log is named when its first turn starts
+        return folder_of(session_log.path)
     # A sandbox of its own per session: its scratch folder starts empty, and a
     # session made later can't swap it out
     if box is not None:
         if spec.sandbox == "read-only" or not workspace_writes:
             raise ValueError("a box of its own has no read-only workspace")
         sandbox = box(workspace, private=private_folders())
+        sandbox.shown.append(results)
     elif spec.sandbox is not None:
         read_only = spec.sandbox == "read-only" or not workspace_writes
         # A project's ZERO.md, read by later sessions, stays read-only
@@ -236,7 +271,7 @@ def make_session(
         protected = (PROJECT_FILE,) if instructions and instructions.project else ()
         sandbox = Sandbox(workspace, read_only=read_only,
                           private=private_folders(), protected=protected,
-                          scratch=scratch)
+                          scratch=scratch, shown=[results])
     else:
         sandbox = Unsandboxed(workspace)
     # Where one call runs once its ask to leave the sandbox is approved: only
@@ -247,7 +282,11 @@ def make_session(
         outside = Outside(workspace, sandbox=sandbox)
     # What leads the system prompt; where the memory tool may write, and what
     # the session knows of those files
-    found = read(instructions, sandbox.workspace) if instructions else None
+    # ZERO's own files share what a result ZERO didn't size may take of a
+    # fresh context
+    most_chars = room.share(room.line(limits, server.context_window))
+    most_chars *= room.BYTES_PER_TOKEN
+    found = read(instructions, sandbox.workspace, most_chars) if instructions else None
     own_files = own = None
     if instructions is not None and instructions.memory:
         own_files = {
@@ -257,11 +296,14 @@ def make_session(
         own = ZeroFilesGuard(own_files, found.others, sandbox.workspace)
     judge = None
     if mode in JUDGED:
+        # Its view of a long session takes half its model's window at most:
+        # the rest is its prompt's, the proposed call's and its answer's
+        judge_server, _ = resolve(judge_model or model)
         judge = Judge(
             judge_model or model, judge_client, timeout=limits["judge_silence_seconds"],
             retries=limits["judge_retries"], effort=judge_thinking_effort,
             output_chars=limits["judge_output_chars"],
-            outputs=limits["judge_outputs"],
+            view_bytes=judge_server.context_window // 2 * room.BYTES_PER_TOKEN,
         )
     settings = {
         **limits,
@@ -287,7 +329,7 @@ def make_session(
     }
     hooks = session_hooks(
         limits, server, sandbox, mode, ask, ask_when, judge, outside,
-        saved_permissions, own,
+        saved_permissions, own, results,
     )
     hooks += hard_limits(limits)
     # On a resume, the files the cut-off turn touched that changed meanwhile
@@ -296,17 +338,22 @@ def make_session(
         model, client, timeout=limits["model_silence_seconds"],
         effort=thinking_effort,
     )
-    if log is None and folder is None:
-        raise ValueError("a session needs its log, or a folder to start one in")
-    session_log = log if log is not None else fresh_log(folder, model)
     prompt = system_prompt(found, model)
+
+    def rebuild():
+        # The user's files and the project's, read again as they stand now
+        now = (read(instructions, sandbox.workspace, most_chars)
+               if instructions else None)
+        return system_prompt(now, model)
+
     session = Session(
         llm, hooks, prompt, session_log, settings,
         tool_context={
             "sandbox": sandbox, "outside": outside, "limits": limits,
             "web": web if web is not None else web_clients(limits),
-            "own_files": own_files,
+            "own_files": own_files, "results": results,
         },
+        rebuild=rebuild, code_mark=lambda: code_mark(session),
     )
     # What the file tools saw, from the session's log as it stands
     # (files/seen.py)
@@ -319,14 +366,12 @@ def logged_settings(records):
     chosen_judge) and the effort a session's log says it runs with, so a
     session built again (a restart, a switch) keeps them whatever config.toml
     says now: ({}, None, None) for a new one, and a judge of None where the
-    log says nothing of it. Not the context stop: the log has the one its
-    model's server gave, and a switch may change the model."""
+    log says nothing of it."""
     if not records or records[0].get("type") != "session":
         return {}, None, None
     logged = history.settings_now(records)
     limits = {
-        name: logged[name] for name in DEFAULT_LIMITS
-        if name in logged and name != "context_stop"
+        name: logged[name] for name in DEFAULT_LIMITS if name in logged
     }
     return limits, history.chosen_judge(logged), logged.get("thinking_effort")
 
@@ -407,4 +452,4 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
             return Consent(Model(model, timeout=config()["consent_silence_seconds"]))
 
     return [JobsService(tick=tick), PermissionsService(make_consent, saved_permissions),
-            ModelService()]
+            ModelService(), ContextService()]

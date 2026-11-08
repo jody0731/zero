@@ -45,6 +45,9 @@
       "$ref": "#/$defs/session.delete"
     },
     {
+      "$ref": "#/$defs/session.compact"
+    },
+    {
       "$ref": "#/$defs/session.set"
     },
     {
@@ -588,6 +591,42 @@
         "runs_with": {
           "type": "object",
           "description": "what its next turn runs with: mode, model, workspace, thinking_effort, judge_model (null: the session's model) and judge_thinking_effort"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "tokens": {
+                  "type": "integer"
+                },
+                "line": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cached_share": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "description": "the context's tokens as the latest call saw them or a compaction left them, the line it is kept under, and the share of that call's prompt the cache served"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -654,6 +693,42 @@
         },
         "earlier_count": {
           "type": "integer"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "tokens": {
+                  "type": "integer"
+                },
+                "line": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cached_share": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "description": "the context's tokens as the latest call saw them or a compaction left them, the line it is kept under, and the share of that call's prompt the cache served"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "bye": {
           "type": "string"
@@ -811,6 +886,42 @@
         },
         "trash": {
           "type": "string"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.compact": {
+      "type": "object",
+      "description": "Compact a session's context: at once when it rests, before the next step when its turn runs.",
+      "properties": {
+        "message": {
+          "const": "session/compact"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "session.compact.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "compacting": {
+          "type": "string",
+          "enum": [
+            "now",
+            "before_next_step"
+          ]
         }
       },
       "required": [

@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from apps.tui import keybindings
+from client import render
 from client.session_list import short_path
 from client.session_state import SessionState
 
@@ -29,6 +30,8 @@ COMMANDS = {
     "/continue": "go on with a turn that ended without an answer",
     "/sessions": "the session list (also Ctrl+O)",
     "/rename": "rename this session: /rename TITLE",
+    "/compact": "compact this session's context: now, or before the next step "
+                "while a turn runs",
     "/archive": "archive this session (or bring it back)",
     "/delete": "move this session to the trash (asked first)",
     "/jobs": "this session's background jobs",
@@ -171,7 +174,8 @@ def completions(text):
 
 def status_pieces(client, row, defaults, home=None, older=False, now=None):
     """The status line's pieces, most important first: mode, model,
-    workspace, state, jobs, and a note when the server runs older code."""
+    workspace, state, the context's meter, and a note when the server runs
+    older code."""
     now = time.monotonic() if now is None else now
     mode = (row or {}).get("mode") or client.mode or defaults.get("mode") or "?"
     model = (row or {}).get("model") or client.model or defaults.get("model") or "?"
@@ -187,6 +191,9 @@ def status_pieces(client, row, defaults, home=None, older=False, now=None):
                             ("workspace", workspace))
     )
     pieces = [mode, model, workspace, state_text(client, row)]
+    meter = render.meter_text(getattr(client, "context", None))
+    if meter:
+        pieces.append(meter)
     if older:
         pieces.append("the server runs older code")
     return pieces

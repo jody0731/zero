@@ -35,8 +35,9 @@ from settings import sections
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
 # Seconds a server has to list its models
 LIST_SECONDS = 3
-# Seconds the test call may take: a local server may first load the model
-TEST_SECONDS = 60
+# Seconds the test call may stay silent: a local server may first load the
+# model (a backstop, as model_silence_seconds)
+TEST_SECONDS = 300
 # Where servers report a model's context window in /v1/models
 CONTEXT_WINDOW_FIELDS = ("max_model_len", "context_length", "max_context_length")
 

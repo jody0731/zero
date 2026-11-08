@@ -1,4 +1,11 @@
-"""Pure views of the session log: model messages and the evals' turn shape."""
+"""Pure views of the session log: model messages and the evals' turn shape.
+
+The log keeps everything; the context, what one model call sends, is a view
+of it: the latest system message (the session's own, or one rebuilt since:
+a `system` record, or a compaction's), then the latest compaction's handoff
+and the records it kept, then every record after it (`replay`). Each user
+message carries its time at its end, so a gap between two shows.
+"""
 
 from datetime import datetime
 
@@ -10,6 +17,27 @@ UNKNOWN = (
 )
 # Before a message the user sent while a turn ran, in the model's copy
 MID_TURN = "[The user wrote this while you were working.]"
+# At the end of each user message in the model's copy: when it was sent
+SENT = "[Sent {when}]"
+# The records that carry a system message: the session's first, one rebuilt
+# (a model switch, new code) and a compaction's
+SYSTEM_RECORDS = ("session", "system", "compaction")
+# Before a compaction's handoff, in the model's copy
+HANDOFF = (
+    "[Compacted {when}: the conversation before this point is replaced by "
+    "this handoff, which you wrote. The session's log keeps all of it, and "
+    "the outputs cleared from view are saved whole in the files named.]"
+)
+
+
+# Where a compaction happened, as the model reads it: what it did, and how
+# big the context is after it, so a notice from before it ("compacted before
+# the next step") isn't read as still standing
+COMPACTED = "[Compacted {when}: {what}{size}]"
+CLEARED_ONLY = ("older outputs were saved whole and cleared from view, each in "
+                "the file its line names.")
+HANDED_OFF = "the conversation before the kept steps became the handoff above."
+SIZE = " The context is now about {tokens:,} tokens of the {line:,} it is kept under."
 
 
 class OldLog(ValueError):
@@ -86,6 +114,40 @@ def settings_now(records):
     return renamed(settings)
 
 
+def metered(meter, record):
+    """The user's meter of the context after `record`: a session or switch
+    record sets the line it is kept under (compact_at_tokens, else the
+    model's window, never past it: context/room.py's line); a model call its
+    tokens (its prompt and reply) and the share of its prompt the server's
+    cache served (None where the server doesn't say); a compaction the tokens
+    it left, and no share until the next call."""
+    meter = dict(meter or {"tokens": None, "line": None, "cached_share": None})
+    kind = record.get("type")
+    if kind == "session" or (kind in ("switch", "note") and is_switch(record)):
+        settings = renamed(record.get("settings") or {})
+        window = settings.get("context_limit")
+        chosen = settings.get("compact_at_tokens") or window
+        meter["line"] = min(chosen, window) if chosen and window else chosen
+    elif kind == "assistant" and record.get("prompt_tokens"):
+        prompt = record["prompt_tokens"]
+        cached = record.get("cached_tokens")
+        meter["tokens"] = prompt + (record.get("completion_tokens") or 0)
+        meter["cached_share"] = None if cached is None else cached / prompt
+    elif kind == "compaction" and record.get("tokens_after"):
+        meter["tokens"] = record["tokens_after"]
+        meter["cached_share"] = None
+    return meter
+
+
+def context_meter(records):
+    """The meter as a whole log has it (metered, record by record); None
+    before the first model call."""
+    meter = None
+    for record in records:
+        meter = metered(meter, record)
+    return meter if meter and meter["tokens"] else None
+
+
 def log_format(records):
     if records and records[0].get("type") == "session":
         if records[0].get("format") == LOG_FORMAT:
@@ -93,15 +155,42 @@ def log_format(records):
     return 1
 
 
+def when(iso):
+    """A record's time as the model reads it: Sat 7 Nov 2026, 21:47 EST."""
+    moment = datetime.fromisoformat(iso).astimezone()
+    return f"{moment:%a} {moment.day} {moment:%b %Y, %H:%M %Z}"
+
+
+def sent(record):
+    """A user message's text with its time at the end."""
+    return f"{record['text']}\n\n{SENT.format(when=when(record['time']))}"
+
+
+def compacted(record):
+    """A compaction where it happened: what it did and the size it left."""
+    what = CLEARED_ONLY if record.get("cleared_only") else HANDED_OFF
+    size = ""
+    if record.get("tokens_after") and record.get("line"):
+        size = SIZE.format(tokens=record["tokens_after"], line=record["line"])
+    return COMPACTED.format(when=when(record["time"]), what=what, size=size)
+
+
 def message(record):
-    """The message the model sees for one record, or None."""
+    """The message the model sees for one record, or None. A record that
+    carries a system message after the session's first (a rebuild, a
+    compaction) changes the context as a whole: `replay` places it; a
+    compaction also says where it happened."""
     kind = record["type"]
     if kind == "session":
         return {"role": "system", "content": record["system_prompt"]}
     if kind == "user" and record.get("mid_turn"):
-        return {"role": "user", "content": f"{MID_TURN}\n{record['text']}"}
-    if kind in ("user", "note"):
+        return {"role": "user", "content": f"{MID_TURN}\n{sent(record)}"}
+    if kind == "user":
+        return {"role": "user", "content": sent(record)}
+    if kind == "note":
         return {"role": "user", "content": record["text"]}
+    if kind == "compaction":
+        return {"role": "user", "content": compacted(record)}
     if kind == "assistant" and not record.get("empty"):
         return record["message"]
     if kind == "tool":
@@ -136,8 +225,68 @@ def steer_fields(steer):
     return fields
 
 
+def latest_compaction(records):
+    """The latest compaction record, or None."""
+    for record in reversed(records):
+        if record["type"] == "compaction":
+            return record
+    return None
+
+
+def system_now(records):
+    """The latest record that carries a system message."""
+    for record in reversed(records):
+        if record["type"] in SYSTEM_RECORDS:
+            return record
+    return None
+
+
+def in_context(records):
+    """The records the context is made of after its system message and any
+    handoff: since the latest compaction, the ones it kept (from its
+    `kept_from`) and every one after it, the compactions among them where
+    they happened; else all of them."""
+    compaction = latest_compaction(records)
+    body = records
+    if compaction is not None:
+        kept = compaction["kept_from"]
+        body = [r for r in records if r["seq"] >= kept]
+    return [r for r in body if r["type"] not in ("session", "system")]
+
+
+def handoff(compaction):
+    """A compaction's handoff as the model reads it, or None for one that
+    only cleared outputs and had none to carry."""
+    if not compaction.get("summary"):
+        return None
+    head = HANDOFF.format(when=when(compaction.get("handoff_at")
+                                    or compaction["time"]))
+    return {"role": "user", "content": f"{head}\n\n{compaction['summary']}"}
+
+
 def replay(records):
-    return [m for record in records if (m := message(record)) is not None]
+    """The context: the latest system message, the latest compaction's
+    handoff, then the messages of the records in it, with the outputs that
+    compaction cleared as it left them."""
+    if not records:
+        return []
+    system = system_now(records)
+    messages = [{"role": "system", "content": system["system_prompt"]}]
+    compaction = latest_compaction(records)
+    cleared = {}
+    if compaction is not None:
+        cleared = compaction.get("cleared") or {}
+        start = handoff(compaction)
+        if start is not None:
+            messages.append(start)
+    for record in in_context(records):
+        found = message(record)
+        if found is None:
+            continue
+        if record["type"] == "tool" and str(record["seq"]) in cleared:
+            found = {**found, "content": cleared[str(record["seq"])]}
+        messages.append(found)
+    return messages
 
 
 def turns(records):

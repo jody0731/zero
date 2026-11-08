@@ -85,9 +85,10 @@ def read_session(server, sid=None):
     return info, server.history(info["id"], limit=None)[0]
 
 
-def history_text(info, records, working=True, runs_with=None):
+def history_text(info, records, working=True, runs_with=None, context=None):
     """A session's transcript as text: its row, what its next turn runs
-    with (`runs_with`, the server's word, where given) and its records."""
+    with (`runs_with`, the server's word, where given), its context's meter
+    (`context`, likewise) and its records."""
     lines = [
         f"{info['id']}  {info['state']}  {info['mode']}  {info['model']}  "
         f"{info['workspace']}",
@@ -98,6 +99,9 @@ def history_text(info, records, working=True, runs_with=None):
         lines.insert(1, f"thinking {runs_with.get('thinking_effort')} · "
                         f"judge {judge}, "
                         f"thinking {runs_with.get('judge_thinking_effort')}")
+    meter = render.meter_text(context)
+    if meter:
+        lines.insert(1, meter)
     started = None
     restarts = 0
     for record in records:
@@ -123,6 +127,8 @@ def history_text(info, records, working=True, runs_with=None):
         elif record["type"] == "answer":
             reply = "approved" if record["yes"] else "replied; not run"
             lines.append(f"{clock}  you  {reply}")
+        elif record["type"] in ("compaction", "compaction_failed"):
+            lines.append(f"--- {render.compaction_text(record)} ---")
         elif record["type"] == "turn_end":
             lines.append(f"{clock}  {NAME}  {ending(record, started, restarts)}")
     ask = info.get("ask")
@@ -360,6 +366,11 @@ def parser(prog="zero"):
     rename.add_argument("title", metavar="TITLE")
     json_flag(rename)
     rename.set_defaults(handler=rename_command)
+    compact = actions.add_parser("compact", help="compact a session's context: "
+                                                 "now, or before its next step")
+    session_arg(compact)
+    json_flag(compact)
+    compact.set_defaults(handler=compact_command)
     for name, about in (("archive", "out of the list, kept"),
                         ("unarchive", "back to the list"),
                         ("delete", "its files to the trash")):
@@ -538,7 +549,8 @@ def read_command(connection, args, out):
     info = match_session(connection.sessions(), args.id)
     reply = connection.read(info["id"], after=args.after, limit=args.limit,
                             before=args.before)
-    text = history_text(info, reply["records"], runs_with=reply.get("runs_with"))
+    text = history_text(info, reply["records"], runs_with=reply.get("runs_with"),
+                        context=reply.get("context"))
     return print_reply(args, out, reply, text)
 
 
@@ -560,6 +572,11 @@ def watch_command(connection, args, out):
 def rename_command(connection, args, out):
     reply = connection.rename(session_id(connection, args.id), args.title)
     return print_reply(args, out, reply, "Renamed.")
+
+
+def compact_command(connection, args, out):
+    reply = connection.compact(session_id(connection, args.id))
+    return print_reply(args, out, reply, render.COMPACTING[reply["compacting"]])
 
 
 def session_edit_command(connection, args, out):

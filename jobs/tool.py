@@ -9,7 +9,6 @@ everything in the foreground.
 
 from core import history
 from core.tools import tool
-from jobs.process import clip
 
 # A job's messages to its session: notices, not the user's words
 SOURCE = "job"
@@ -18,8 +17,6 @@ history.NOTICES.add(SOURCE)
 # A job with no estimate checks in first after this, then each time it has run
 # as long again
 FIRST_CHECKIN = 30 * 60
-# How much of the unread output a notice carries
-NOTICE_TAIL_CHARS = 1500
 
 NOT_HERE = "Background jobs aren't available in this session."
 # The second sentence: without it the model hesitated over ending a notice's
@@ -77,9 +74,10 @@ def state_text(row, now):
     return f"lost when ZERO stopped, after {took}"
 
 
-def tail(text, limit=NOTICE_TAIL_CHARS):
-    text = text.strip("\n")
-    return text if len(text) <= limit else "..." + text[-limit:]
+def tail(text):
+    """A notice's output: all that is unread, whole; past its share, the
+    context component saves it to a file (context/hooks.py)."""
+    return text.strip("\n")
 
 
 def ended_notice(row, last, now):
@@ -144,10 +142,10 @@ def job_summary(args):
     stop=("boolean", "Stop the job"),
     expect_minutes=("number", "A new estimate, in minutes from now"),
 )
-def job(id=None, stop=False, expect_minutes=None, jobs=None, limits=None):
+def job(id=None, stop=False, expect_minutes=None, jobs=None):
     """`jobs`: the session's jobs, from its server; None means there are none.
-    `limits`: the session's, for the output it keeps (shell/'s
-    bash_output_chars). `stop` is the model's argument: the turn's stop flag,
+    The output since the last look comes whole: past its share, the context
+    component saves it to a file. `stop` is the model's argument: the turn's stop flag,
     which the session hands every tool that names it, skips a name the tool's
     arguments hold (core/tools.py, run)."""
     if jobs is None:
@@ -181,5 +179,5 @@ def job(id=None, stop=False, expect_minutes=None, jobs=None, limits=None):
             f"[{dropped} bytes of its output were not kept.]"
         )
     lines.append("Output since your last look:")
-    lines.append(clip(text, limits["bash_output_chars"]) if text else "(no new output)")
+    lines.append(text if text else "(no new output)")
     return "\n".join(lines)

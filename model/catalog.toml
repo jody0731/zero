@@ -4,10 +4,9 @@
 # key_env (the variable its key may come from; a key is then needed),
 # api (the API its server speaks, model/apis/: "responses", or
 # "chat_completions" when left out),
-# context_window and context_stop (its models' context window, and where the
-# context guard stops a turn: 80% of the window when left out), price (USD
-# per 1M tokens at peak: cache hit, cache miss, output). Under [x.models], a
-# model's own context_window, context_stop and price. The facts are from the servers' docs and
+# context_window (its models' context window), price (USD per 1M tokens at
+# peak: cache hit, cache miss, output). Under [x.models], a model's own
+# context_window and price. The facts are from the servers' docs and
 # models.dev; DeepSeek's and Ollama's are tried.
 
 [deepseek]
@@ -16,8 +15,6 @@ url = "https://api.deepseek.com"
 key_env = "DEEPSEEK_API_KEY"
 api = "responses"
 context_window = 1_000_000
-# Far below the window: a runaway turn stays cheap; --context-stop raises it
-context_stop = 100_000
 
 [deepseek.models]
 # Off-peak prices are half these
@@ -34,7 +31,6 @@ url = "http://localhost:11434/v1"
 title = "OpenAI"
 url = "https://api.openai.com/v1"
 key_env = "OPENAI_API_KEY"
-context_stop = 100_000
 
 [openai.models]
 "gpt-5.6" = { context_window = 1_050_000 }
@@ -45,7 +41,6 @@ context_stop = 100_000
 title = "Google Gemini"
 url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 key_env = "GEMINI_API_KEY"
-context_stop = 100_000
 
 [google.models]
 "gemini-3.8-flash" = { context_window = 1_048_576 }
@@ -55,7 +50,6 @@ context_stop = 100_000
 title = "Qwen (Alibaba Cloud, China)"
 url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 key_env = "DASHSCOPE_API_KEY"
-context_stop = 100_000
 
 [qwen.models]
 "qwen3.7-max" = { context_window = 1_000_000 }
@@ -66,7 +60,6 @@ context_stop = 100_000
 title = "Kimi (Moonshot AI, China)"
 url = "https://api.moonshot.cn/v1"
 key_env = "MOONSHOT_API_KEY"
-context_stop = 100_000
 
 [kimi.models]
 "kimi-k3.1-pro" = { context_window = 1_048_576 }
@@ -76,7 +69,6 @@ context_stop = 100_000
 title = "GLM (Zhipu AI, China)"
 url = "https://open.bigmodel.cn/api/paas/v4"
 key_env = "ZHIPU_API_KEY"
-context_stop = 100_000
 
 [glm.models]
 "glm-5.3" = { context_window = 1_000_000 }
@@ -86,5 +78,4 @@ context_stop = 100_000
 title = "OpenRouter (many servers, one key)"
 url = "https://openrouter.ai/api/v1"
 key_env = "OPENROUTER_API_KEY"
-context_stop = 100_000
 # Hundreds of models: none listed; its own list gives each one's window

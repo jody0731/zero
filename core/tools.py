@@ -30,9 +30,11 @@ def tool(description, optional=(), summary=None, ready=None,
     in `optional` may be left out; the rest are required. `description` may be
     a function of the session's limits (bash's timeout), written per session.
     `summary(args)`: the call in a line or a few, for an ask and the judge
-    (bash's command, a write's path and its start); by default the raw
-    arguments. `ready(context)`: whether a session offers the tool, from what
-    it hands its tools (web_search needs a key); by default always.
+    (bash's command, a write's path and its content); by default the raw
+    arguments. One that cuts long text for an ask's screen takes `whole`,
+    which the judge passes to read it uncut. `ready(context)`: whether a
+    session offers the tool, from what it hands its tools (web_search needs a
+    key); by default always.
     `needs_permission(args)`: False for a call that changes nothing on the
     machine (a job's list, a read, a search, a fetch from the internet), which
     auto+ lets run unasked (permissions/approval.py, Permissions); by default
@@ -70,6 +72,8 @@ def tool(description, optional=(), summary=None, ready=None,
             "fn": fn,
             "describe": describe,
             "summary": summary,
+            "summary_cuts": summary is not None
+            and "whole" in inspect.signature(summary).parameters,
             "ready": ready,
             "needs_permission": needs_permission,
             "validate": validate,
@@ -169,11 +173,15 @@ def needs_permission(name, args):
     return True if check is None else bool(check(args))
 
 
-def summary(name, args, arguments):
-    """A checked call as an ask and the judge show it."""
-    describe = TOOLS.get(name, {}).get("summary")
+def summary(name, args, arguments, whole=False):
+    """A checked call as an ask shows it; `whole`, as the judge reads it,
+    with nothing cut (a write's content, an edit's strings)."""
+    entry = TOOLS.get(name, {})
+    describe = entry.get("summary")
     if describe is None:
         return f"{name} {arguments}"
+    if entry.get("summary_cuts"):
+        return describe(args, whole=whole)
     return describe(args)
 
 

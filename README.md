@@ -29,6 +29,7 @@
 - **Many sessions:** each with its own workspace and history, opened, switched, renamed or archived from any terminal.
 - **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
 - **One server:** it runs every session. Turns, background jobs and waiting questions go on after the terminal closes, and every app reaches the server the same way.
+- **Long sessions keep going:** near its line (the model's context window, or the one you set), a session's context is compacted: older outputs are saved to files, then ZERO writes itself a handoff. Nothing ZERO reads has a fixed cap: a long result past its share of the room is saved whole, and ZERO reads its start and end and where the rest is.
 - **It trusts the model:** what the model reads states facts, never guardrails; the limits live in code; it is built for the models to come.
 
 > [!NOTE]
@@ -92,7 +93,7 @@ zero -r              # the session list (--resume)
 zero -p "a question" # one question, for scripts (--print)
 ```
 
-Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's model and its thinking; `/settings` sets this session, what new sessions start with, the theme, the models and keys and the key bindings, and in **Advanced…** the judge, the limits and the server.
+Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's model and its thinking; `/compact` compacts the session's context now; `/settings` sets this session, what new sessions start with, the theme, the models and keys and the key bindings, and in **Advanced…** the judge, the limits (**Compact at (tokens)** among them) and the server. The status line shows the context's size against its line and the share of the last call the server's cache served, as `context 42k/1M · cache 96%`.
 
 ### CLI
 
@@ -100,7 +101,7 @@ Everything a caller does has a command, named as its message: a family, then the
 
 ```bash
 zero session send "a task" --cd ~/project --json   # one result object when it settles
-zero session list                                  # read, watch, stop, continue, rename, archive, delete, set
+zero session list                                  # read, watch, stop, continue, compact, rename, archive, delete, set
 zero job list                                      # job stop JOB
 zero grant list ID                                 # grant forget ID GRANT
 zero model server list                             # probe, connect, disconnect
@@ -162,7 +163,7 @@ git -C ~/Applications/zero checkout --detach \
 | Path | What it holds |
 | --- | --- |
 | `~/Applications/zero/` | the code (this repository) and its `.venv/` |
-| `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), and in `state/` the sessions and their history |
+| `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), and in `state/` the sessions and their history (`state/sessions/results/` holds the outputs kept out of a session's context) |
 
 ## Uninstall
 

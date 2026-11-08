@@ -1,6 +1,14 @@
 """The judge as the auto modes' approver: what it sees of a session (the
 user's words, ZERO's notices, the commands that ran with their latest output)
 and what its verdict does to a call. The judge itself is verdict.py.
+
+The proposed call comes whole (a write's content, an edit's strings), the
+commands that ran as an ask shows them, each with its output cut in the
+middle. The view only grows, so each call starts with the one before and
+the server's cache serves it (6.3: 95% of each call's history in real
+sessions, against 42% when only the latest outputs showed). A long session's
+view keeps every user message and notice; past the judge's room, its oldest
+commands are left out, and one line says how many.
 """
 
 import json
@@ -29,13 +37,14 @@ SIDE_EFFECTS = (
 # reason
 CROSSING = "\n({}; reason: {})"
 PAST_LIMIT = "\n({})"
+LEFT_OUT = "{count:,} earlier commands and their outputs, not shown here"
 
 
-def command_text(call):
+def command_text(call, whole=False):
     """A call as the judge reads it: its tool's summary (a command, a file
-    tool's path and start; core/tools.py), anything else its raw arguments,
-    and what it crosses."""
-    command = tools.summary(call.name, call.args, call.arguments)
+    tool's path and content, cut as an ask shows it unless `whole`;
+    core/tools.py), anything else its raw arguments, and what it crosses."""
+    command = tools.summary(call.name, call.args, call.arguments, whole)
     crossing = tools.crossing(call.name, call.args)
     if crossing is not None:
         reason = str(crossing["why"] or "").strip() or "none given"
@@ -64,15 +73,13 @@ def clip(text, chars):
     return f"{text[:half]}\n[{left} characters left out]\n{text[-half:]}"
 
 
-def view(records, output_chars=None, outputs=0):
+def view(records, output_chars=None, most_bytes=None):
     """The judge sees what users said, ZERO's notices, and the commands with
     recorded execution, a job's id with the command that became it. With
-    `output_chars`, the latest `outputs` commands are followed by what they
-    printed, cut to that many characters."""
-    ran = [r for r in records if r["type"] == "tool" and r["ran"]]
-    shown = set()
-    if output_chars is not None and outputs > 0:
-        shown = {id(r) for r in ran[-outputs:]}
+    `output_chars`, each command is followed by what it printed, cut to that
+    many characters. With `most_bytes`, the oldest commands are left out
+    until the entries fit in that many bytes of JSON lines, one entry saying
+    how many."""
     entries = []
     for record in records:
         if record["type"] == "user" and log_history.is_notice(record):
@@ -89,10 +96,38 @@ def view(records, output_chars=None, outputs=0):
             if job:
                 text += f" ({job.group(1).lower()} {job.group(2)})"
             entries.append({"ran": text})
-            if id(record) in shown:
+            if output_chars is not None:
                 output = clip(record.get("result") or "", output_chars)
                 entries.append({"output": output})
-    return entries
+    if most_bytes is None:
+        return entries
+    return fitted(entries, most_bytes)
+
+
+def entry_bytes(entry):
+    return len(json.dumps(entry, ensure_ascii=False).encode("utf-8")) + 1
+
+
+def fitted(entries, most_bytes):
+    """`entries` in `most_bytes`: the oldest commands and outputs left out,
+    every user message and notice kept."""
+    size = sum(entry_bytes(e) for e in entries)
+    if size <= most_bytes:
+        return entries
+    # Room for the line that says how many are left out
+    room = most_bytes - entry_bytes({"left_out": LEFT_OUT.format(count=len(entries))})
+    kept, count, first = [], 0, None
+    for entry in entries:
+        command = "ran" in entry or "output" in entry
+        if command and size > room:
+            size -= entry_bytes(entry)
+            count += "ran" in entry
+            first = len(kept) if first is None else first
+            continue
+        kept.append(entry)
+    if first is not None:
+        kept.insert(first, {"left_out": LEFT_OUT.format(count=count)})
+    return kept
 
 
 class JudgeApproval(Hook):
@@ -120,10 +155,10 @@ class JudgeApproval(Hook):
             return None
         history = view(
             call.turn.session.log.records(), self.judge.output_chars,
-            self.judge.outputs,
+            self.judge.view_bytes,
         )
         verdict = self._verdict(
-            call.turn.control, history, command_text(call),
+            call.turn.control, history, command_text(call, whole=True),
             call.notes.get("offer_text"),
         )
         call.notes["judge"] = verdict

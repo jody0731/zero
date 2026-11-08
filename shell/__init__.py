@@ -11,6 +11,4 @@ from settings import Setting
 SETTINGS = (
     Setting("bash_foreground_seconds", "Limits",
             "Seconds before a command moves to the background", 30, "number"),
-    Setting("bash_output_chars", "Limits", "Characters kept of a command's output",
-            4000, "int", minimum=100),
 )

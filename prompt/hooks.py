@@ -22,7 +22,7 @@ class Environment(Hook):
     def system_prompt(self, session):
         now = datetime.now().astimezone()
         return (
-            "\n\nEnvironment (at the start of this session):\n"
+            "\n\nEnvironment (when this system message was written):\n"
             f"- user: {getpass.getuser()}; home: {Path.home()}\n"
             f"- working directory (the workspace): {self.sandbox.workspace}\n"
             f"- {self.sandbox.environment_line()}{self._mode_line()}\n"

@@ -10,6 +10,10 @@ another and the loop holds no approver's words.
 
 import time
 
+# Who a call that needs an approver goes to, as each tool tells the model:
+# the mode line (permissions/modes.py) names them, readOnly's no one. "It is
+# asked about first" read as the user being asked, in every mode
+TO_APPROVER = "the session's approver, whom the environment's mode line names"
 DECLINED = "Declined: the user said no to this command."
 # The user's "No" at the box: the call isn't run and the turn ends
 DECLINED_STOP = (

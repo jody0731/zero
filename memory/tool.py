@@ -18,8 +18,9 @@ import re
 import tempfile
 from pathlib import Path
 
+from core.asking import TO_APPROVER
 from core.tools import tool
-from prompt.instructions import MAX_CHARS_BY_FILE, clean
+from prompt.instructions import clean
 
 TARGETS = ("soul", "user", "project")
 ACTIONS = ("add", "replace", "remove")
@@ -28,17 +29,16 @@ ASK_NAMES = {
     "soul": "SOUL.md", "user": "the user's ZERO.md",
     "project": "the project's ZERO.md",
 }
-FILE_NAMES = {"soul": "SOUL.md", "user": "ZERO.md", "project": "the project's ZERO.md"}
 CROSSING = "It changes what every later session reads."
 HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*$")
-# How much of a change an ask and the judge see
+# How much of a change an ask shows; the judge reads it whole
 SHOWN_CHARS = 2000
 # Where a change lives from now: this session (its result) and every later
 # one (the file)
 NOW = (
     "It now reads as below, in this session from here on, where the system "
-    "message still shows it as the session started, and in every session "
-    "started from now."
+    "message still shows it as it read when that message was written, and in "
+    "every session started from now."
 )
 
 
@@ -132,26 +132,25 @@ def store(path, text):
         raise
 
 
-def clipped(text):
+def clipped(text, whole=False):
     text = str(text or "")
-    if len(text) <= SHOWN_CHARS:
+    if whole or len(text) <= SHOWN_CHARS:
         return text
     return f"{text[:SHOWN_CHARS]}… [{len(text) - SHOWN_CHARS:,} more characters]"
 
 
-def summary(args):
-    """The change, as an ask and the judge read it."""
+def summary(args, whole=False):
+    """The change, as an ask shows it and the judge reads it (`whole`)."""
     name = ASK_NAMES.get(args.get("target"), str(args.get("target")))
     action = args.get("action")
+    text = clipped(args.get("text"), whole)
+    old = clipped(args.get("old_text"), whole)
     if action == "add":
         under = f" under “{title(args['heading'])}”" if args.get("heading") else ""
-        return f"memory: add to {name}{under}:\n{clipped(args.get('text'))}"
+        return f"memory: add to {name}{under}:\n{text}"
     if action == "replace":
-        return (
-            f"memory: replace in {name}:\n{clipped(args.get('old_text'))}\nwith\n"
-            f"{clipped(args.get('text'))}"
-        )
-    return f"memory: {action} from {name}:\n{clipped(args.get('old_text'))}"
+        return f"memory: replace in {name}:\n{old}\nwith\n{text}"
+    return f"memory: {action} from {name}:\n{old}"
 
 
 def crossing(args):
@@ -167,13 +166,11 @@ DESCRIPTION = (
     "add puts text at the end of a heading's section (the heading is made when "
     "missing; with none, at the end of the file); replace swaps old_text for "
     "text; remove deletes old_text. old_text occurs exactly once. Each change "
-    "goes first to the session's approver, whom the environment's mode line "
-    "names. A change's result holds the file as it then reads, for this "
-    "session; later sessions read it at their start. SOUL.md holds "
-    f"{MAX_CHARS_BY_FILE['soul']:,} characters, ZERO.md "
-    f"{MAX_CHARS_BY_FILE['user']:,}, the project's ZERO.md "
-    f"{MAX_CHARS_BY_FILE['project']:,}; a change past that isn't made. The file "
-    "tools don't change these files; the user edits them by hand too."
+    f"goes first to {TO_APPROVER}. A change's result holds the file as it "
+    "then reads, for this session; later sessions read it at their start, "
+    "the three files in 15% of their context's line together, a longer one "
+    "cut with a note of where it goes on. The file tools don't change these "
+    "files; the user edits them by hand too."
 )
 
 
@@ -210,14 +207,6 @@ def memory(target, action, text=None, old_text=None, heading=None, reason="",
     after = changed(before, action, text, old_text, heading)
     if isinstance(after, Refusal):
         return after.format(name=path)
-    size = len(clean(after))
-    cap = MAX_CHARS_BY_FILE[target]
-    if size > cap:
-        return (
-            f"Not changed: {FILE_NAMES[target]} would hold {size:,} characters as "
-            f"sessions read it; it holds {cap:,}. Removing or shortening "
-            "entries makes room."
-        )
     store(path, after)
     if action == "add":
         under = f" under “{title(heading)}”" if heading and title(heading) else ""
@@ -226,4 +215,5 @@ def memory(target, action, text=None, old_text=None, heading=None, reason="",
         done = f"Replaced in {path}."
     else:
         done = f"Removed from {path}."
-    return f"{done} {NOW}\n\n{clean(after)}"
+    size = f"It holds {len(clean(after)):,} characters as sessions read it."
+    return f"{done} {size} {NOW}\n\n{clean(after)}"

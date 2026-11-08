@@ -3,6 +3,40 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.3
+
+Long sessions keep going.
+
+- **Compaction in place of the hard stop:** before a call that wouldn't fit under its line, a session's
+  older outputs are saved to files and cleared from its context; when that isn't enough, ZERO writes
+  itself a handoff (your requests, what is done, the state, what is next) and goes on from it with its
+  newest steps. The log keeps everything.
+  - The line is the new setting **Compact at (tokens)** (`compact_at_tokens`, under Advanced…); unset, the
+    model's context window. `context_stop` reads as it; the catalog's 100,000-token stops are gone.
+  - `/compact`, `zero session compact` and `session/compact` compact now (before the next step while a
+    turn runs); ZERO has a `compact` tool too.
+- **No fixed caps on what ZERO reads:** a result past its share of the room left (15%) is saved whole in
+  `state/sessions/results/` (read-only in the sandbox), and ZERO reads its start and end, its size and
+  where it is. `read` takes a whole file or the lines asked; `web_search`'s count is ZERO's to choose.
+  `bash_output_chars`, `read_chars`, `web_fetch_chars`, `web_search_results` and `judge_outputs` are
+  retired (ignored in config.toml). SOUL.md and the ZERO.md files share 15% of the line.
+- **The meter:** the status line and `zero session read` show `context 42k/1M · cache 96%`, the context's
+  size against its line and the share of the last call the server's cache served. A compaction shows in
+  the transcript.
+- **Times:** each message ZERO reads from you ends with when you sent it.
+- **The judge** reads a proposed write, edit or plan whole, keeps every command's output in its view (so
+  the server's cache serves almost all of it), and knows your messages together set the goal.
+- **readOnly:** ZERO no longer says a write in readOnly would ask you; every tool says a call goes to the
+  session's approver, whom the mode names.
+- **Safe at the edge:** ZERO counts what it adds with the model server's own tokenizer where the server
+  offers one (llama.cpp), and otherwise as a token a byte, which never counts too few; digits, hashes and
+  JSON could fool the old estimate past a server's limit.
+- **No more give-ups while a local server reads:** where a model honours it, ZERO asks llama.cpp for
+  its progress through a long prompt and waits while it reads; every model call's silence limit is now
+  300 s (it was 45 s for the model). A `model_silence_seconds` you set stays yours.
+- The system message is written again only at a compaction, a model switch or a new release. The
+  protocol stays 4.
+
 ## 0.6.2.8.1
 
 A fix release: the names 0.6.2.8 missed.

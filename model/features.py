@@ -4,15 +4,17 @@ Each API declares the features ZERO may ask through its standard fields
 (apis/, FEATURES). Whether a model's server honours one is measured by a
 small request whose effect shows: thinking off (no reasoning comes back),
 thinking on (reasoning comes back), strict JSON (a reply that must fit a
-schema a greeting never would) and JSON mode (a JSON object comes back; a
+schema a greeting never would), JSON mode (a JSON object comes back; a
 model asked for JSON may give one anyway, so only a refusal or prose shows
-it missing). A server that refuses the field (400) doesn't honour it.
+it missing) and prompt progress (llama.cpp's progress chunks come back). A
+server that refuses the field (400) doesn't honour it.
 
 The results are kept per model in ZERO's state (paths.model_features_file),
 with the API they were measured on: a server switched to another API is
 measured again. A model never measured is taken to honour all of its API's
 features, so ZERO sends the standard field: unmeasured is never patched
-around. Measured when a face asks for a model's features and none are kept,
+around. Prompt progress is no standard field but llama.cpp's own, so it goes
+only to a model measured to honour it. Measured when a face asks for a model's features and none are kept,
 and on its "Test" (model/service.py, `model/features`).
 """
 
@@ -32,6 +34,7 @@ FEATURES = {
     "thinking_on": "thinking",
     "strict_json": "strict JSON",
     "json_mode": "JSON mode",
+    "prefill_progress": "prompt progress",
 }
 # Output tokens a test may take: enough for a thinking model's short thought
 OUTPUT_TOKENS = 1024
@@ -73,6 +76,12 @@ def thinking_effort_sent(model, api, effort):
     if honoured(model, api, for_thinking_effort(effort)) is False:
         return None
     return effort
+
+
+def prefill_progress_sent(model, api):
+    """Whether to ask for prompt progress: only of a model measured to
+    honour it."""
+    return honoured(model, api, "prefill_progress") is True
 
 
 def json_request(model, api, schema):
@@ -191,6 +200,17 @@ def measure(model, api, client, server_model, timeout):
     test("strict_json", fits)
     test("json_mode", lambda: json_object(
         ask(JSON_GREETING, json_mode=True, **quiet).content) is not None)
+
+    def progress():
+        stream = api.open_stream(client, server_model, GREETING,
+                                 prefill_progress=True,
+                                 max_output_tokens=OUTPUT_TOKENS)
+        try:
+            return any(api.alive(event) for event in stream)
+        finally:
+            stream.close()
+
+    test("prefill_progress", progress)
     row = {
         "api": api.NAME,
         "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

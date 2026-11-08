@@ -44,8 +44,8 @@ class ZeroFilesGuard(Hook):
 
     def system_prompt(self, session):
         lines = [
-            "\n\nYour own files, read at the start of this session (the memory "
-            "tool changes them; the file tools don't):"
+            "\n\nYour own files, read when this system message was written (the "
+            "memory tool changes them; the file tools don't):"
         ]
         if self.own.get("soul"):
             lines.append(f"- SOUL.md, your character: {self.own['soul']}")

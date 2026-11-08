@@ -58,6 +58,18 @@ def rows(about):
     return {"type": "array", "items": OBJECT, "description": about}
 
 
+# The user's meter of a session's context (core/history.py's context_meter):
+# null before its first model call
+CONTEXT_METER = maybe({
+    "type": "object",
+    "properties": {"tokens": INTEGER, "line": maybe(INTEGER),
+                   "cached_share": maybe(NUMBER)},
+    "description": "the context's tokens as the latest call saw them or a "
+                   "compaction left them, the line it is kept under, and the "
+                   "share of that call's prompt the cache served",
+})
+
+
 SESSION = {**STRING, "description": "a session's id"}
 # A message id the sender picks; the server admits each id once, so a retry
 # after a dropped connection is safe
@@ -154,14 +166,16 @@ MESSAGES = {
                "runs_with": {**OBJECT, "description": "what its next turn runs "
                              "with: mode, model, workspace, thinking_effort, "
                              "judge_model (null: the session's model) and "
-                             "judge_thinking_effort"}},
+                             "judge_thinking_effort"},
+               "context": CONTEXT_METER},
     ),
     "session/watch": message(
         "A session's records after a seq, then each new one as it comes.",
         {"session": SESSION, "after": INTEGER, "limit": maybe(INTEGER)},
         required=("session",),
         stream={"record": OBJECT, "settled": OBJECT, "draft": OBJECT,
-                "withdrawn": OBJECT, "earlier_count": INTEGER, "bye": STRING},
+                "withdrawn": OBJECT, "earlier_count": INTEGER,
+                "context": CONTEXT_METER, "bye": STRING},
     ),
     "session/mark_seen": message(
         "Mark a session read up to a seq, for the lists' news marks.",
@@ -185,6 +199,13 @@ MESSAGES = {
         "Delete a session: its files to the desktop's trash or ZERO's.",
         {"session": SESSION}, required=("session",),
         reply={"trash": STRING},
+    ),
+    "session/compact": message(
+        "Compact a session's context: at once when it rests, before the next "
+        "step when its turn runs.",
+        {"session": SESSION}, required=("session",),
+        reply={"compacting": {"type": "string",
+                              "enum": ["now", "before_next_step"]}},
     ),
     "session/set": message(
         "Change a session's mode, model, workspace, thinking effort or judge "

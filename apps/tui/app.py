@@ -607,6 +607,9 @@ class ZeroApp(SafeClicks, App):
                     title = (self.row() or {}).get("title", "")
                     self.ask_line("New title", title,
                                   lambda text: self.connection.rename(sid, text))
+            elif name == "/compact":
+                reply = self.connection.compact(sid)
+                self.note(render.COMPACTING[reply["compacting"]])
             elif name == "/archive":
                 archived = not (self.row() or {}).get("archived", False)
                 self.connection.archive(sid, archived)

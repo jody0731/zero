@@ -15,8 +15,11 @@ file (paths.py), straight into the client; the harness never puts it in the
 environment its commands inherit (key_envs: what the sandbox strips).
 """
 
+import json
 import os
 import tomllib
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from openai import OpenAI
@@ -30,7 +33,9 @@ from settings import stamp
 CATALOG = Path(__file__).with_name("catalog.toml")
 # Where a name without a known server's prefix goes
 UNPREFIXED_SERVER = "ollama"
-# A server's lines, and the ones a model may have of its own
+# A server's lines, and the ones a model may have of its own. context_stop
+# set where the context guard stopped a turn until 0.6.3; read and left
+# alone since, as the line is compact_at_tokens (context/)
 SERVER_FIELDS = {
     "title": str, "url": str, "key_env": str, "api": str,
     "context_window": int, "context_stop": int, "price": list, "models": dict,
@@ -40,10 +45,16 @@ MODEL_FIELDS = ("context_window", "context_stop", "price")
 RENAMED = {"name": "title", "context": "context_window"}
 # Lines a server had before 0.6.2.7: what a model honours is measured now
 RETIRED = ("json_format", "thinking")
-# Where the context guard stops a turn when no line says
-DEFAULT_CONTEXT_STOP = 0.8
 # What a keyless server is sent for a key: the client needs one
 NO_KEY = "none"
+# Servers whose root answers no /tokenize (llama.cpp's), by url: asked once
+NO_COUNT = set()
+# Seconds a token count may take; past it, counted by bytes this time
+COUNT_SECONDS = 10
+# A server's answer with no count in it
+NONE = object()
+# Counts kept by the text's hash, so a measure asks once for each text
+COUNTS_KEPT = 512
 
 
 class ModelServerError(Exception):
@@ -61,12 +72,8 @@ class ModelServer:
         # What the screens show
         self.title = entry.get("title", name)
         self.url = entry["url"]
-        # Tokens the model takes, and where the context guard stops a turn;
-        # None for a server looked up without a model
+        # Tokens the model takes; None for a server looked up without a model
         self.context_window = merged.get("context_window")
-        self.context_stop = merged.get("context_stop")
-        if self.context_stop is None and self.context_window is not None:
-            self.context_stop = int(self.context_window * DEFAULT_CONTEXT_STOP)
         # The API its server speaks (apis/)
         self.api = APIS[entry.get("api", DEFAULT)]
         # None: no key needed
@@ -247,20 +254,72 @@ class Model:
         # The agent's thinking effort; the judge and the consent check call
         # complete themselves
         self.effort = effort
+        # A stand-in client counts for itself, if it does
+        self._scripted = client is not None
+        self._counts = {}
+
+    def count_tokens(self, text):
+        """`text`'s tokens as this model's server counts them (llama.cpp's
+        /tokenize at the server's root), or None where it has no count; a
+        server that doesn't answer is asked no more."""
+        if self._scripted:
+            count = getattr(self.client, "count_tokens", None)
+            return count(text) if count else None
+        if self.server.url in NO_COUNT:
+            return None
+        key = hash(text)
+        if key not in self._counts:
+            found = self._ask_count(text)
+            if found is NONE:
+                NO_COUNT.add(self.server.url)
+                return None
+            if found is None:
+                return None
+            if len(self._counts) >= COUNTS_KEPT:
+                self._counts.clear()
+            self._counts[key] = found
+        return self._counts[key]
+
+    def _ask_count(self, text):
+        root = self.server.url.rstrip("/").removesuffix("/v1")
+        body = json.dumps({"model": self.served_name, "content": text}).encode()
+        request = urllib.request.Request(
+            f"{root}/tokenize", body, {"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=COUNT_SECONDS) as reply:
+                tokens = json.load(reply).get("tokens")
+        except urllib.error.HTTPError:
+            # It answered, with no count to give
+            return NONE
+        except (OSError, ValueError):
+            # Slow or gone this time: counted by bytes, and asked again later
+            return None
+        return len(tokens) if isinstance(tokens, list) else NONE
 
     def json_request(self, schema):
         """How to ask this model for JSON fitting `schema` (features.py)."""
         return features.json_request(self.name, self.api, schema)
 
-    def call(self, messages, schemas, check=None, on_delta=None):
+    def call(self, messages, schemas, check=None, on_delta=None,
+             max_output_tokens=None):
         """One model call, streamed (complete). API errors, a silence past the
         timeout and replies that didn't complete are raised for the loop to
         handle (MODEL_ERRORS); what `check` raises ends it at once. The
         effort is sent unless the model is measured not to honour it
-        (features.py): kept, not sent."""
+        (features.py): kept, not sent. `max_output_tokens`: a cap on the
+        reply (a compaction's handoff); None sends none."""
         return complete(
             self.api, self.client, self.served_name, messages,
             silence=self.timeout, check=check, on_delta=on_delta,
             tools=schemas,
             effort=features.thinking_effort_sent(self.name, self.api, self.effort),
+            max_output_tokens=max_output_tokens,
+            **self.progress(),
         )
+
+    def progress(self):
+        """The prompt progress field, where this model is measured to honour
+        it: a long prompt's reading then keeps the call alive."""
+        if features.prefill_progress_sent(self.name, self.api):
+            return {"prefill_progress": True}
+        return {}

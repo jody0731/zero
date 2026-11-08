@@ -52,6 +52,11 @@ class SessionActions:
             records = records[earlier_count:]
         return records, earlier_count
 
+    def context_meter(self, sid):
+        """The session's context as the user's meter shows it (core/history.py's
+        context_meter), or None before its first call."""
+        return history.context_meter(self.log(sid).records())
+
     def set_session(self, sid, mode=None, model=None, workspace=None,
                     thinking_effort=None, judge_model=None, judge_thinking_effort=None):
         """Change what a session runs with. Its next turn takes it; a

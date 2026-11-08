@@ -4,27 +4,23 @@ our own GET from this machine.
 Both run in ZERO's server, never in the sandbox, which has no network. The search
 goes to the server's own client, which holds the key (model/); the key
 never reaches a command or a result. The fetch resolves the host first: a
-local or LAN address is refused unless the call says local_network, which is
-asked about first (its `crossing`), as outside_sandbox is. A proxy's fake-ip
-answer (198.18.0.0/15: Clash, Mihomo and Surge answer every name from it) is
-the proxy's, not the network's, so it counts as public; the request then goes
-through the environment's proxy, which resolves the real name.
+local or LAN address is refused unless the call says local_network, which
+goes first to the session's approver (its `crossing`), as outside_sandbox
+does. A proxy's fake-ip answer (198.18.0.0/15: Clash, Mihomo and Surge answer
+every name from it) is the proxy's, not the network's, so it counts as public;
+the request then goes through the environment's proxy, which resolves the real
+name.
 
 What the model reads states facts: the fetch's status, address, type and size,
 a page's own text, and where else a refused page may be reached.
 """
 
-import hashlib
 import ipaddress
 import queue
 import re
-import shutil
 import socket
-import tempfile
 import threading
 import time
-import weakref
-from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 import httpx2
@@ -32,6 +28,7 @@ import openai
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
 
+from core.asking import TO_APPROVER
 from core.control import Stopped
 from core.tools import Grant, tool
 from model.servers import ModelServerError, api_key, find
@@ -40,6 +37,8 @@ from model.servers import ModelServerError, api_key, find
 SEARCH_PATH = "/v1/tools/search"
 QUERY_CHARS = 128
 MOST_RESULTS = 50
+# The results the API gives when the call names no count
+API_RESULTS = 10
 # Statuses worth one more try, after RETRY_PAUSE_SECONDS seconds
 RETRIED = {408, 429, 500, 502, 503, 504}
 RETRY_PAUSE_SECONDS = 2.0
@@ -135,22 +134,22 @@ def search_summary(args):
     needs_permission=lambda args: False,
     ready=search_ready,
     query=("string", "What to search for, 1 to 128 characters"),
-    count=("integer", "How many results, 1 to 50"),
+    count=("integer", f"How many results, 1 to {MOST_RESULTS}; the API's own "
+           f"default is {API_RESULTS}"),
 )
-def web_search(query, count=None, limits=None, web=None, request=None, notes=None):
-    """`limits`, `web`, `request` (the turn's words, sent as ori_question) and
-    `notes` come from the session, never the model."""
-    limits = limits or {}
-    if count is None:
-        count = min(limits.get("web_search_results") or MOST_RESULTS, MOST_RESULTS)
+def web_search(query, count=None, web=None, request=None, notes=None):
+    """`web`, `request` (the turn's words, sent as ori_question) and `notes`
+    come from the session, never the model."""
     whole = isinstance(count, int) and not isinstance(count, bool)
-    if not whole or not 1 <= count <= MOST_RESULTS:
+    if count is not None and (not whole or not 1 <= count <= MOST_RESULTS):
         return f"Not searched: count is a whole number from 1 to {MOST_RESULTS}."
     if not isinstance(query, str) or not query.strip() or len(query) > QUERY_CHARS:
         return f"Not searched: the query is 1 to {QUERY_CHARS} characters, not blank."
     if web is None or web.search is None:
         return "Not searched: there is no DeepSeek API key."
-    body = {"query": query, "count": count, "need_content": False}
+    body = {"query": query, "need_content": False}
+    if count is not None:
+        body["count"] = count
     question = " ".join(str(request or "").split())[:QUERY_CHARS]
     if question:
         body["ori_question"] = question
@@ -214,18 +213,14 @@ def post_search(web, body):
 # web_fetch
 
 
-def fetch_describe(limits):
-    chars = limits.get("web_fetch_chars")
-    size = f"Up to {chars:,} characters" if chars else "The start of a page"
-    return (
-        "Fetch a web page or file over http(s) from this machine: HTML comes back "
-        f"as Markdown, text, JSON and XML as they are. {size} come back; a "
-        "longer page is saved whole in this session's scratch folder "
-        "($TMPDIR), at the path the result gives. A local or LAN address "
-        "(this machine or its network) is fetched only with local_network, which "
-        "is asked about first. It runs outside the sandbox: the sandbox's "
-        "commands have no network, this tool has."
-    )
+FETCH_DESCRIPTION = (
+    "Fetch a web page or file over http(s) from this machine: HTML comes back "
+    "as Markdown, text, JSON and XML as they are, whole within its share of "
+    "the context's room; past it, its start and end come with where the whole "
+    "is saved. A local or LAN address (this machine or its network) is fetched "
+    f"only with local_network, which goes first to {TO_APPROVER}. It runs "
+    "outside the sandbox: the sandbox's commands have no network, this tool has."
+)
 
 
 def fetch_summary(args):
@@ -253,7 +248,7 @@ def fetch_hosts(args):
 
 
 @tool(
-    fetch_describe,
+    FETCH_DESCRIPTION,
     optional=("local_network", "reason"),
     # A fetch from the internet changes nothing here; one from this machine or
     # its network may reach a service that does, and asks
@@ -263,14 +258,14 @@ def fetch_hosts(args):
     grant=Grant("hosts", fetch_hosts,
                 lambda grant: "fetches from " + ", ".join(grant["hosts"])),
     url=("string", "The http or https URL"),
-    local_network=("boolean", "Fetch from a local or LAN address. It is asked about "
-                   "first"),
+    local_network=("boolean", "Fetch from a local or LAN address. It goes first "
+                   f"to {TO_APPROVER}"),
     reason=("string", "With local_network: why the task needs it"),
 )
-def web_fetch(url, local_network=False, reason="", sandbox=None, limits=None, web=None,
-              stop=None, notes=None):
-    """`sandbox` (where a long page is saved), `limits`, `web` and `stop` come
-    from the session, never the model."""
+def web_fetch(url, local_network=False, reason="", limits=None, web=None, stop=None,
+              notes=None):
+    """`limits` (its web_timeout), `web` and `stop` come from the session,
+    never the model."""
     limits = limits or {}
     web = web or Web()
     seconds = limits.get("web_timeout")
@@ -279,7 +274,7 @@ def web_fetch(url, local_network=False, reason="", sandbox=None, limits=None, we
                                 stop, seconds)
     except Refused as e:
         return f"Not fetched: {e}"
-    return render(fetched, limits.get("web_fetch_chars"), sandbox)
+    return render(fetched)
 
 
 def run_in_thread(work, stop, seconds):
@@ -330,11 +325,13 @@ def get(web, url, local_network, seconds):
                 if hop == 0:
                     raise Refused(
                         f"{host} is a local address ({local}: this machine or its "
-                        "network); a fetch with local_network is asked about first."
+                        "network); a fetch with local_network goes first to "
+                        f"{TO_APPROVER}."
                     )
                 raise Refused(
                     f"{first} redirected to {url}, a local address ({local}); a "
-                    "fetch of that URL with local_network is asked about first."
+                    "fetch of that URL with local_network goes first to "
+                    f"{TO_APPROVER}."
                 )
             try:
                 with client.stream("GET", url) as response:
@@ -416,7 +413,7 @@ def read_capped(response):
 # What the model reads
 
 
-def render(fetched, chars, sandbox):
+def render(fetched):
     mime = fetched["type"].split(";")[0].strip().lower()
     body = fetched["body"]
     kind = text_kind(mime, body)
@@ -448,10 +445,6 @@ def render(fetched, chars, sandbox):
         return head
     if fetched["cut"]:
         head += f" The file is longer: only its first {MAX_BYTES:,} bytes were read."
-    if len(text) > chars:
-        shown = save_page(sandbox, where, text, extension(kind, mime))
-        head += f" The first {chars:,} are below; the whole page is at {shown}."
-        text = text[:chars]
     head += " The text is the page's own."
     return f"{head}\n\n{text}"
 
@@ -467,14 +460,6 @@ def text_kind(mime, body):
     if not mime and b"\0" not in body[:8192]:
         return "html" if b"<html" in body[:2048].lower() else "text"
     return None
-
-
-def extension(kind, mime):
-    if kind == "html":
-        return ".md"
-    if "json" in mime:
-        return ".json"
-    return ".xml" if "xml" in mime else ".txt"
 
 
 def to_text(kind, body, charset, url):
@@ -499,38 +484,3 @@ def to_text(kind, body, charset, url):
     return title, re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def save_page(sandbox, url, text, ext):
-    """Save a long page whole where the session's commands and file tools see
-    it; return the path as they see it."""
-    parts = urlsplit(url)
-    # The path's own extension gives way to the saved text's
-    path = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", parts.path)
-    stem = re.sub(r"[^A-Za-z0-9.]+", "-", f"{parts.hostname}{path}").strip("-.")[:80]
-    digest = hashlib.sha256(url.encode()).hexdigest()[:6]
-    name = f"{stem}-{digest}{ext}"
-    if sandbox is not None and getattr(sandbox, "sandboxed", False):
-        # The scratch folder is at the same path in the sandbox and out
-        folder = Path(sandbox.private_tmp()) / "web"
-    else:
-        folder = Path(pages_folder(sandbox))
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / name).write_text(text, encoding="utf-8")
-    return str(folder / name)
-
-
-# Outside a sandbox (auto+, bypassPermissions): a folder of the session's own
-# in the machine's /tmp, gone with the session
-_PAGES = weakref.WeakKeyDictionary()
-_LOOSE = []
-
-
-def pages_folder(sandbox):
-    if sandbox is None:
-        if not _LOOSE:
-            _LOOSE.append(tempfile.mkdtemp(prefix="zero-web-"))
-        return _LOOSE[0]
-    if sandbox not in _PAGES:
-        folder = tempfile.mkdtemp(prefix="zero-web-")
-        weakref.finalize(sandbox, shutil.rmtree, folder, True)
-        _PAGES[sandbox] = folder
-    return _PAGES[sandbox]

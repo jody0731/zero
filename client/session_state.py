@@ -1,6 +1,7 @@
 """One session's live state, from its events: whether a turn runs, what it
 does and since when, the open ask, the reply streaming in, a failed model
-call's retry, what a stop gave back and the latest answer; and sending it a
+call's retry, what a stop gave back, the latest answer and the context's
+meter (the server's `context` events); and sending it a
 line (a new turn, a steer or a follow-up, or the reply to its ask). Every face
 borrows it; what its keys do is the face's own (apps/tui/controller.py).
 """
@@ -39,6 +40,9 @@ class SessionState:
         self.withdrawn = []
         # The latest turn's answer as its Markdown, for /copy
         self.last_reply = None
+        # The context's meter: tokens, line, cached_share (protocol's
+        # CONTEXT_METER); None until the server or a call says
+        self.context = None
         self.lock = threading.RLock()
 
     def event(self, event):
@@ -55,6 +59,9 @@ class SessionState:
                 mine = [m["text"] for m in event["withdrawn"]
                         if m.get("source") == getattr(self.connection, "source", None)]
                 self.withdrawn.extend(mine)
+                return
+            if "context" in event:
+                self.context = event["context"]
                 return
             if "settled" in event:
                 self.running = False

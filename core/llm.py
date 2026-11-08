@@ -112,7 +112,8 @@ def complete(api, client, model, messages, *, silence, check=None,
     seconds the model may send nothing, before its first token and between
     two; past that, NoReply. The SDK's own timeout counts per read, so a
     server that sends a keep-alive now and then never trips it; this clock
-    counts only events that carry something. `check()`: called every 0.1 s, a
+    counts only events that carry something, or a server's progress through
+    the prompt (the API's `alive`). `check()`: called every 0.1 s, a
     stop's way in (core/control.py); what it raises ends the call at once, the
     stream closed and anything after dropped. `on_delta(draft)`: after each
     event that carried something. Raises CutShort for a reply that didn't
@@ -163,6 +164,9 @@ def complete(api, client, model, messages, *, silence, check=None,
                 heard = time.monotonic()
                 if on_delta is not None:
                     on_delta(draft)
+            elif getattr(api, "alive", None) and api.alive(item):
+                # The server is reading the prompt: alive, nothing to show
+                heard = time.monotonic()
     finally:
         closed.set()
         for stream in streams:

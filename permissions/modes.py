@@ -28,7 +28,9 @@ MODES = {
 }
 # Who answers a mode's asks, as the session's environment says it
 ANSWERS = {
-    "nobody": "a call that needs permission is refused",
+    # The tools say a call goes first to the approver the mode line names
+    # (core/asking.py's TO_APPROVER); readOnly names no one
+    "nobody": "no one approves, so a call that goes to the approver is refused",
     "user": "the user answers each ask",
     "judge": "the judge answers each ask, and the user isn't asked",
     "every call": "the judge reviews each call that needs permission, and the "

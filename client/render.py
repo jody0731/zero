@@ -15,6 +15,51 @@ def duration(record, started=None, restarts=0):
     return f"{record.get('seconds', 0)} s"
 
 
+def short_tokens(count):
+    """A count of tokens as the meter shows it: 950, 42k, 1M, 1.5M."""
+    if count < 1000:
+        return str(count)
+    if count < 1_000_000:
+        return f"{count / 1000:.0f}k"
+    return f"{count / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+
+
+def meter_text(context):
+    """The context's meter in a few words, `context 42k/1M · cache 96%`; ""
+    with nothing to show."""
+    if not context or not context.get("tokens"):
+        return ""
+    text = f"context {short_tokens(context['tokens'])}"
+    if context.get("line"):
+        text += f"/{short_tokens(context['line'])}"
+    if context.get("cached_share") is not None:
+        text += f" · cache {context['cached_share']:.0%}"
+    return text
+
+
+# Who or what started a compaction, as a transcript says it
+COMPACTED_BY = {"line": "at its line", "zero": "asked by ZERO",
+                "user": "asked by you", "refused": "after the server refused "
+                "a request as too long"}
+
+
+def compaction_text(record):
+    """A compaction, or a failed one, in a line: why, and the tokens before
+    and after."""
+    why = COMPACTED_BY.get(record.get("reason"), record.get("reason"))
+    if record["type"] == "compaction_failed":
+        return f"compaction {why} failed: {record.get('error')}"
+    before = short_tokens(record.get("tokens_before") or 0)
+    after = short_tokens(record.get("tokens_after") or 0)
+    how = "handed off" if record.get("summary") else "old outputs cleared"
+    return f"context compacted {why}, {how}: {before} → {after} tokens"
+
+
+# What a client says to `session/compact`'s reply
+COMPACTING = {"now": "Compacting now.",
+              "before_next_step": "Compacting before the turn's next step."}
+
+
 def clipped(text):
     lines = text.splitlines()
     if len(lines) <= 10:
@@ -201,6 +246,8 @@ class Renderer:
             return [record["text"]]
         if kind == "switch":
             return [f"({switch_text(record)})"]
+        if kind in ("compaction", "compaction_failed"):
+            return [f"({compaction_text(record)})"]
         if kind == "turn_end":
             elapsed = duration(record, self.started, self.restarts)
             if record["outcome"] == "answered":

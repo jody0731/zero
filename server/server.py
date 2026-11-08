@@ -50,8 +50,8 @@ STOP_REASONS = ("stopped", "restart")
 SERVED = ("server/hello", "server/stop", "session/send", "session/continue",
           "session/stop", "session/list", "session/read", "session/watch",
           "session/mark_seen", "session/rename", "session/archive",
-          "session/unarchive", "session/delete", "session/set", "setting/list",
-          "setting/set")
+          "session/unarchive", "session/delete", "session/set", "session/compact",
+          "setting/list", "setting/set")
 # Those of them that only look, which ZERO's own commands may send too
 # (peers.py); a service names its own in `looking`
 LOOKING_MESSAGES = ("server/hello", "session/list", "session/read", "session/watch")
@@ -287,6 +287,14 @@ class Server:
                 return {"ok": True, **self.runtime.stop_turn(sid, msg_id, source)}
             except Refused as exc:
                 return error(str(exc))
+        if name == "session/compact":
+            sid = request.get("session")
+            if not isinstance(sid, str):
+                return error("session/compact needs a session string")
+            try:
+                return {"ok": True, **self.runtime.compact(sid)}
+            except Refused as exc:
+                return error(str(exc))
         if name == "session/continue":
             sid, msg_id = request.get("session"), request.get("id")
             source = request.get("source")
@@ -305,7 +313,8 @@ class Server:
             sid, after, limit = read_range(request)
             records, earlier_count = self.runtime.history(sid, after, limit, before)
             return {"ok": True, "records": records, "earlier_count": earlier_count,
-                    "runs_with": self.runtime.runs_with(sid)}
+                    "runs_with": self.runtime.runs_with(sid),
+                    "context": self.runtime.context_meter(sid)}
         if name in SESSION_EDITS:
             return self.edit_session(name, request)
         if name in self.runtime.messages:
@@ -444,6 +453,10 @@ class Server:
             records, earlier_count = self.runtime.history(sid, after, limit)
             if earlier_count:
                 self.emit(conn, {"earlier_count": earlier_count})
+            # The meter as the whole log has it, for a watch that starts late
+            meter = self.runtime.context_meter(sid)
+            if meter is not None:
+                self.emit(conn, {"context": meter})
             for record in records:
                 self.emit(conn, {"record": record})
                 after = record["seq"]

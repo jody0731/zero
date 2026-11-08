@@ -38,9 +38,15 @@ class Parked(Exception):
 
 
 class Session:
-    """One conversation: the message history, shared by all its turns."""
+    """One conversation: the message history, shared by all its turns.
 
-    def __init__(self, model, hooks, system_prompt, log, settings, tool_context=None):
+    Its system message is written once and kept, until the cache is lost
+    anyway: a compaction, a model switch, or new code that changes what the
+    model reads (`code_mark`). Then it is written again as things stand
+    (`rebuild`, the system prompt's start read again: the user's files)."""
+
+    def __init__(self, model, hooks, system_prompt, log, settings, tool_context=None,
+                 rebuild=None, code_mark=None):
         self.model = model
         self.hooks = HookRunner(hooks)
         self.log = log
@@ -49,13 +55,50 @@ class Session:
         self.fresh_settings = settings
         # What this session's tools get besides the model's arguments (its sandbox)
         self.tool_context = tool_context or {}
+        # The system prompt's start: as built, and how to read it again
+        self.system_start = system_prompt
+        self.rebuild = rebuild
+        # What the model reads of the code (its tools, the system message's
+        # parts), as a short hash; None: never checked
+        self.code_mark = code_mark
         records = log.records()
         self.prompt_tokens = 0
         if records:
             self.restore(log)
         else:
-            system = system_prompt + self.hooks.collect("system_prompt", self)
-            self.messages = [{"role": "system", "content": system}]
+            self.messages = [{"role": "system", "content": self.system_text()}]
+
+    def system_text(self):
+        """The system message as it would be written now."""
+        start = self.rebuild() if self.rebuild is not None else self.system_start
+        return start + self.hooks.collect("system_prompt", self)
+
+    def marked(self):
+        """The code mark a record with a system message keeps."""
+        return {"code_mark": self.code_mark()} if self.code_mark else {}
+
+    def rebuild_system(self, why):
+        """Write the system message as things stand now and take it from here
+        on: `why` is "model" (a switch) or "code" (new code)."""
+        self.write("system", system_prompt=self.system_text(), why=why,
+                   **self.marked())
+        self.messages = history.replay(self.log.records())
+
+    def compact(self, reason):
+        """A compaction now, between turns: what the hooks' crashes say when
+        it failed, else []. A turn's own come before its next model call."""
+        self.hooks.take_errors()
+        self.hooks.notify("compaction_asked", self, reason)
+        return self.hooks.take_errors()
+
+    def compacted(self, **fields):
+        """Write a compaction (the context component's fields: its reason,
+        handoff, the records kept and the outputs cleared), with the system
+        message as things stand now, and take the context it leaves."""
+        record = self.write("compaction", system_prompt=self.system_text(),
+                            **self.marked(), **fields)
+        self.messages = history.replay(self.log.records())
+        return record
 
     def tool_schemas(self):
         """The tools as this session tells them: bash's says its timeout."""
@@ -83,6 +126,7 @@ class Session:
             "settings": self.settings,
             "hooks": [repr(p) for p in self.hooks.hooks],
             "system_prompt": self.messages[0]["content"],
+            **self.marked(),
         }
 
     def write(self, type, **fields):
@@ -98,10 +142,16 @@ class Session:
                   continued=False):
         """`continued`: the turn is a server's `continue`, its text a
         harness note the user asked for, not words they typed."""
-        if not self.log.records():
+        records = self.log.records()
+        if not records:
             fields = self.session_record()
             self.messages = []
             self.write("session", **fields)
+        elif self.code_mark is not None:
+            # New code that changes what the model reads: the cache is lost
+            # anyway, so the system message is written again
+            if history.system_now(records).get("code_mark") != self.code_mark():
+                self.rebuild_system("code")
         fields = {"text": text}
         if inbox is not None:
             fields["inbox"] = inbox
@@ -109,7 +159,7 @@ class Session:
             fields["source"] = source
         if continued:
             fields["continue"] = True
-        self.write("user", **fields)
+        self.write("user", **self.fitted(fields))
         return Turn(self, text, inbox, source, control=control)
 
     def run_turn(self, question):
@@ -274,8 +324,15 @@ class Session:
         if turn.control is None:
             return
         for steer in turn.control.steers():
-            self.write("user", **history.steer_fields(steer))
+            self.write("user", **self.fitted(history.steer_fields(steer)))
             turn.control.delivered(steer)
+
+    def fitted(self, fields):
+        """A user record's fields, a notice's text fitted by the hooks first
+        (one past its share goes to a file)."""
+        if not history.is_notice(fields):
+            return fields
+        return {**fields, "text": self.hooks.pipe("notice", fields["text"], self)}
 
     def call_model(self, step):
         """One streamed model call (core/llm.py, complete), on every path with
@@ -323,6 +380,8 @@ class Session:
                 if call.turn.control is not None:
                     call.turn.control.check()
                 call.result = self.execute(call)
+                # Before the log keeps it: one past its share goes to a file
+                call.result = self.hooks.pipe("tool_result", call.result, call)
                 if call.remarks:
                     call.result += "\n\n" + "\n".join(call.remarks)
         self.write("tool", **call.record())

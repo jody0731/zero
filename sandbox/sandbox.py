@@ -104,11 +104,15 @@ class Sandbox:
     sandboxed = True
 
     def __init__(self, workspace, home=None, read_only=False, private=(),
-                 protected=(), scratch=None):
+                 protected=(), scratch=None, shown=()):
         self.workspace = Path(workspace).resolve()
         # The harness owner's own folders (ZERO's home with its keys and
         # history; private_folders): hidden from every command
         self.private = [Path(p) for p in private]
+        # Folders inside a hidden one shown again, read-only, at their own
+        # path: the session's results folder (a callable each, as a new
+        # session's log is named late)
+        self.shown = list(shown)
         # readOnly, or a workspace of /: mounted read-only like the rest
         self.read_only = read_only or self.workspace == Path("/")
         self.home = Path(home or Path.home())
@@ -162,7 +166,8 @@ class Sandbox:
     def hiding(self):
         """bwrap's arguments that cover the hidden folders with empty ones:
         the D-Bus session bus, ssh-agent, gpg-agent and Wayland sockets, the
-        keys, and the harness owner's own folders."""
+        keys, and the harness owner's own folders; then the folders shown
+        again, read-only, once they exist."""
         runtime = Path(f"/run/user/{os.getuid()}")
         hidden = [runtime] + [self.home / name for name in SECRETS]
         hidden += self.private
@@ -170,6 +175,9 @@ class Sandbox:
         for path in hidden:
             if path.exists():
                 args += ["--tmpfs", str(path)]
+        for folder in self.shown:
+            path = str(folder() if callable(folder) else folder)
+            args += ["--ro-bind-try", path, path]
         return args
 
     def private_tmp(self):

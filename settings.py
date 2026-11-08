@@ -157,9 +157,11 @@ def load(path=None, mode=None):
     return {**DEFAULTS, **data}
 
 
-# Settings named otherwise before 0.6.2.8, still read under their old names;
-# the next save writes the new ones
+# Settings named otherwise before, still read under their old names; the next
+# save writes the new ones. context_stop stopped a turn until 0.6.3, where
+# the context is compacted at compact_at_tokens instead
 RENAMED = {
+    "context_stop": "compact_at_tokens",
     "effort": "thinking_effort", "judge_effort": "judge_thinking_effort",
     "idle_minutes": "server_idle_minutes", "max_format_errors": "max_broken_replies",
     "output_limit": "bash_output_chars", "web_chars": "web_fetch_chars",
@@ -170,14 +172,21 @@ RENAMED = {
 }
 
 
+# Settings gone since 0.6.3, read and left out (the next save drops them):
+# fixed caps on what the model reads, where only the context's own room
+# bounds a result now (context/)
+RETIRED = ("bash_output_chars", "read_chars", "web_fetch_chars",
+           "web_search_results", "judge_outputs")
+
+
 def renamed(values):
     """`values` under the settings' names as they are now; a new name beats
-    its old one where a file has both."""
+    its old one where a file has both; retired ones left out."""
     out = {RENAMED.get(name, name): value for name, value in values.items()
            if name in RENAMED}
     out.update({name: value for name, value in values.items()
                 if name not in RENAMED})
-    return out
+    return {name: value for name, value in out.items() if name not in RETIRED}
 
 
 def save(values, path=None):

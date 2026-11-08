@@ -8,8 +8,9 @@ The user edits every one of them by hand; ZERO changes them only through its
 memory tool (memory/), so the harness's own rules (how its tools work, what
 they may touch) stay in code, where no file can undo them. Another agent's
 files on the walk (AGENTS.md, CLAUDE.md) are found and named, never read in:
-they are written for those agents. Each file has a cap, and a cut says where
-the rest is (OpenClaw, Hermes). HTML comments are for the user and never reach
+they are written for those agents. The files share one room, a share of the
+session's context that the assembly works out, and a cut says where the rest
+is (OpenClaw, Hermes). HTML comments are for the user and never reach
 the model; a heading left with nothing under it is dropped too. The first use
 writes the user's two files from the templates beside this file.
 
@@ -37,9 +38,6 @@ ZERO = HERE / "ZERO.md"
 # The file a project's folders hold for ZERO, and other agents' own
 PROJECT_FILE = "ZERO.md"
 OTHER_AGENT_FILES = ("AGENTS.md", "CLAUDE.md")
-# The characters each file gives the prompt at most; the project's files
-# share theirs
-MAX_CHARS_BY_FILE = {"soul": 4000, "user": 8000, "project": 16000}
 # The code's own lines, the same for every user. What ZERO is and runs on,
 # before anything a file says
 HARNESS = (
@@ -135,15 +133,16 @@ def clean(raw):
 
 def cut(body, room, path, limit):
     """`body` in `room` characters at most: whole lines, then a line that says
-    where the rest of `path` goes on. `limit` is the cap the note names."""
+    where the rest of `path` goes on. `limit` is the room the files share,
+    which the note names."""
     if len(body) <= room:
         return body
     kept = []
     for line in body.split("\n"):
         quoted = line.strip()[:QUOTED_CHARS]
         note = (
-            f"[Cut at {limit:,} characters: {path} goes on from the line "
-            f"“{quoted}”.]"
+            f"[Cut at {limit:,} characters, what these files take together: "
+            f"{path} goes on from the line “{quoted}”.]"
         )
         # The line that doesn't fit beside its note is where the rest starts
         if len("\n".join(kept + [line])) + 2 + len(note) > room:
@@ -173,20 +172,28 @@ def walk(root, workspace):
     return list(reversed(folders))
 
 
-def read(instructions, workspace):
-    """What a session with these instructions reads in `workspace`."""
+def read(instructions, workspace, most_chars):
+    """What a session with these instructions reads in `workspace`: its
+    files in order, SOUL.md, the user's ZERO.md, the project's, in
+    `most_chars` characters together."""
     found = InstructionsRead(soul=instructions.soul, user=instructions.user)
     parts = []
-    for path, cap in ((instructions.soul, "soul"), (instructions.user, "user")):
-        if path is not None:
+    room = most_chars
+
+    def add(label, body, path):
+        nonlocal room
+        block = label + cut(body, room - len(label), path, most_chars)
+        parts.append(block)
+        room -= len(block) + 2
+
+    for path in (instructions.soul, instructions.user):
+        if path is not None and room > 0:
             body = text(path)
             if body:
-                limit = MAX_CHARS_BY_FILE[cap]
-                parts.append(cut(body, limit, path, limit))
+                add("", body, path)
     root = project_root(workspace) if instructions.project else None
     if root is not None:
         found.project_file = root / PROJECT_FILE
-        room = MAX_CHARS_BY_FILE["project"]
         for folder in walk(root, workspace):
             found.others += [folder / n for n in OTHER_AGENT_FILES
                              if (folder / n).is_file()]
@@ -194,12 +201,8 @@ def read(instructions, workspace):
             body = text(path) if path.is_file() else ""
             if not body or room <= 0:
                 continue
-            label = f"The project's ZERO.md ({path}):\n"
-            block = label + cut(body, room - len(label), path,
-                                MAX_CHARS_BY_FILE["project"])
-            parts.append(block)
+            add(f"The project's ZERO.md ({path}):\n", body, path)
             found.project.append(path)
-            room -= len(block) + 2
     found.text = "\n\n".join(parts)
     return found
 

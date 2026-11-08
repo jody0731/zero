@@ -8,6 +8,7 @@ and a command still running at the timeout moves there instead of being killed
 import subprocess
 import time
 
+from core.asking import TO_APPROVER
 from core.tools import Grant, tool
 from jobs import tool as jobtools
 from jobs.process import drain, read_output, stop_group
@@ -61,7 +62,7 @@ def describe(limits):
     outside_sandbox=(
         "boolean",
         "Run this one command outside the sandbox, as the user with the "
-        "network. It is asked about first",
+        f"network. It goes first to {TO_APPROVER}",
     ),
     reason=("string", "With outside_sandbox, or for a job past the session's limit: "
             "why the task needs it"),
@@ -83,8 +84,8 @@ def bash(
     """`sandbox`, `outside`, `stop`, `jobs` and `limits` come from the session,
     never the model. `outside`: where an approved call to leave the sandbox
     runs; None when this session can't leave it. `jobs`: the session's server for
-    background jobs; None when it has none. `limits`: its timeout and output
-    limit (every session's tools get them). `reason` is for the ask
+    background jobs; None when it has none. `limits`: its timeout (every
+    session's tools get them). `reason` is for the ask
     (permissions/asks.py, jobs/hooks.py)."""
     box = sandbox or SANDBOX
     timeout = limits["bash_foreground_seconds"]
@@ -119,7 +120,7 @@ def bash(
         job_id = jobs.start(proc, command, estimate)
         result = jobtools.started_text(job_id)
         return result + "\n\n" + note if note else result
-    output = OutputBuffer(limits["bash_output_chars"])
+    output = OutputBuffer()
     moved = False
     try:
         try:

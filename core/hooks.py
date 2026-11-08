@@ -9,20 +9,29 @@ calls only the hooks that have that method, in profile order.
   any Deny or Stop wins, so hook order can never turn a denial into permission;
   then a Park, then the longest Retry. Nothing means "no opinion", never
   "allow".
+- pipe hooks: each hook in turn may hand back a new value (a tool's result
+  as the log keeps it); None keeps the value as it is.
 
-A crash in a decide hook fails closed (Deny or Stop); a crash in a watch or
-collect hook is only a warning. Either way it's kept in `errors` for the log.
+A crash in a decide hook fails closed (Deny or Stop); a crash in a watch,
+collect or pipe hook is only a warning, and a pipe goes on with the value it
+had. Either way it's kept in `errors` for the log.
 """
 
 import traceback
 
-WATCH = {"turn_start", "after_model", "after_tool", "turn_end"}
+# compaction_asked: a compaction asked for between turns (the user's), done
+# by the hook that keeps the context
+WATCH = {"turn_start", "after_model", "after_tool", "turn_end", "compaction_asked"}
 # switched: what a session runs with after the user changed it between
 # turns, told to the model in a note; resumed: what the restart note adds,
 # when a turn cut off by a stopped server goes on
 COLLECT = {"system_prompt", "switched", "resumed"}
 DECIDE = {"before_model", "model_error", "before_tool", "approve", "step_end"}
-EVENTS = WATCH | COLLECT | DECIDE
+# tool_result: a call's result before it is logged; notice: a notice's text
+# (a job's end) before it is logged (the context component saves one past
+# its share to a file)
+PIPE = {"tool_result", "notice"}
+EVENTS = WATCH | COLLECT | DECIDE | PIPE
 
 
 class Hook:
@@ -104,6 +113,25 @@ class HookRunner:
     def collect(self, name, *args):
         assert name in COLLECT, name
         return "".join(text for _, text, _ in self._each(name, *args) if text)
+
+    def pipe(self, name, value, *args):
+        """`value` handed through every hook that joins `name`, in profile
+        order: each may return a new one."""
+        assert name in PIPE, name
+        for hook in self.hooks:
+            method = getattr(hook, name, None)
+            if method is None:
+                continue
+            try:
+                found = method(value, *args)
+            except Exception as e:
+                where = f"{hook!r}.{name}"
+                self.errors.append({"where": where, "error": traceback.format_exc()})
+                print(f"(warning: {where} crashed: {type(e).__name__}: {e})")
+                continue
+            if found is not None:
+                value = found
+        return value
 
     def decide(self, name, *args):
         """Ask every hook; return the winning decision, or None."""

@@ -31,20 +31,20 @@ APPROVED = (
 )
 
 
-def listed(calls):
+def listed(calls, whole=False):
     """The calls, numbered, one summary each (core/tools.py's summary)."""
     lines = []
     for n, call in enumerate(calls, 1):
         arguments = json.dumps(call["arguments"], ensure_ascii=False)
-        text = tools.summary(call["tool"], call["arguments"], arguments)
+        text = tools.summary(call["tool"], call["arguments"], arguments, whole)
         lines.append(f"{n}. {call['tool']}: {text}")
     return "\n".join(lines)
 
 
-def plan_summary(args):
-    """The plan as an ask and the judge show it."""
+def plan_summary(args, whole=False):
+    """The plan as an ask shows it and the judge reads it (`whole`)."""
     plan = str(args.get("plan", "")).strip()
-    return f"plan: {plan}\ncalls:\n{listed(args.get('calls') or [])}"
+    return f"plan: {plan}\ncalls:\n{listed(args.get('calls') or [], whole)}"
 
 
 def problems(args):

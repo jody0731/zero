@@ -254,6 +254,11 @@ class Connection:
     def rename(self, session, title):
         return self.call(build("session/rename", session=session, title=title))
 
+    def compact(self, session):
+        """`session/compact`'s reply: whether it compacts "now" or
+        "before_next_step"."""
+        return self.call(build("session/compact", session=session))
+
     def archive(self, session, archived=True):
         name = "session/archive" if archived else "session/unarchive"
         return self.call(build(name, session=session))

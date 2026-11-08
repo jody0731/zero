@@ -19,16 +19,17 @@ SETTINGS = (
     Setting("judge_thinking_effort", "Judge", "Thinking effort", "off", "choice",
             choices=THINKING_EFFORTS, needs=THINKING_EFFORT_NEEDS,
             runs_on="judge_model"),
-    Setting("judge_silence_seconds", "Limits", "Seconds the judge may stay silent", 60,
+    # As the model's (model/__init__.py): a backstop, the judge's view now as
+    # long as half its model's window
+    Setting("judge_silence_seconds", "Limits", "Seconds the judge may stay silent", 300,
             "number"),
     # A reply that isn't a verdict is asked again; still none, a deny
     Setting("judge_retries", "Limits", "Retries after the judge gives no verdict",
             1, "int", minimum=0),
-    # What the judge sees of a command's output, cut in the middle, and
-    # how many of the latest commands show it, so a long session stays small
+    # What the judge sees of each command's output, cut in the middle; every
+    # command's stays, so each call's view starts with the last one's and the
+    # server's cache serves it (6.3)
     Setting("judge_output_chars", "Limits",
             "Characters of a command's output the judge sees", 1000, "int",
             minimum=100),
-    Setting("judge_outputs", "Limits",
-            "Latest commands whose output the judge sees", 10, "int", minimum=0),
 )

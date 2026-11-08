@@ -1,6 +1,8 @@
-"""Command output as the model reads it: the start and the end kept, the middle
-cut, under a header saying how much there was (a job's look clips with
-jobs/process.py's `clip`). The limit is the session's bash_output_chars, passed in.
+"""Command output as the model reads it: whole, under a header with its status
+and time. Only memory bounds it: past KEPT_CHARS (16 million characters,
+millions of tokens, more than any context holds) the start and the end are
+kept and the middle cut, the header saying how much there was. What the
+context takes of it is the context component's (context/hooks.py).
 """
 
 import codecs
@@ -8,12 +10,14 @@ import io
 
 from jobs.process import clip
 
+KEPT_CHARS = 16_000_000
+
 
 class OutputBuffer:
     """Keep a bounded head and tail, and count the full decoded output."""
 
-    def __init__(self, limit):
-        self.limit = limit
+    def __init__(self, limit=None):
+        self.limit = KEPT_CHARS if limit is None else limit
         self.head = ""
         self.tail = ""
         self.characters = 0
@@ -43,7 +47,9 @@ class OutputBuffer:
 
 def format_output(status, seconds, output, limit=None):
     """Codex-style result: status, wall time, size if cut, then the output.
-    `limit`: for a string; an OutputBuffer has its own."""
+    `limit`: for a string (KEPT_CHARS when None); an OutputBuffer has its
+    own."""
+    limit = KEPT_CHARS if limit is None else limit
     if isinstance(output, OutputBuffer):
         size = output.characters
         count = output.newlines + (not output.ends_with_newline)

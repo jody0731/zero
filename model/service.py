@@ -27,8 +27,8 @@ from model import connect, features, servers
 # Seconds a server has to list its models; one that doesn't answer says so
 LIST_SECONDS = 3
 # Seconds a model may stay silent while its features are measured: a local
-# server may first load it
-FEATURE_SECONDS = 60
+# server may first load it (a backstop, as model_silence_seconds)
+FEATURE_SECONDS = 300
 
 
 class ModelService(Service):

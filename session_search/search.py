@@ -26,13 +26,14 @@ archived, the one asking; a deleted one isn't listed.
 import json
 
 from core import history
+from session_search import SETTINGS
 from session_search.index import fts_query, named, searchable
 
-# How many sessions, or records, a search gives when the caller names no
-# count
-COUNT = 10
-# The records shown on each side of `around` when the caller names no count
-EACH_SIDE = 5
+# Session search's limits where none are given (a search made without a
+# session's limits or the server's), as the settings declare them: how many
+# sessions or records a search gives and how many on each side of `around`
+# when the caller names no count, and the words of a match's snippet
+DEFAULT_LIMITS = {s.name: s.default for s in SETTINGS}
 # Where a session named alone is read from: its first record (a log's
 # first, the session's settings, isn't searched, so the next comes)
 FIRST_RECORD = 1
@@ -45,11 +46,17 @@ class SearchError(ValueError):
     """Why no search was made, in words ZERO and a person both read."""
 
 
+def limit(limits, name):
+    """One of session search's limits, as `limits` stand."""
+    return (limits or {}).get(name, DEFAULT_LIMITS[name])
+
+
 def find(index, sessions, logs, query=None, session=None, around=None,
-         count=None, asking=None):
+         count=None, asking=None, limits=None):
     """One search. `sessions`: the session list's rows; `logs`: the folder
     of their logs; `asking`: the session that searches, marked in the reply
-    (None for a client)."""
+    (None for a client); `limits`: the searching session's, or the server's
+    settings, as they stand."""
     checked(query, session, around, count)
     listed = {row["id"]: shown(row, asking) for row in sessions}
     target = one_session(listed, session) if session is not None else None
@@ -59,9 +66,12 @@ def find(index, sessions, logs, query=None, session=None, around=None,
     if target is not None and (around is not None or query is None):
         # A session named alone is read from its start
         around = FIRST_RECORD if around is None else around
-        each_side = EACH_SIDE if count is None else count
-        return near(target, logs / f"{target['id']}.jsonl", around, each_side)
-    count = COUNT if count is None else count
+        if count is None:
+            count = limit(limits, "session_search_each_side")
+        return near(target, logs / f"{target['id']}.jsonl", around, count)
+    if count is None:
+        count = limit(limits, "session_search_count")
+    snippet_words = limit(limits, "session_search_snippet_words")
     words = fts_query(query)
     if words is None:
         raise SearchError("query has no word to find." if query else
@@ -69,11 +79,13 @@ def find(index, sessions, logs, query=None, session=None, around=None,
                           "session, near a record with around.")
     with index.lock:
         index.catch_up({sid: logs / f"{sid}.jsonl" for sid in listed})
-        reply = matched(index, listed, target, words, count, asking)
+        reply = matched(index, listed, target, words, count, asking,
+                        snippet_words)
         reply["matched_by"] = "every word"
         either = fts_query(query, any_word=True)
         if reply["record_count"] == 0 and either != words:
-            reply = matched(index, listed, target, either, count, asking)
+            reply = matched(index, listed, target, either, count, asking,
+                            snippet_words)
             reply["matched_by"] = "any word"
     reply["query"] = query
     marked(reply, logs)
@@ -103,12 +115,14 @@ def marked(reply, logs):
             record["left_behind"] = True
 
 
-def matched(index, listed, target, words, count, asking):
-    """The records an FTS5 query matches: in one session, or by session."""
+def matched(index, listed, target, words, count, asking, snippet_words):
+    """The records an FTS5 query matches: in one session, or by session;
+    each match's snippet `snippet_words` long at most."""
     if target is not None:
-        total, hits = index.session_hits(words, target["id"], count)
+        total, hits = index.session_hits(words, target["id"], count,
+                                         snippet_words)
         return {"session": target, "record_count": total, "records": hits}
-    return matching_sessions(index, listed, words, count, asking)
+    return matching_sessions(index, listed, words, count, asking, snippet_words)
 
 
 def checked(query, session, around, count):
@@ -146,14 +160,15 @@ def one_session(listed, session):
                       "more of the id names one.")
 
 
-def matching_sessions(index, listed, words, count, asking=None):
+def matching_sessions(index, listed, words, count, asking, snippet_words):
     """The sessions whose records match, best first, the one that asks
-    after the others: the first `count`."""
+    after the others: the first `count`, each with its best match's
+    snippet."""
     found = [(sid, n, rowid) for sid, n, rowid in index.sessions_matching(words)
              if sid in listed]
     found.sort(key=lambda item: item[0] == asking)
     first = found[:count]
-    hits = index.hits(words, [rowid for _, _, rowid in first])
+    hits = index.hits(words, [rowid for _, _, rowid in first], snippet_words)
     rows = [{**listed[sid], "record_count": n, "best": hits.get(rowid)}
             for sid, n, rowid in first]
     return {"session_count": len(found),
@@ -177,7 +192,7 @@ def log_records(path):
     return records
 
 
-def near(target, path, around, each_side=EACH_SIDE):
+def near(target, path, around, each_side):
     """The searched records nearest record `around`: `each_side` before it,
     the one at it (or the first after it), `each_side` after; each on a
     part a rewind left behind marked so."""

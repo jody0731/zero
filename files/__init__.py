@@ -5,4 +5,10 @@ command is. seen.py: what the tools saw of each file (from the log), for the
 stale check and, on a resume, the files that changed while a turn was cut off.
 """
 
-SETTINGS = ()
+from settings import Setting
+
+SETTINGS = (
+    # A bigger file is left to commands (tool.py)
+    Setting("max_file_megabytes", "Limits",
+            "Megabytes of a file the file tools take", 10, "int"),
+)

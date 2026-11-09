@@ -65,7 +65,8 @@ class SessionActions:
     def context_meter(self, sid):
         """The session's context as the user's meter shows it (core/history.py's
         context_meter), or None before its first call."""
-        return history.context_meter(self.log(sid).branch())
+        return history.context_meter(self.log(sid).branch(),
+                                     self.setting("compact_at_tokens"))
 
     def set_session(self, sid, mode=None, model=None, workspace=None,
                     thinking_effort=None, judge_model=None, judge_thinking_effort=None):
@@ -116,6 +117,15 @@ class SessionActions:
                 sid, **columns, switch=json.dumps({**switch, **fields})
             )
         return {"set": fields, "next_turn": bool(self.pending_switches(sid))}
+
+    def live_settings(self):
+        """ZERO's settings, each read as it stands at its use (its default
+        where the config lacks it)."""
+        return settings.LiveSettings(self.config)
+
+    def setting(self, name):
+        """One of ZERO's settings as it stands now."""
+        return self.live_settings()[name]
 
     def runs_with(self, sid):
         """What the session's next turn runs with: its mode, model and
@@ -283,7 +293,8 @@ class SessionActions:
                     session = Session(None, [], "", log, {})
                 self.refuse_copied(sid, seq)
                 try:
-                    record, left = session.rewind(seq, sid)
+                    record, left = session.rewind(
+                        seq, self.setting("rewind_note_line_chars"), sid)
                 except ValueError as error:
                     raise Refused(str(error)) from None
                 switch = self.carried_switch(sid, before, log.branch())
@@ -326,7 +337,8 @@ class SessionActions:
             text = left[0]["text"]
             # What the parent had done past the fork's point, for its note
             went_on = {"first": left[0]["seq"], "last": left[-1]["seq"],
-                       "part": history.part_lines(left)}
+                       "part": history.part_lines(
+                           left, self.setting("rewind_note_line_chars"))}
         new = self.copy_session(sid, info, records, copied, went_on,
                                 {"title": info["title"], "source": source,
                                  "started_by": "user"})

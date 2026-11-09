@@ -27,9 +27,10 @@ def tool(description, optional=(), summary=None, ready=None,
     Each keyword is one argument: name=(json_type, description), where
     json_type is a type's name or a whole JSON schema (an array's items, say).
     Arguments named
-    in `optional` may be left out; the rest are required. `description` may be
-    a function of the session's limits and its context (bash's timeout, how
-    deep subagents go), written at each call.
+    in `optional` may be left out; the rest are required. `description`, the
+    tool's or an argument's, may be a function of the session's limits and
+    its context (bash's timeout, how deep subagents go, a search's default
+    count), written at each call.
     `summary(args)`: the call in a line or a few, for an ask and the judge
     (bash's command, a write's path and its content); by default the raw
     arguments. One that cuts long text for an ask's screen takes `whole`,
@@ -64,14 +65,19 @@ def tool(description, optional=(), summary=None, ready=None,
             name: {
                 **(json_type if isinstance(json_type, dict)
                    else {"type": json_type}),
-                "description": text,
+                # Without a session's limits, as the tool's own text is
+                "description": text({}, {}) if callable(text) else text,
             }
             for name, (json_type, text) in params.items()
         }
+        # The arguments whose text is written at each call
+        described = {name: text for name, (_, text) in params.items()
+                     if callable(text)}
         describe = description if callable(description) else None
         TOOLS[fn.__name__] = {
             "fn": fn,
             "describe": describe,
+            "described_arguments": described,
             "summary": summary,
             "summary_cuts": summary is not None
             and "whole" in inspect.signature(summary).parameters,
@@ -112,6 +118,18 @@ def schemas(limits=None, context=None):
         if t["describe"] is not None:
             text = t["describe"](limits or {}, context or {})
             schema = {**schema, "function": {**schema["function"], "description": text}}
+        if t["described_arguments"]:
+            function = schema["function"]
+            properties = dict(function["parameters"]["properties"])
+            for name, text in t["described_arguments"].items():
+                properties[name] = {
+                    **properties[name],
+                    "description": text(limits or {}, context or {}),
+                }
+            schema = {**schema, "function": {
+                **function,
+                "parameters": {**function["parameters"], "properties": properties},
+            }}
         told.append(schema)
     return told
 

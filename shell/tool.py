@@ -83,10 +83,10 @@ def bash(
 ):
     """`sandbox`, `outside`, `stop`, `jobs` and `limits` come from the session,
     never the model. `outside`: where an approved call to leave the sandbox
-    runs; None when this session can't leave it. `jobs`: the session's server for
-    background jobs; None when it has none. `limits`: its timeout (every
-    session's tools get them). `reason` is for the ask
-    (permissions/asks.py, jobs/hooks.py)."""
+    runs; None when this session can't leave it. `jobs`: the session's server
+    for background jobs; None when it has none. `limits`: its timeout and the
+    output it keeps, as they stand (every session's tools get them).
+    `reason` is for the ask (permissions/asks.py, jobs/hooks.py)."""
     box = sandbox or SANDBOX
     timeout = limits["bash_foreground_seconds"]
     note = ""
@@ -120,7 +120,7 @@ def bash(
         job_id = jobs.start(proc, command, estimate)
         result = jobtools.started_text(job_id)
         return result + "\n\n" + note if note else result
-    output = OutputBuffer()
+    output = OutputBuffer(limits["bash_output_kept_chars"])
     moved = False
     try:
         try:

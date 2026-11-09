@@ -21,8 +21,8 @@ from settings import Setting
 
 SETTINGS = (
     # Levels of subagents below a session the user started; 0: none, the
-    # tool offered nowhere. Breadth has no cap. The server's, read at each
-    # use, so a change reaches every session, open ones too (service.py)
+    # tool offered nowhere. Breadth has no cap. Read at each use, as every
+    # limit is, so a change reaches every session, open ones too
     Setting("max_subagent_depth", "Limits", "Subagents depth", 2, "int",
             minimum=0),
 )

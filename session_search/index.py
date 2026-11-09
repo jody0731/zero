@@ -56,9 +56,9 @@ CREATE VIRTUAL TABLE records USING fts5(
 """
 KINDS = ("user", "notice", "reply", "call", "handoff")
 # How a match is marked in a snippet (not **, which a reply's Markdown
-# holds), and the words a snippet shows at most (FTS5 allows 64)
+# holds); its words are the search's (session_search_snippet_words; FTS5
+# allows 64)
 MARKS = ("«", "»")
-SNIPPET_WORDS = 32
 # A query's pieces: "a phrase" (maybe a prefix) or a run of anything else
 QUERY_PIECE = re.compile(r'"[^"]*"\*?|[^\s"]+')
 OPERATORS = ("OR", "AND", "NOT")
@@ -295,36 +295,39 @@ class Index:
             best.setdefault(row["session"], row["rowid"])
         return [(sid, counts[sid], rowid) for sid, rowid in best.items()]
 
-    def hits(self, query, rowids):
-        """The records with these rowids, each with its snippet, by rowid."""
+    def hits(self, query, rowids, snippet_words):
+        """The records with these rowids, each with its snippet
+        (`snippet_words` long at most), by rowid."""
         if not rowids:
             return {}
         marks = ", ".join("?" * len(rowids))
         rows = self._match(
-            f"SELECT rowid, {self._fields()} FROM records "
+            f"SELECT rowid, {self._fields(snippet_words)} FROM records "
             f"WHERE records MATCH ? AND rowid IN ({marks})", query, *rowids,
         )
         return {row["rowid"]: hit(row) for row in rows}
 
-    def session_hits(self, query, sid, count):
-        """(how many of a session's records match, the best `count` of them)."""
+    def session_hits(self, query, sid, count, snippet_words):
+        """(how many of a session's records match, the best `count` of them,
+        each with its snippet, `snippet_words` long at most)."""
         total = len(self._match(
             "SELECT rowid FROM records WHERE records MATCH ? AND session = ?",
             query, sid,
         ))
         rows = self._match(
-            f"SELECT rowid, {self._fields()} FROM records "
+            f"SELECT rowid, {self._fields(snippet_words)} FROM records "
             "WHERE records MATCH ? AND session = ? ORDER BY bm25(records) "
             "LIMIT ?", query, sid, count,
         )
         return total, [hit(row) for row in rows]
 
     @staticmethod
-    def _fields():
+    def _fields(snippet_words):
+        # A whole number from the settings, never the caller's text
         return (
             "session, seq, kind, tool_or_source, time, "
             f"snippet(records, 0, '{MARKS[0]}', '{MARKS[1]}', '…', "
-            f"{SNIPPET_WORDS}) "
+            f"{int(snippet_words)}) "
             "AS snippet"
         )
 

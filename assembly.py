@@ -31,9 +31,7 @@ import json
 from pathlib import Path
 
 import settings
-# Old setting names read as they are now; make_session's own `settings` is
-# the session's record
-from settings import renamed as current_names
+from settings import LiveSettings
 # Importing a tool module registers its tools, in the order the model reads
 # them (core/tools.py's registry keeps it)
 import jobs.tool
@@ -52,7 +50,7 @@ from core.asking import PARK
 from core.loop import Session
 from model import SETTINGS as MODEL_SETTINGS
 from model.service import ModelService
-from model.servers import Model, resolve
+from model.servers import Model, ModelServerError, resolve
 from model.retry import ModelRetry
 from limits import SETTINGS as LIMIT_SETTINGS
 from context import SETTINGS as CONTEXT_SETTINGS
@@ -67,6 +65,7 @@ from subagents import SETTINGS as SUBAGENT_SETTINGS
 from subagents.hooks import PastEstimate
 from subagents.service import SubagentsService
 from usage.spend import SessionUse
+from session_search import SETTINGS as SESSION_SEARCH_SETTINGS
 from session_search.service import SessionSearchService
 from jobs import SETTINGS as JOB_SETTINGS
 from jobs.service import JobsService
@@ -106,24 +105,37 @@ from sandbox.sandbox import (
 # and the view lists them as here
 SETTINGS_ORDER = (
     "mode", "model", "fallback_model", "thinking_effort", "judge_model",
-    "judge_thinking_effort", "max_jobs", "max_subagent_depth",
-    "bash_foreground_seconds", "web_timeout", "compact_at_tokens",
-    "model_silence_seconds", "judge_silence_seconds", "judge_reply_tokens",
-    "judge_retries", "judge_output_chars", "model_retries", "model_retry_seconds",
-    "max_broken_replies", "server_idle_minutes", "consent_silence_seconds",
+    "judge_thinking_effort",
+    # The limits, by what they bound: work started, commands, files, the
+    # web, the context, session search, notes, the model, the judge, the
+    # consent check
+    "max_jobs", "max_subagent_depth",
+    "bash_foreground_seconds", "bash_output_kept_chars", "repeat_after_seconds",
+    "max_file_megabytes",
+    "web_timeout", "web_fetch_max_megabytes", "web_fetch_max_redirects",
+    "web_search_max_results",
+    "compact_at_tokens", "result_share_percent", "reply_room_tokens",
+    "handoff_room_tokens",
+    "session_search_count", "session_search_each_side",
+    "session_search_snippet_words", "rewind_note_line_chars",
+    "model_silence_seconds", "model_retries", "model_retry_seconds",
+    "max_broken_replies",
+    "judge_silence_seconds", "judge_reply_tokens", "judge_retries",
+    "judge_output_chars", "consent_silence_seconds",
+    "server_idle_minutes",
 )
 settings.add(
     *MODEL_SETTINGS, *LIMIT_SETTINGS, *CONTEXT_SETTINGS,
     *JOB_SETTINGS, *SUBAGENT_SETTINGS,
     *SHELL_SETTINGS,
     *FILE_SETTINGS, *WEB_SETTINGS, *JUDGE_SETTINGS, *PERMISSION_SETTINGS,
+    *SESSION_SEARCH_SETTINGS,
     order=SETTINGS_ORDER,
 )
 
-# A session's limits at their defaults, from the services' settings, their one
-# home: the running jobs before another asks, how deep subagents go,
-# compact_at_tokens (None: the model's window), the model's and judge's
-# silence, the judge's ceiling, retries, and bash's time
+# Every limit at its default, from the components' settings, their one home
+# (the server kernel's own join when it is imported); a session reads its
+# limits as they stand (LiveSettings), never a copy
 DEFAULT_LIMITS = settings.default_limits()
 HERE = Path(__file__).resolve().parent
 # The files whose code writes the system message: a change in one, or in the
@@ -169,7 +181,8 @@ def session_hooks(
     folder (context/results.py). `runs_as`: the mode whose approver answers,
     where nobody watches the session (a subagent ZERO started: permissions'
     `raised`); None for `mode` itself. `judge`: the judge, which in default
-    answers only a round's asks."""
+    answers only a round's asks. `limits`: the session's, read at each use
+    (settings.LiveSettings)."""
     mode = canonical(mode)
     runs_as = canonical(runs_as or mode)
     spec = MODES[runs_as]
@@ -177,9 +190,9 @@ def session_hooks(
     if own is not None:
         hooks.append(own)
     hooks += [
-        ModelRetry(limits["model_retries"], limits["model_retry_seconds"]),
+        ModelRetry(limits),
         # After Context: a turn's second compaction is told of rounds
-        Context(server.context_window, results),
+        Context(server.context_window, results, limits),
         Rounds(),
         # A subagent's use against the estimate it was started with
         PastEstimate(),
@@ -189,8 +202,8 @@ def session_hooks(
     if spec.decides in ("user", "judge", "every call"):
         hooks.append(GrantCheck(saved, judged=runs_as in JUDGED))
     hooks += [
-        RepeatGuard(),
-        BrokenReplyLimit(limits["max_broken_replies"]),
+        RepeatGuard(limits),
+        BrokenReplyLimit(limits),
     ]
     if spec.asks:
         hooks.append(Asks())
@@ -260,8 +273,10 @@ def make_session(
     fallback_client=None,
     unattended=False,
 ):
-    """A session on the chat profile, with the limits `limits` sets (old
-    names read as they are now).
+    """A session on the chat profile. `limits`: its limits, read at each use:
+    a settings.LiveSettings (the server's, config.toml as it stands), or a
+    dict of values over the defaults (tests, the evals' scripts; old names
+    read as they are now).
 
     `log`: the session's log (the server's); else a new one named in `folder`
     (tests, the evals' scripts).
@@ -293,8 +308,9 @@ def make_session(
     own sandbox, which the server keeps across the session's builds; None for
     one of the sandbox's own.
     `fallback_model`: what a turn goes on with when the session's model
-    fails past its retries, and what a judge whose model fails asks; None
-    for none. `fallback_client`: its client (tests).
+    fails past its retries, and what a judge whose model fails asks; None:
+    the settings' as they stand at the failure (`limits`), none where they
+    name none. `fallback_client`: its client (tests).
     `unattended`: nobody watches the session (a subagent ZERO started), so
     it runs as its mode raised: default as auto, the sandbox kept.
     """
@@ -303,7 +319,8 @@ def make_session(
     mode = canonical(mode)
     spec = MODES[mode]
     runs_as = raised(mode) if unattended else mode
-    limits = {**DEFAULT_LIMITS, **current_names(limits or {})}
+    if not isinstance(limits, LiveSettings):
+        limits = LiveSettings(fixed=limits)
     server, _ = resolve(model)
     if log is None and folder is None:
         raise ValueError("a session needs its log, or a folder to start one in")
@@ -344,11 +361,15 @@ def make_session(
         outside = Outside(workspace, sandbox=sandbox)
     # What leads the system prompt; where the memory tool may write, and what
     # the session knows of those files
-    # ZERO's own files share what a result ZERO didn't size may take of a
-    # fresh context
-    most_chars = room.share(room.line(limits, server.context_window))
-    most_chars *= room.BYTES_PER_TOKEN
-    found = read(instructions, sandbox.workspace, most_chars) if instructions else None
+
+    def most_chars():
+        # ZERO's own files share what a result ZERO didn't size may take of
+        # a fresh context, under the limits as they stand
+        at = room.line(limits, server.context_window)
+        return room.share(at, limits) * room.BYTES_PER_TOKEN
+
+    found = (read(instructions, sandbox.workspace, most_chars())
+             if instructions else None)
     own_files = own = None
     if instructions is not None and instructions.memory:
         own_files = {
@@ -356,6 +377,10 @@ def make_session(
             "project": found.project_file,
         }
         own = ZeroFilesGuard(own_files, found.others, sandbox.workspace)
+    def fallback_name():
+        # The model a failing call goes on with, as the settings stand now
+        return fallback_model or limits["fallback_model"]
+
     judge = None
     if runs_as in JUDGED or runs_as == "default":
         # Its view of a long session takes half its model's window at most:
@@ -363,23 +388,30 @@ def make_session(
         def make_judge(name, client, fallback=None):
             judge_server, _ = resolve(name)
             return Judge(
-                name, client, timeout=limits["judge_silence_seconds"],
-                retries=limits["judge_retries"], effort=judge_thinking_effort,
-                output_chars=limits["judge_output_chars"],
+                name, client, limits=limits, effort=judge_thinking_effort,
                 view_bytes=judge_server.context_window // 2 * room.BYTES_PER_TOKEN,
-                reply_tokens=limits["judge_reply_tokens"], fallback=fallback,
+                fallback=fallback,
             )
 
+        def spare_judge():
+            # Asked when the judge's model fails to answer at all: one on the
+            # fallback model as the settings stand then; None for none
+            name = fallback_name()
+            if not name or name == (judge_model or model):
+                return None
+            try:
+                return make_judge(name, fallback_client)
+            except ModelServerError:
+                return None
+
         def the_judge():
-            spare = None
-            if fallback_model and fallback_model != (judge_model or model):
-                spare = make_judge(fallback_model, fallback_client)
-            return make_judge(judge_model or model, judge_client, spare)
+            return make_judge(judge_model or model, judge_client, spare_judge)
 
         # default's answers only in a round: made when one first asks
         judge = the_judge() if runs_as in JUDGED else LazyJudge(the_judge)
+    # The session's record: what it runs with that its log keeps (its
+    # limits aren't among them: they are read as they stand)
     settings = {
-        **limits,
         "server": server.name,
         "context_limit": server.context_window,
         # USD per 1M tokens at peak (hit, miss, output); evals estimate cost
@@ -412,23 +444,34 @@ def make_session(
     hooks.append(ChangedFiles())
     # On an interruption, the jobs the turn leaves running
     hooks.append(RunningJobs())
-    llm = Model(
-        model, client, timeout=limits["model_silence_seconds"],
-        effort=thinking_effort,
-    )
-    fallback = None
-    if fallback_model and fallback_model != model:
-        fallback = Model(
-            fallback_model, fallback_client,
-            timeout=limits["model_silence_seconds"], effort=thinking_effort,
-        )
-        # What its calls cost (usage/): the log carries it, as the model's
-        settings["fallback_price"] = fallback.server.price
+    def silence():
+        # The model's silence as the limits stand at each call
+        return limits["model_silence_seconds"]
+
+    llm = Model(model, client, timeout=silence, effort=thinking_effort)
+    # Fallback models made at a failure, by name
+    spares = {}
+
+    def fallback():
+        # What a turn goes on with when the session's model fails past its
+        # retries, as the settings stand then; None for none (or one whose
+        # server is gone)
+        name = fallback_name()
+        if not name or name == model:
+            return None
+        if name not in spares:
+            try:
+                spares[name] = Model(name, fallback_client, timeout=silence,
+                                     effort=thinking_effort)
+            except ModelServerError:
+                return None
+        return spares[name]
+
     prompt = system_prompt(found, model, server.price)
 
     def rebuild():
         # The user's files and the project's, read again as they stand now
-        now = (read(instructions, sandbox.workspace, most_chars)
+        now = (read(instructions, sandbox.workspace, most_chars())
                if instructions else None)
         return system_prompt(now, model, server.price)
 
@@ -457,45 +500,42 @@ def make_session(
 
 
 def logged_settings(records):
-    """The limits, the judge (judge_model and judge_thinking_effort, history's
+    """The judge (judge_model and judge_thinking_effort, history's
     chosen_judge) and the effort a session's log says it runs with, so a
     session built again (a restart, a switch) keeps them whatever config.toml
-    says now: ({}, None, None) for a new one, and a judge of None where the
-    log says nothing of it."""
+    says now: (None, None) for a new one, and a judge of None where the log
+    says nothing of it. Its limits aren't among them: every session reads
+    them as they stand (an older log's copy is left unread)."""
     if not records or records[0].get("type") != "session":
-        return {}, None, None
+        return None, None
     logged = history.settings_now(records)
-    limits = {
-        name: logged[name] for name in DEFAULT_LIMITS if name in logged
-    }
-    return limits, history.chosen_judge(logged), logged.get("thinking_effort")
+    return history.chosen_judge(logged), logged.get("thinking_effort")
 
 
 def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options):
     """A harness session for the server: its asks park, no terminal to
     print to, its own log, and its workspace, writable in the sandbox (a
     workspace of / stays read-only). The user's SOUL.md, ZERO.md and saved
-    permissions come from ZERO's config folder, with the project's ZERO.md;
-    its limits, judge and effort from `config` (config.toml's settings) when
-    it is made, and from its log after that (logged_settings); an effort or a judge
-    in `info` is a switch's (/model, the settings view), or a new session's
-    first message's. `options` go to make_session and win over these."""
+    permissions come from ZERO's config folder, with the project's ZERO.md.
+    `config()`: ZERO's settings as they stand (settings.Config). Its judge
+    and effort come from them when it is made, and from its log after that
+    (logged_settings); an effort or a judge in `info` is a switch's (/model,
+    the settings view), or a new session's first message's. Its limits and
+    its fallback model are read from them at each use, with `limits` (the
+    evals', tests') on top. `options` go to make_session and win over these."""
     log = log if log is not None else Log(paths.sessions / f"{sid}.jsonl")
-    config = config or {}
-    limits, judge, effort = logged_settings(log.branch())
+    config = config or (lambda: settings.DEFAULTS)
+    now = config()
+    judge, effort = logged_settings(log.branch())
     if judge is None:
         judge = {
-            "judge_model": config.get("judge_model"),
-            "judge_thinking_effort": config.get(
+            "judge_model": now.get("judge_model"),
+            "judge_thinking_effort": now.get(
                 "judge_thinking_effort", settings.DEFAULTS["judge_thinking_effort"]
             ),
         }
     judge.update({name: info[name] for name in judge if name in info})
-    limits = {
-        **{name: config[name] for name in DEFAULT_LIMITS if name in config},
-        **limits,
-        **options.pop("limits", {}),
-    }
+    limits = LiveSettings(config, fixed=options.pop("limits", {}))
     options = {
         "workspace": Path(info["workspace"]),
         "saved_permissions": permissions_file(),
@@ -504,10 +544,8 @@ def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options)
         "judge_thinking_effort": judge["judge_thinking_effort"],
         "thinking_effort": (
             info.get("thinking_effort") or effort
-            or config.get("thinking_effort", settings.DEFAULTS["thinking_effort"])
+            or now.get("thinking_effort", settings.DEFAULTS["thinking_effort"])
         ),
-        # The user's as it stands: an outage is now, not when the session began
-        "fallback_model": config.get("fallback_model"),
         **options,
     }
     # Only when nothing else is given: the first use writes the user's files
@@ -521,7 +559,7 @@ def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options)
 
 def server_session_maker(paths, config, limits=None):
     """How the server makes a session (its `make_session`): server_session on
-    `config()` as it stands; `limits` over the config's."""
+    `config()`, read as it stands at each use; `limits` over the config's."""
     options = {"limits": limits} if limits else {}
     # Each session's scratch folder, kept while the server runs: a session
     # built again (a switch of mode, model or workspace) finds its files
@@ -530,7 +568,7 @@ def server_session_maker(paths, config, limits=None):
     def make(sid, info, log=None, ask=PARK):
         scratch = scratches.setdefault(sid, Scratch())
         return server_session(
-            paths, sid, info, log, ask, config=config(), scratch=scratch,
+            paths, sid, info, log, ask, config=config, scratch=scratch,
             **options,
         )
 
@@ -541,12 +579,15 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
              tick=2.0):
     """The components' services in the server (server/services.py).
     `make_consent(model)` builds the consent check for a session's model; by
-    default on `config()`'s consent_silence_seconds. `saved_permissions()`:
-    the user's file of saved permissions; None for none (the evals). `tick`:
-    how often jobs' check-ins are looked for."""
+    default on `config()`'s consent_silence_seconds, read at each check.
+    `saved_permissions()`: the user's file of saved permissions; None for
+    none (the evals). `tick`: how often jobs' check-ins are looked for."""
     if make_consent is None:
+        def silence():
+            return LiveSettings(config)["consent_silence_seconds"]
+
         def make_consent(model):
-            return Consent(Model(model, timeout=config()["consent_silence_seconds"]))
+            return Consent(Model(model, timeout=silence))
 
     return [JobsService(tick=tick), PermissionsService(make_consent, saved_permissions),
             ModelService(), ContextService(), RoundsService(),

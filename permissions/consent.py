@@ -114,14 +114,13 @@ def question(ask):
 class Consent:
     """One model call per reply: JSON at temperature 0. `model`: the model
     it asks, as the model component makes it (its name, its API, its name at
-    the server, its client, silence timeout and how to ask it for JSON)."""
+    the server, its silence and client as they stand at each check, and how
+    to ask it for JSON)."""
 
     def __init__(self, model):
         self.model = model.name
         self.served_name = model.served_name
-        # Seconds the check may stay silent (complete's `silence`)
-        self.timeout = model.timeout
-        self.client = model.client
+        self.asked = model
         self.api = model.api
         # How to ask the model for JSON, as it honours it
         self.json_request = model.json_request
@@ -146,9 +145,10 @@ class Consent:
         ]
         tokens = thought = None
         try:
+            seconds = self.asked.silence()
             reply = complete(
-                self.api, self.client, self.served_name, messages,
-                silence=self.timeout, temperature=0,
+                self.api, self.asked.client_for(seconds), self.served_name,
+                messages, silence=seconds, temperature=0,
                 **self.json_request(SCHEMA), **self.progress(),
             )
             tokens = [reply.prompt_tokens, reply.cached_tokens,

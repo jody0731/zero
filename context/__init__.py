@@ -17,4 +17,18 @@ SETTINGS = (
     # unset, and never past it
     Setting("compact_at_tokens", "Limits", "Compact at (tokens)", None, "int",
             minimum=16_000, unset_means="the model's context window"),
+    # A result ZERO didn't size gets this share of the room left below the
+    # line; past it, the whole goes to a file (hooks.py)
+    Setting("result_share_percent", "Limits",
+            "Percent of the room left a result may take", 15, "int",
+            maximum=100),
+    # The next reply's room, its thinking included (447 real replies, 8 Nov:
+    # p99 3,440 tokens, the longest 4,572), and a compaction handoff's (the
+    # longest 2,335); each at most an eighth of the line, so a small window
+    # keeps room for the talk (room.py)
+    Setting("reply_room_tokens", "Limits", "Tokens kept for the next reply",
+            8_000, "int", minimum=1_000),
+    Setting("handoff_room_tokens", "Limits",
+            "Tokens kept for a compaction's handoff", 8_000, "int",
+            minimum=1_000),
 )

@@ -1,8 +1,9 @@
 """A session's use, from its log: working time, the tokens of its model calls,
 and their dollars at the model's price, which the log's settings carry
-(`price`, and `fallback_price` for the calls the fallback model made; a
-model with no price spends nothing, as does a fallback's call in a log
-from before 0.6.7, which named no price for it).
+(`price`, and for a call the fallback model made its own `fallback_price`,
+or the session's from before 0.6.7.1, when the fallback was fixed at the
+session's build; a model with no price spends nothing, as does a fallback's
+call in a log from before 0.6.7, which named no price for it).
 
 A whole log counts, every branch: a part a rewind left behind cost what it
 cost. A fork's copied records are its parent's, so its use starts after
@@ -29,10 +30,14 @@ def call_dollars(prompt, cached, completion, price):
 
 
 def record_dollars(record, price, fallback_price=None):
-    """An assistant record's cost: at `fallback_price` when it ran on the
-    fallback model (core/loop.py names it), else at `price` (USD per 1M
+    """An assistant record's cost: when it ran on the fallback model
+    (core/loop.py names it), at the price the record carries, else at
+    `fallback_price` (an older log's); otherwise at `price` (USD per 1M
     tokens: cache hit, miss, output)."""
-    own = fallback_price if record.get("fallback") else price
+    if record.get("fallback"):
+        own = record.get("fallback_price", fallback_price)
+    else:
+        own = price
     return call_dollars(record.get("prompt_tokens"), record.get("cached_tokens"),
                         record.get("completion_tokens"), own)
 

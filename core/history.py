@@ -76,8 +76,6 @@ PART_MESSAGES = "\nThe user's messages there:\n{messages}"
 PART_MESSAGE = "- record {seq}: {line}"
 # The calls that ran there, counted by tool
 PART_CALLS = "\nCalls that ran there, by tool: {counts}."
-# Past this, a message's line is cut, the cut saying so
-PART_LINE_CHARS = 200
 # Inside a notice whose sender started on a part a rewind left behind
 LEFT_BEHIND = (
     "[This started from record {seq} of this session's log, on a part of the "
@@ -159,19 +157,20 @@ def settings_now(records):
     return renamed(settings)
 
 
-def metered(meter, record):
+def metered(meter, record, compact_at=None):
     """The user's meter of the context after `record`: a session or switch
-    record sets the line it is kept under (compact_at_tokens, else the
-    model's window, never past it: context/room.py's line); a model call its
-    tokens (its prompt and reply) and the share of its prompt the server's
-    cache served (None where the server doesn't say); a compaction the tokens
-    it left, and no share until the next call."""
+    record sets the line it is kept under (`compact_at`, the
+    compact_at_tokens setting as it stands, else the model's window, never
+    past it: context/room.py's line); a model call its tokens (its prompt
+    and reply) and the share of its prompt the server's cache served (None
+    where the server doesn't say); a compaction the tokens it left, and no
+    share until the next call."""
     meter = dict(meter or {"tokens": None, "line": None, "cached_share": None})
     kind = record.get("type")
     if kind == "session" or (kind in ("switch", "note") and is_switch(record)):
         settings = renamed(record.get("settings") or {})
         window = settings.get("context_limit")
-        chosen = settings.get("compact_at_tokens") or window
+        chosen = compact_at or window
         meter["line"] = min(chosen, window) if chosen and window else chosen
     elif kind == "assistant" and record.get("prompt_tokens"):
         prompt = record["prompt_tokens"]
@@ -184,12 +183,12 @@ def metered(meter, record):
     return meter
 
 
-def context_meter(records):
-    """The meter as a whole log has it (metered, record by record); None
-    before the first model call."""
+def context_meter(records, compact_at=None):
+    """The meter as a whole log has it (metered, record by record, under
+    `compact_at`); None before the first model call."""
     meter = None
     for record in records:
-        meter = metered(meter, record)
+        meter = metered(meter, record, compact_at)
     return meter if meter and meter["tokens"] else None
 
 
@@ -240,12 +239,12 @@ def left_behind_by(records, seq):
     raise ValueError(f"record {seq} isn't on the conversation's current branch")
 
 
-def part_lines(part):
+def part_lines(part, line_chars):
     """What a part of the conversation did, from its records: the user's
     messages there (steers included; not notices or a `continue`), each by
-    its record and first line, then the calls that ran there counted by
-    tool. The rewind's note says it of the part left behind, a fork's of the
-    part its parent went on with."""
+    its record and first line (cut past `line_chars`, the cut saying so),
+    then the calls that ran there counted by tool. The rewind's note says it
+    of the part left behind, a fork's of the part its parent went on with."""
     lines = []
     for record in part:
         if (record["type"] != "user" or record.get("continue")
@@ -253,8 +252,8 @@ def part_lines(part):
             continue
         text = record["text"].strip()
         line = text.splitlines()[0] if text else ""
-        if len(line) > PART_LINE_CHARS or line != text:
-            line = line[:PART_LINE_CHARS].rstrip() + " … (the whole in the log)"
+        if len(line) > line_chars or line != text:
+            line = line[:line_chars].rstrip() + " … (the whole in the log)"
         lines.append(PART_MESSAGE.format(seq=record["seq"], line=line))
     counts = {}
     for record in part:
@@ -268,16 +267,16 @@ def part_lines(part):
     return text
 
 
-def rewind_note(when_iso, left, extra="", session=None):
+def rewind_note(when_iso, left, line_chars, extra="", session=None):
     """The rewind's note, from the part it leaves: what was done there
-    (`part_lines`), what the hooks add (`extra`: the files written there,
-    the jobs started there that still run), and `session`, its id, for
-    session_search."""
+    (`part_lines`, each message's line `line_chars` long at most), what the
+    hooks add (`extra`: the files written there, the jobs started there that
+    still run), and `session`, its id, for session_search."""
     return REWOUND.format(
         when=when(when_iso), asked=when(left[0]["time"]),
         first=left[0]["seq"], last=left[-1]["seq"],
         session=REWOUND_SESSION.format(session=session) if session else "",
-        part=part_lines(left), extra=extra,
+        part=part_lines(left, line_chars), extra=extra,
     )
 
 

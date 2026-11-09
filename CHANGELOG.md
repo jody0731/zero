@@ -3,6 +3,25 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.7.1
+
+Every limit live.
+
+- **A change to any limit applies at once**, to every session, open ones too, at its next use: in
+  `/settings` → Advanced → Limits, with `zero setting set`, or in config.toml by hand. A call already
+  running keeps the number it started with. Sessions no longer keep the limits they were made with;
+  older sessions read as before.
+- **New under Limits:** "Percent of the room left a result may take" (15), "Tokens kept for the next
+  reply" and "Tokens kept for a compaction's handoff" (8,000 each), "Characters of a command's output
+  kept" (16,000,000), "Megabytes of a file the file tools take" (10), "Seconds before the same call
+  runs again" (30), "Megabytes a web fetch reads" (5), "Redirects a web fetch follows" (5), "Results a
+  web search may ask for" (1 to 50), three for session search (10 results, 5 records on each side, 32
+  words in a snippet, at most 64), and "Characters of each message a rewind's or fork's note shows"
+  (200).
+- **Shown now:** "Seconds before the first retry" of the model, and "Seconds the consent check may
+  stay silent", moved from Server to Limits.
+- **The fallback model applies at once too**, at a call that fails.
+
 ## 0.6.7
 
 Subagents.

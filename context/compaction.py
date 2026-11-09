@@ -155,10 +155,12 @@ def described(record):
     return text.split("\n", 1)[0]
 
 
-def compact(session, reason, at, folder, check=None, tokens=room.tokens):
+def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
+            limits):
     """Make room in `session`'s context under the line `at`; the compaction
     record. `reason`: "line", "zero", "user" or "refused"; `tokens`: text's
-    tokens (the server's count where there is one). Raises
+    tokens (the server's count where there is one); `limits`: the session's,
+    for the handoff's room. Raises
     CompactionFailed when no handoff comes back, NothingToCompact when there
     is nothing to hand off."""
     records = session.log.branch()
@@ -207,7 +209,7 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens):
     ask = INSTRUCTIONS.format(saved=SAVED.format(lines=saved) if saved else "")
     messages = session.messages[:upto] + [{"role": "user", "content": ask}]
     t0 = time.monotonic()
-    reply = handoff_call(session, messages, at, check)
+    reply = handoff_call(session, messages, room.handoff_room(at, limits), check)
     summary = (reply.content or "").strip()
     if not summary:
         raise CompactionFailed("the handoff call came back empty")
@@ -247,11 +249,12 @@ ROUND = INSTRUCTIONS.replace(
 )
 
 
-def fresh(session, handoff, at, tokens=room.tokens, check=None):
+def fresh(session, handoff, at, tokens=room.tokens, check=None, *, limits):
     """A round's end: the context keeps nothing but the system message and
     `handoff` (the round's own, from end_round); with none, the model writes
-    one from the whole conversation, as a compaction's. The log keeps
-    everything. Raises CompactionFailed when no handoff comes back."""
+    one from the whole conversation, as a compaction's, within the handoff's
+    room (`limits`, the session's). The log keeps everything. Raises
+    CompactionFailed when no handoff comes back."""
     records = session.log.branch()
     before = room.measure(records, session.messages, session.tool_schemas(),
                           tokens)
@@ -260,7 +263,8 @@ def fresh(session, handoff, at, tokens=room.tokens, check=None):
         ask = ROUND.format(saved="")
         t0 = time.monotonic()
         reply = handoff_call(session, session.messages + [
-            {"role": "user", "content": ask}], at, check)
+            {"role": "user", "content": ask}], room.handoff_room(at, limits),
+            check)
         handoff = (reply.content or "").strip()
         if not handoff:
             raise CompactionFailed("the round's handoff call came back empty")
@@ -280,11 +284,10 @@ def fresh(session, handoff, at, tokens=room.tokens, check=None):
     )
 
 
-def handoff_call(session, messages, at, check=None):
-    """The handoff, written by the session's own model. The tools are sent as
-    the last request sent them, so the cache serves the prefix; a reply that
-    calls a tool instead is asked again without them."""
-    cap = min(room.HANDOFF_TOKENS, at // 8)
+def handoff_call(session, messages, cap, check=None):
+    """The handoff, written by the session's own model, `cap` tokens at most.
+    The tools are sent as the last request sent them, so the cache serves the
+    prefix; a reply that calls a tool instead is asked again without them."""
     reply = session.model.call(messages, session.tool_schemas(), check=check,
                                max_output_tokens=cap)
     if not (reply.content or "").strip() and reply.tool_calls:

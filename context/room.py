@@ -11,9 +11,11 @@ four times high, until the next call counts it.
 
 The line is `compact_at_tokens`, or the model's window when it is unset, and
 never past the window. The headroom is what must fit beside the context: the
-next reply, and a compaction's instructions and handoff. A
-result ZERO didn't size gets a share of the room left below the line minus
-the headroom; past it, the whole goes to a file (hooks.py).
+next reply (`reply_room_tokens`), and a compaction's instructions and handoff
+(`handoff_room_tokens`). A result ZERO didn't size gets a share
+(`result_share_percent`) of the room left below the line minus the
+headroom; past it, the whole goes to a file (hooks.py). Each is read from a
+session's limits as they stand (settings.LiveSettings).
 """
 
 import json
@@ -22,14 +24,6 @@ from dataclasses import dataclass
 from core import history
 
 BYTES_PER_TOKEN = 1
-# The next reply's room, its thinking included (447 real replies, 8 Nov:
-# p99 3,440 tokens, the longest 4,572), and the handoff's (the longest
-# 2,335); each at most an eighth of the line, so a small window keeps room
-# for the talk
-REPLY_TOKENS = 8_000
-HANDOFF_TOKENS = 8_000
-# A result ZERO didn't size gets this share of the room left
-RESULT_SHARE = 0.15
 
 
 def tokens(text):
@@ -83,36 +77,47 @@ def measure(records, messages, schemas, tokens=tokens):
     return Size(guessed, guessed)
 
 
-def line(settings, window):
+def line(limits, window):
     """The tokens a session's context is kept under: its compact_at_tokens,
     or the model's window when unset, and never past the window."""
-    chosen = settings.get("compact_at_tokens") or window
+    chosen = limits.get("compact_at_tokens") or window
     return min(chosen, window)
 
 
-def headroom(at, size, instructions):
+def reply_room(at, limits):
+    """The next reply's room under the line `at`: reply_room_tokens, at most
+    an eighth of the line, so a small window keeps room for the talk."""
+    return min(limits["reply_room_tokens"], at // 8)
+
+
+def handoff_room(at, limits):
+    """A compaction handoff's room under the line `at`, its ceiling too:
+    handoff_room_tokens, at most an eighth of the line."""
+    return min(limits["handoff_room_tokens"], at // 8)
+
+
+def headroom(at, instructions, limits):
     """What must fit beside the context under the line `at`: the next reply,
     a compaction's `instructions` and its handoff. No margin: what the
     server didn't count is counted high."""
-    reply = min(REPLY_TOKENS, at // 8)
-    handoff = min(HANDOFF_TOKENS, at // 8)
-    return reply + handoff + instructions
+    return reply_room(at, limits) + handoff_room(at, limits) + instructions
 
 
-def room_left(at, size, instructions):
+def room_left(at, size, instructions, limits):
     """The tokens left before the context must be compacted; below zero, it
     must be now."""
-    return at - headroom(at, size, instructions) - size.tokens
+    return at - headroom(at, instructions, limits) - size.tokens
 
 
-def share(room):
-    """What a result ZERO didn't size may take of the room left."""
-    return int(RESULT_SHARE * max(room, 0))
+def share(room, limits):
+    """What a result ZERO didn't size may take of the room left:
+    result_share_percent of it."""
+    return max(room, 0) * limits["result_share_percent"] // 100
 
 
-def fresh_room(at, fixed, instructions):
+def fresh_room(at, fixed, instructions, limits):
     """The most one result can be: what a fresh context has, after its
     system message and tools (`fixed` tokens) and a handoff, below the line
     and the headroom."""
-    empty = Size(fixed, 0)
-    return at - headroom(at, empty, instructions) - fixed - min(HANDOFF_TOKENS, at // 8)
+    return (at - headroom(at, instructions, limits) - fixed
+            - handoff_room(at, limits))

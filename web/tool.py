@@ -32,19 +32,20 @@ from core.asking import TO_APPROVER
 from core.control import Stopped
 from core.tools import Grant, tool
 from model.servers import ModelServerError, api_key, find
+from web import SETTINGS
 
 # DeepSeek's Search API (https://api-docs.deepseek.com/guides/search)
 SEARCH_PATH = "/v1/tools/search"
 QUERY_CHARS = 128
-MOST_RESULTS = 50
 # The results the API gives when the call names no count
 API_RESULTS = 10
 # Statuses worth one more try, after RETRY_PAUSE_SECONDS seconds
 RETRIED = {408, 429, 500, 502, 503, 504}
 RETRY_PAUSE_SECONDS = 2.0
-# What a fetch reads at most, and how many redirects it follows
-MAX_BYTES = 5 * 1024 * 1024
-MAX_REDIRECTS = 5
+# The web's limits where no session's limits say (a call made without a
+# session), as the settings declare them: a fetch's size and redirects, a
+# search's results
+DEFAULT_LIMITS = {s.name: s.default for s in SETTINGS}
 # The start of a refused page shown in its refusal
 REFUSAL_CHARS = 300
 # Statuses a site answers a fetch it refuses with
@@ -63,6 +64,11 @@ CGNAT = ipaddress.ip_network("100.64.0.0/10")
 NOT_TEXT = ("script", "style", "noscript", "template", "svg", "iframe", "object",
             "embed", "head")
 TEXT_TYPES = ("application/json", "application/xml", "application/javascript")
+
+
+def limit(limits, name):
+    """One of the web's limits, as the session's limits stand."""
+    return (limits or {}).get(name, DEFAULT_LIMITS[name])
 
 
 def resolve_host(host):
@@ -93,7 +99,8 @@ def web_clients(limits):
         key = api_key(server)
     except ModelServerError:
         return Web()
-    # The SDK's own retries are off: the search tries once more itself
+    # The SDK's own retries are off: the search tries once more itself; each
+    # search sends web_timeout as it stands (post_search)
     search = openai.OpenAI(base_url=server.url, api_key=key,
                            timeout=limits["web_timeout"], max_retries=0)
     return Web(search=search)
@@ -134,15 +141,20 @@ def search_summary(args):
     needs_permission=lambda args: False,
     ready=search_ready,
     query=("string", "What to search for, 1 to 128 characters"),
-    count=("integer", f"How many results, 1 to {MOST_RESULTS}; the API's own "
-           f"default is {API_RESULTS}"),
+    count=("integer", lambda limits, context: (
+        f"How many results, 1 to {limit(limits, 'web_search_max_results')}; "
+        f"the API's own default is {API_RESULTS}"
+    )),
 )
-def web_search(query, count=None, web=None, request=None, notes=None):
-    """`web`, `request` (the turn's words, sent as ori_question) and `notes`
-    come from the session, never the model."""
+def web_search(query, count=None, web=None, request=None, notes=None,
+               limits=None):
+    """`web`, `request` (the turn's words, sent as ori_question), `notes` and
+    `limits` (the most results, the request's time) come from the session,
+    never the model."""
+    most = limit(limits, "web_search_max_results")
     whole = isinstance(count, int) and not isinstance(count, bool)
-    if count is not None and (not whole or not 1 <= count <= MOST_RESULTS):
-        return f"Not searched: count is a whole number from 1 to {MOST_RESULTS}."
+    if count is not None and (not whole or not 1 <= count <= most):
+        return f"Not searched: count is a whole number from 1 to {most}."
     if not isinstance(query, str) or not query.strip() or len(query) > QUERY_CHARS:
         return f"Not searched: the query is 1 to {QUERY_CHARS} characters, not blank."
     if web is None or web.search is None:
@@ -154,7 +166,7 @@ def web_search(query, count=None, web=None, request=None, notes=None):
     if question:
         body["ori_question"] = question
     try:
-        answer = post_search(web, body)
+        answer = post_search(web, body, (limits or {}).get("web_timeout"))
     except openai.APIStatusError as e:
         why = "the DeepSeek balance has run out" if e.status_code == 402 else e.message
         code = e.status_code
@@ -197,17 +209,21 @@ def site_name(name):
     return text if text.isprintable() else name
 
 
-def post_search(web, body):
-    """One search, and one more try after a busy or failing answer."""
+def post_search(web, body, seconds=None):
+    """One search, and one more try after a busy or failing answer; each
+    request may take `seconds` (None: the client's own timeout)."""
+    options = {"timeout": seconds} if seconds is not None else {}
     try:
-        return web.search.post(SEARCH_PATH, body=body, cast_to=object)
+        return web.search.post(SEARCH_PATH, body=body, cast_to=object,
+                               options=options)
     except openai.APIStatusError as e:
         if e.status_code not in RETRIED:
             raise
     except (openai.APIConnectionError, openai.APITimeoutError):
         pass
     web.pause(RETRY_PAUSE_SECONDS)
-    return web.search.post(SEARCH_PATH, body=body, cast_to=object)
+    return web.search.post(SEARCH_PATH, body=body, cast_to=object,
+                           options=options)
 
 
 # web_fetch
@@ -264,22 +280,28 @@ def fetch_hosts(args):
 )
 def web_fetch(url, local_network=False, reason="", limits=None, web=None, stop=None,
               notes=None):
-    """`limits` (its web_timeout), `web` and `stop` come from the session,
-    never the model."""
+    """`limits` (its web_timeout, the most it reads and the redirects it
+    follows, as they stand), `web` and `stop` come from the session, never
+    the model."""
     limits = limits or {}
     web = web or Web()
     seconds = limits.get("web_timeout")
+    most_bytes = limit(limits, "web_fetch_max_megabytes") << 20
+    redirects = limit(limits, "web_fetch_max_redirects")
     try:
-        fetched = run_in_thread(lambda: get(web, url, local_network is True, seconds),
-                                stop, seconds)
+        fetched = run_in_thread(
+            lambda: get(web, url, local_network is True, seconds, most_bytes,
+                        redirects),
+            stop, seconds, redirects)
     except Refused as e:
         return f"Not fetched: {e}"
     return render(fetched)
 
 
-def run_in_thread(work, stop, seconds):
+def run_in_thread(work, stop, seconds, redirects):
     """Run `work` in a helper thread; a stop returns at once (Stopped), its
-    late result dropped."""
+    late result dropped. `seconds` a hop, `redirects` hops after the first,
+    set its backstop."""
     done = queue.Queue()
 
     def run():
@@ -292,7 +314,7 @@ def run_in_thread(work, stop, seconds):
     # The fetch's own timeout fires first, at each hop; this is a backstop
     deadline = None
     if seconds is not None:
-        deadline = time.monotonic() + seconds * (MAX_REDIRECTS + 1) + 5
+        deadline = time.monotonic() + seconds * (redirects + 1) + 5
     while True:
         if stop is not None and stop.is_set():
             raise Stopped()
@@ -307,9 +329,10 @@ def run_in_thread(work, stop, seconds):
         raise value
 
 
-def get(web, url, local_network, seconds):
-    """GET `url`, following redirects by hand: each hop's address is checked.
-    Returns a dict of what came back."""
+def get(web, url, local_network, seconds, most_bytes, redirects):
+    """GET `url`, following `redirects` redirects at most by hand, each hop's
+    address checked, and reading `most_bytes` at most. Returns a dict of
+    what came back."""
     first = url
     parts = check_url(url)
     # local_network covers the URL's own host, never another one
@@ -317,7 +340,7 @@ def get(web, url, local_network, seconds):
     with httpx2.Client(transport=web.transport, timeout=seconds,
                        follow_redirects=False, trust_env=True,
                        headers={"user-agent": USER_AGENT, "accept": ACCEPT}) as client:
-        for hop in range(MAX_REDIRECTS + 1):
+        for hop in range(redirects + 1):
             parts = check_url(url)
             host = parts.hostname
             local = local_address(web, host)
@@ -336,20 +359,20 @@ def get(web, url, local_network, seconds):
             try:
                 with client.stream("GET", url) as response:
                     if response.is_redirect and response.headers.get("location"):
-                        if hop == MAX_REDIRECTS:
+                        if hop == redirects:
                             target = urljoin(url, response.headers["location"])
                             raise Refused(
-                                f"more than {MAX_REDIRECTS} redirects, the last to "
+                                f"more than {redirects} redirects, the last to "
                                 f"{target}."
                             )
                         url = urljoin(url, response.headers["location"])
                         continue
-                    body, cut = read_capped(response)
+                    body, cut = read_capped(response, most_bytes)
                     return {
                         "url": url, "first": first, "status": response.status_code,
                         "type": response.headers.get("content-type", ""),
                         "charset": response.charset_encoding, "body": body,
-                        "cut": cut, "host": host,
+                        "cut": cut, "most_bytes": most_bytes, "host": host,
                     }
             except httpx2.TimeoutException:
                 raise Refused(f"{host} gave no answer within {seconds:g} s.") from None
@@ -400,13 +423,14 @@ def is_local(ip):
             or (ip.version == 4 and ip in CGNAT))
 
 
-def read_capped(response):
+def read_capped(response, most_bytes):
+    """The body, `most_bytes` at most, and whether it was cut there."""
     chunks, size = [], 0
     for chunk in response.iter_bytes():
         chunks.append(chunk)
         size += len(chunk)
-        if size > MAX_BYTES:
-            return b"".join(chunks)[:MAX_BYTES], True
+        if size > most_bytes:
+            return b"".join(chunks)[:most_bytes], True
     return b"".join(chunks), False
 
 
@@ -444,7 +468,8 @@ def render(fetched):
         head += f" Its HTML holds no text outside its scripts. {ELSEWHERE}"
         return head
     if fetched["cut"]:
-        head += f" The file is longer: only its first {MAX_BYTES:,} bytes were read."
+        head += (f" The file is longer: only its first {fetched['most_bytes']:,} "
+                 "bytes were read.")
     head += " The text is the page's own."
     return f"{head}\n\n{text}"
 

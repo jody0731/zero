@@ -12,7 +12,7 @@ from settings import Setting
 
 SETTINGS = (
     Setting("mode", "Default", "Mode", "default", "mode"),
-    Setting("consent_silence_seconds", "Server",
-            "Seconds the consent check may stay silent", 300, "number",
-            shown=False),
+    # Read at each check (the assembly's services), as the model's silence is
+    Setting("consent_silence_seconds", "Limits",
+            "Seconds the consent check may stay silent", 300, "number"),
 )

@@ -19,12 +19,9 @@ import traceback
 from pathlib import Path
 
 from server.services import Service, Refused
-from jobs import SETTINGS, process
+from jobs import process
 from jobs import tool as jobtools
 from jobs.store import ADDED_COLUMNS, RENAMED_COLUMNS, SCHEMA, JobStore
-
-# Running jobs before another one asks, for a session whose limits name none
-MAX_JOBS = {s.name: s.default for s in SETTINGS}["max_jobs"]
 
 
 def pid_start(pid):
@@ -53,17 +50,23 @@ def kill_leftover(row):
 class SessionJobs:
     """What one session's tools get as `jobs`: the server, bound to the session."""
 
-    def __init__(self, service, sid, limit, log_of=None):
+    def __init__(self, service, sid, limits, log_of=None):
         self.service = service
         self.sid = sid
-        # Running jobs before another one asks: the session's max_jobs
-        self.limit = limit
+        # The session's limits as they stand (settings.LiveSettings)
+        self.limits = limits
         # The session's log as it stands: a job keeps the record it was
         # started from (the call's), its newest
         self.log_of = log_of
 
     def spawn(self, argv, **options):
         return process.SPAWNER.popen(argv, **options)
+
+    @property
+    def limit(self):
+        """Running jobs before another one asks: the session's max_jobs as
+        it stands."""
+        return self.limits["max_jobs"]
 
     def has_room(self):
         """Whether one more job fits under the cap without asking."""
@@ -158,14 +161,14 @@ class JobsService(Service):
         now = time.time()
         return [{**row, "state_text": jobtools.state_text(row, now)} for row in rows]
 
-    def session(self, sid, limit, log_of=None):
-        return SessionJobs(self, sid, limit, log_of)
+    def session(self, sid, limits, log_of=None):
+        return SessionJobs(self, sid, limits, log_of)
 
     def session_built(self, sid, session):
-        """The session's tools start jobs through the server, up to its limit."""
-        limit = session.tool_context.get("limits", {}).get("max_jobs")
-        session.tool_context["jobs"] = self.session(sid, limit or MAX_JOBS,
-                                                    lambda: session.log)
+        """The session's tools start jobs through the server, up to its limit
+        as it stands."""
+        session.tool_context["jobs"] = self.session(
+            sid, session.tool_context["limits"], lambda: session.log)
 
     def busy_with(self):
         return {"jobs": [row["id"] for row in self.running_jobs()]}

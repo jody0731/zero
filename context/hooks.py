@@ -34,7 +34,7 @@ SAVED = (
     "it is in {path} ({lines:,} lines): `read` with offset and limit reads any "
     "part of it, or all of it at once.{preview}]"
 )
-SHARE = "{share:,} tokens: 15% of the {left:,} left"
+SHARE = "{share:,} tokens: {percent}% of the {left:,} left"
 NO_ROOM = "none: the context is compacted before the next step"
 PREVIEW = " Its start and end follow."
 BETWEEN = "\n[… {count:,} lines not shown …]\n"
@@ -88,11 +88,14 @@ def preview(text, tokens):
 class Context(Hook):
     """The context of one session kept under its line. `window`: the model's
     context window; `folder`: the session's results folder (a callable, as a
-    new log is named when its first turn starts)."""
+    new log is named when its first turn starts); `limits`: the session's,
+    read at each check (the line, the share, the reply's and the handoff's
+    room)."""
 
-    def __init__(self, window, folder):
+    def __init__(self, window, folder, limits):
         self.window = window
         self.folder = folder
+        self.limits = limits
         # A turn whose automatic compaction failed doesn't try again, so a
         # server that can't write a handoff isn't asked at every step
         self._failed = False
@@ -103,7 +106,7 @@ class Context(Hook):
         turn gone on with the fallback model (core/loop.py) has its window."""
         server = getattr(session.model, "server", None)
         window = getattr(server, "context_window", None) or self.window
-        return room.line(session.settings, window)
+        return room.line(self.limits, window)
 
     def _size(self, session):
         return room.measure(session.log.branch(), session.messages,
@@ -120,7 +123,7 @@ class Context(Hook):
         reason = self._asked(session)
         if reason is None and not self._failed:
             left = room.room_left(self._line(session), self._size(session),
-                                  INSTRUCTION_TOKENS)
+                                  INSTRUCTION_TOKENS, self.limits)
             if left < 0:
                 reason = "line"
         if reason is None:
@@ -148,7 +151,7 @@ class Context(Hook):
             return
         try:
             compaction.fresh(session, handoff, self._line(session),
-                             counter(session))
+                             counter(session), limits=self.limits)
         except (CompactionFailed, *MODEL_ERRORS) as error:
             session.write("compaction_failed", reason=reason,
                           error=f"{type(error).__name__}: {error}")
@@ -177,7 +180,8 @@ class Context(Hook):
         check = control.check if control is not None else None
         try:
             return compaction.compact(session, reason, self._line(session),
-                                      self.folder(), check, counter(session))
+                                      self.folder(), check, counter(session),
+                                      limits=self.limits)
         except (CompactionFailed, *MODEL_ERRORS) as error:
             if reason == "line" and isinstance(error, NothingToCompact):
                 return None
@@ -196,7 +200,7 @@ class Context(Hook):
         cost = count(result)
         if call.notes.get("sized"):
             fixed = count(session.messages[0]["content"])
-            most = room.fresh_room(at, fixed, INSTRUCTION_TOKENS)
+            most = room.fresh_room(at, fixed, INSTRUCTION_TOKENS, self.limits)
             if cost > most:
                 return TOO_BIG.format(cost=cost, most=most)
             return None
@@ -210,13 +214,16 @@ class Context(Hook):
                          counter(session)(text), name)
 
     def _fit(self, session, at, text, cost, name, whole_at=None):
-        left = room.room_left(at, self._size(session), INSTRUCTION_TOKENS)
-        allowed = room.share(left)
+        left = room.room_left(at, self._size(session), INSTRUCTION_TOKENS,
+                              self.limits)
+        allowed = room.share(left, self.limits)
         if cost <= allowed:
             return None
         path = whole_at or results.save(self.folder(), name, text)
         shown = preview(text, allowed)
-        told = SHARE.format(share=allowed, left=left) if left > 0 else NO_ROOM
+        percent = self.limits["result_share_percent"]
+        told = (SHARE.format(share=allowed, percent=percent, left=left)
+                if left > 0 else NO_ROOM)
         return SAVED.format(
             cost=cost, share=told, path=path, lines=results.lines_of(text),
             preview=PREVIEW if shown else "",

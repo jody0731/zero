@@ -16,14 +16,16 @@ INDEX_FILE = "session_search.sqlite"
 
 class SessionSearch:
     """What one session's tool gets as `search`: the server's search, the
-    session that asks marked in its replies."""
+    session that asks marked in its replies, under the session's limits as
+    they stand."""
 
-    def __init__(self, service, sid):
+    def __init__(self, service, sid, limits):
         self.service = service
         self.sid = sid
+        self.limits = limits
 
     def find(self, **request):
-        return self.service.find(asking=self.sid, **request)
+        return self.service.find(asking=self.sid, limits=self.limits, **request)
 
 
 class SessionSearchService(Service):
@@ -35,10 +37,14 @@ class SessionSearchService(Service):
         self.index = Index(runtime.paths.state / INDEX_FILE)
 
     def find(self, query=None, session=None, around=None, count=None,
-             asking=None):
+             asking=None, limits=None):
+        """One search: under a session's `limits`, or the server's settings
+        as they stand (a client's search)."""
+        if limits is None:
+            limits = self.runtime.live_settings()
         return find(self.index, self.runtime.store.sessions(),
                     self.runtime.paths.sessions, query=query, session=session,
-                    around=around, count=count, asking=asking)
+                    around=around, count=count, asking=asking, limits=limits)
 
     def messages(self):
         return {"session/search": self.search_message}
@@ -55,7 +61,8 @@ class SessionSearchService(Service):
             raise Refused(f"FTS5 couldn't read the query ({error})") from None
 
     def session_built(self, sid, session):
-        session.tool_context["search"] = SessionSearch(self, sid)
+        session.tool_context["search"] = SessionSearch(
+            self, sid, session.tool_context.get("limits"))
 
     def shutdown(self):
         self.index.close()

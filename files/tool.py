@@ -20,12 +20,12 @@ from pathlib import Path
 
 from core.asking import TO_APPROVER
 from core.tools import Grant, tool
-from files import sandboxed_io
+from files import SETTINGS, sandboxed_io
 from sandbox.sandbox import NOT_OUTSIDE, WALL, outside_crossing
 
-# Files bigger than this are left to commands: the file tools carry a file
-# whole between the box and the server
-MAX_FILE_BYTES = 10 << 20
+# The biggest file the file tools take where no session's limits say (a call
+# made without a session), as the setting declares it
+DEFAULT_MEGABYTES = {s.name: s.default for s in SETTINGS}["max_file_megabytes"]
 # A NUL byte in this much of a file's start makes it binary
 BINARY_PROBE_BYTES = 8192
 # How long a read or write in the sandbox may run
@@ -96,7 +96,16 @@ def failure_text(box, answer, verb, path):
     return text
 
 
-def not_a_file_text(answer, verb, path):
+def most_megabytes(limits):
+    """The biggest file the file tools take, in MB, as the session's limits
+    stand: bigger is left to commands, since the file tools carry a file
+    whole between the box and the server."""
+    return (limits or {}).get("max_file_megabytes", DEFAULT_MEGABYTES)
+
+
+def not_a_file_text(answer, verb, path, megabytes=None):
+    """Why `path` isn't a file the tools take; `megabytes`: their size cap,
+    for a file past it."""
     found = answer["kind"]
     if found == "missing":
         return f"Not {verb}: {path} doesn't exist."
@@ -104,10 +113,9 @@ def not_a_file_text(answer, verb, path):
         return f"Not {verb}: {path} is a directory."
     if found == "too_big":
         size = answer["size"] / (1 << 20)
-        most = MAX_FILE_BYTES >> 20
         return (
-            f"Not {verb}: {path} is {size:.0f} MB; the file tools take {most} MB "
-            "at most."
+            f"Not {verb}: {path} is {size:.0f} MB; the file tools take "
+            f"{megabytes} MB at most."
         )
     return f"Not {verb}: {path} isn't a regular file."
 
@@ -175,24 +183,27 @@ READ_DESCRIPTION = (
     offset=("integer", "The first line to read, from 1"),
     limit=("integer", "How many lines to read"),
 )
-def read(path, offset=None, limit=None, sandbox=None, notes=None):
-    """`sandbox` and `notes` come from the session, never the model: its
-    sandbox and the call's notes, where the content's hash goes for the
-    stale check, and what the context component reads of the result: a read
-    with a limit is sized by ZERO (`sized`); one without names the file that
-    holds it whole (`whole_at`), so one past its share isn't copied."""
+def read(path, offset=None, limit=None, sandbox=None, notes=None, limits=None):
+    """`sandbox`, `notes` and `limits` come from the session, never the
+    model: its sandbox, the call's notes, where the content's hash goes for
+    the stale check, and what the context component reads of the result (a
+    read with a limit is sized by ZERO, `sized`; one without names the file
+    that holds it whole, `whole_at`, so one past its share isn't copied),
+    and the session's limits (the size cap; `limit` is the model's, lines)."""
     box = sandbox
     for name, value in (("offset", offset), ("limit", limit)):
         if value is not None and (
             not isinstance(value, int) or isinstance(value, bool) or value < 1
         ):
             return f"Not read: {name} is a whole number from 1."
-    answer = run_sandboxed_io(box, {"op": "load", "path": path, "cap": MAX_FILE_BYTES})
+    megabytes = most_megabytes(limits)
+    answer = run_sandboxed_io(box, {"op": "load", "path": path,
+                                    "cap": megabytes << 20})
     if "error" in answer:
         return failure_text(box, answer, "read", path)
     shown = answer["path"]
     if answer["kind"] != "file":
-        return not_a_file_text(answer, "read", shown)
+        return not_a_file_text(answer, "read", shown, megabytes)
     data = base64.b64decode(answer["data"])
     if b"\0" in data[:BINARY_PROBE_BYTES]:
         return f"Not read: {shown} is binary ({len(data):,} bytes)."
@@ -292,13 +303,16 @@ PATHS = Grant(
     reason=("string", REASON_TEXT),
 )
 def write(path, content, outside_sandbox=False, reason="", sandbox=None,
-          outside=None, notes=None, files=None):
+          outside=None, notes=None, files=None, limits=None):
     """`files`: the session's SeenFiles (seen.py), for the stale
-    check; None for none (tests calling the tool directly)."""
+    check; None for none (tests calling the tool directly). `limits`: the
+    session's (the size cap); None for the setting's default."""
     box, extra = pick_box(sandbox, outside, outside_sandbox)
     if not isinstance(content, str):
         return "Not changed: content is a string."
-    answer = run_sandboxed_io(box, {"op": "load", "path": path, "cap": MAX_FILE_BYTES})
+    megabytes = most_megabytes(limits)
+    answer = run_sandboxed_io(box, {"op": "load", "path": path,
+                                    "cap": megabytes << 20})
     if "error" in answer:
         return note(failure_text(box, answer, "changed", path), extra)
     shown = answer["path"]
@@ -314,7 +328,7 @@ def write(path, content, outside_sandbox=False, reason="", sandbox=None,
             return note(problem, extra)
         before = base64.b64decode(answer["data"])
     elif answer["kind"] != "missing":
-        return note(not_a_file_text(answer, "changed", shown), extra)
+        return note(not_a_file_text(answer, "changed", shown, megabytes), extra)
     data = content.encode("utf-8")
     problem = store(box, shown, before, data, notes)
     if problem:
@@ -346,7 +360,10 @@ def write(path, content, outside_sandbox=False, reason="", sandbox=None,
     reason=("string", REASON_TEXT),
 )
 def edit(path, old_string, new_string, replace_all=False, outside_sandbox=False,
-         reason="", sandbox=None, outside=None, notes=None, files=None):
+         reason="", sandbox=None, outside=None, notes=None, files=None,
+         limits=None):
+    """`limits`: the session's (the size cap); None for the setting's
+    default."""
     box, extra = pick_box(sandbox, outside, outside_sandbox)
     if not isinstance(old_string, str) or not isinstance(new_string, str):
         return "Not changed: old_string and new_string are strings."
@@ -354,12 +371,14 @@ def edit(path, old_string, new_string, replace_all=False, outside_sandbox=False,
         return "Not changed: old_string is empty; write makes or replaces a whole file."
     if old_string == new_string:
         return "Not changed: old_string and new_string are the same."
-    answer = run_sandboxed_io(box, {"op": "load", "path": path, "cap": MAX_FILE_BYTES})
+    megabytes = most_megabytes(limits)
+    answer = run_sandboxed_io(box, {"op": "load", "path": path,
+                                    "cap": megabytes << 20})
     if "error" in answer:
         return note(failure_text(box, answer, "changed", path), extra)
     shown = answer["path"]
     if answer["kind"] != "file":
-        return note(not_a_file_text(answer, "changed", shown), extra)
+        return note(not_a_file_text(answer, "changed", shown, megabytes), extra)
     problem = stale_reason(files, answer, shown)
     if problem:
         return note(problem, extra)

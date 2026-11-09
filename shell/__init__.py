@@ -11,4 +11,9 @@ from settings import Setting
 SETTINGS = (
     Setting("bash_foreground_seconds", "Limits",
             "Seconds before a command moves to the background", 30, "number"),
+    # Only memory bounds a command's output: past this, millions of tokens,
+    # more than any context holds, its start and end are kept (output.py)
+    Setting("bash_output_kept_chars", "Limits",
+            "Characters of a command's output kept", 16_000_000, "int",
+            minimum=1_000),
 )

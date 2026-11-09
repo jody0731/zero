@@ -244,13 +244,21 @@ def make_client(model, timeout):
 
 
 class Model:
+    """A model at its server, called through complete. `timeout`: the seconds
+    it may stay silent (complete's `silence`), or a function giving them at
+    each call (a session's limits as they stand)."""
+
     def __init__(self, name, client=None, *, timeout, effort=None):
         self.name = name
-        # Seconds the model may stay silent (complete's `silence`)
         self.timeout = timeout
         self.server, self.served_name = resolve(name)
         self.api = self.server.api
-        self.client = client or make_client(name, timeout)
+        # What its calls cost: USD per 1M tokens (hit, miss, output)
+        self.price = self.server.price
+        # The SDK's client and the per-read timeout it was made with, made
+        # again when the silence changes, so neither cuts the other short
+        self._client_seconds = self.silence()
+        self.client = client or make_client(name, self._client_seconds)
         # The agent's thinking effort; the judge and the consent check call
         # complete themselves
         self.effort = effort
@@ -296,6 +304,18 @@ class Model:
             return None
         return len(tokens) if isinstance(tokens, list) else NONE
 
+    def silence(self):
+        """The seconds the model may stay silent now."""
+        return self.timeout() if callable(self.timeout) else self.timeout
+
+    def client_for(self, seconds):
+        """The SDK's client for a call that may stay silent `seconds`: a
+        stand-in as it is; a real one made again when the seconds changed."""
+        if not self._scripted and seconds != self._client_seconds:
+            self.client = make_client(self.name, seconds)
+            self._client_seconds = seconds
+        return self.client
+
     def json_request(self, schema):
         """How to ask this model for JSON fitting `schema` (features.py)."""
         return features.json_request(self.name, self.api, schema)
@@ -308,9 +328,10 @@ class Model:
         effort is sent unless the model is measured not to honour it
         (features.py): kept, not sent. `max_output_tokens`: a cap on the
         reply (a compaction's handoff); None sends none."""
+        seconds = self.silence()
         return complete(
-            self.api, self.client, self.served_name, messages,
-            silence=self.timeout, check=check, on_delta=on_delta,
+            self.api, self.client_for(seconds), self.served_name, messages,
+            silence=seconds, check=check, on_delta=on_delta,
             tools=schemas,
             effort=features.thinking_effort_sent(self.name, self.api, self.effort),
             max_output_tokens=max_output_tokens,

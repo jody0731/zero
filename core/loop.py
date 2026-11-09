@@ -56,8 +56,9 @@ class Session:
     def __init__(self, model, hooks, system_prompt, log, settings, tool_context=None,
                  rebuild=None, code_mark=None, fallback=None):
         self.model = model
-        # The session's own model, and the one a turn goes on with when it
-        # fails past its retries (None: none)
+        # The session's own model, and how to find the one a turn goes on
+        # with when it fails past its retries: `fallback()`, asked at the
+        # failure, gives it or None (None: never one)
         self.main_model = model
         self.fallback = fallback
         self.hooks = HookRunner(hooks)
@@ -117,21 +118,22 @@ class Session:
         self.messages = history.replay(self.log.branch())
         return record
 
-    def rewind(self, seq, session_id=None):
+    def rewind(self, seq, line_chars, session_id=None):
         """Go back to before the user's message `seq`, one that starts a turn
         on the current branch: a `rewind` record whose parent is the record
         before it, its note saying what it leaves behind (core/history.py's
-        rewind_note, with what the `rewound` hooks add), and the context the
-        branch now holds. Files and memory stay as they are: the harness
-        undoes nothing. `session_id`: the server's id for the session, which
-        the note names. Returns (the record, the part left behind)."""
+        rewind_note, each message's line `line_chars` long at most, with what
+        the `rewound` hooks add), and the context the branch now holds. Files
+        and memory stay as they are: the harness undoes nothing.
+        `session_id`: the server's id for the session, which the note names.
+        Returns (the record, the part left behind)."""
         parent, left = history.left_behind_by(self.log.branch(), seq)
         extra = self.hooks.collect("rewound", self, left)
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         record = self.write(
             "rewind", parent=parent["seq"], left_from=left[0]["seq"],
             left_to=left[-1]["seq"],
-            text=history.rewind_note(now, left, extra, session_id),
+            text=history.rewind_note(now, left, line_chars, extra, session_id),
         )
         self.messages = history.replay(self.log.branch())
         return record, left
@@ -216,11 +218,19 @@ class Session:
             self.write("note", kind="main_again",
                        text=MAIN_AGAIN.format(main=self.main_model.name))
 
-    def use_fallback(self, error):
-        """The rest of this turn on the fallback model, said in a note."""
-        self.model = self.fallback
+    def spare_model(self):
+        """The fallback model a failing call may go on with now: None while
+        the turn already runs on one, or where there is none."""
+        if self.fallback is None or self.model is not self.main_model:
+            return None
+        return self.fallback()
+
+    def use_fallback(self, error, spare):
+        """The rest of this turn on the fallback model `spare`, said in a
+        note."""
+        self.model = spare
         self.write("note", kind="fallback", text=FALLBACK.format(
-            main=self.main_model.name, fallback=self.fallback.name,
+            main=self.main_model.name, fallback=spare.name,
             error=f"{type(error).__name__}: {error}",
         ))
 
@@ -320,8 +330,12 @@ class Session:
         step.empty = not step.calls and not (reply.content or "").strip()
         fields = step.assistant_record()
         if self.model is not self.main_model:
-            # Its price and its window are the fallback's
+            # Its price and its window are the fallback's: the price goes with
+            # the call, as the fallback may differ from turn to turn
             fields["fallback"] = self.model.name
+            price = getattr(self.model, "price", None)
+            if price is not None:
+                fields["fallback_price"] = price
         self.write("assistant", **fields)
         bad_calls = bool(step.calls) and all(c.error for c in step.calls)
         step.malformed = step.cut_off or bad_calls or step.empty
@@ -377,10 +391,9 @@ class Session:
             except MODEL_ERRORS as e:
                 failure = ModelFailure(step, e, attempt)
                 retry = self.hooks.decide("model_error", failure)
-                if retry is None and self.fallback is not None and (
-                    self.model is not self.fallback
-                ):
-                    self.use_fallback(e)
+                spare = self.spare_model() if retry is None else None
+                if spare is not None:
+                    self.use_fallback(e, spare)
                     attempt = 0
                     continue
                 if retry is None:

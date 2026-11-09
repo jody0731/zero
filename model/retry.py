@@ -30,16 +30,18 @@ def retry_delay(error, attempt, base):
 
 
 class ModelRetry(Hook):
-    """Up to `retries` retries, waiting about base, 2 x base, 4 x base seconds."""
+    """Up to `model_retries` retries, waiting about base, 2 x base, 4 x base
+    seconds (`model_retry_seconds`), from the session's `limits` as they
+    stand at each failure."""
 
-    def __init__(self, retries, base):
-        self._retries = retries
-        self._base = base
+    def __init__(self, limits):
+        self._limits = limits
 
     def model_error(self, failure):
-        if failure.attempt >= self._retries:
+        if failure.attempt >= self._limits["model_retries"]:
             return None
-        delay = retry_delay(failure.error, failure.attempt, self._base)
+        delay = retry_delay(failure.error, failure.attempt,
+                            self._limits["model_retry_seconds"])
         if delay is None:
             return None
         error = f"{type(failure.error).__name__}: {failure.error}"

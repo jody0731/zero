@@ -177,8 +177,10 @@ class Runtime(SessionActions):
         self.watchers = {}
         # The reply streaming in, per session: its latest draft event
         self.drafts = {}
-        # Each session's context meter, as its watchers last got it
+        # Each session's context meter, as its watchers last got it, and the
+        # compact_at_tokens it was measured under
         self.meters = {}
+        self.meter_lines = {}
         self.watch_lock = threading.Lock()
         self.lock = threading.Lock()
         self.changed = threading.Condition(self.lock)
@@ -250,16 +252,18 @@ class Runtime(SessionActions):
     def meter(self, sid, record):
         """The context's meter after a record, sent to the watchers when it
         changes: from the whole log the first time this server sees the
-        session, then record by record (core/history.py)."""
+        session or when the line's setting has changed since, then record by
+        record (core/history.py)."""
+        compact_at = self.setting("compact_at_tokens")
         before = self.meters.get(sid)
-        if before is None:
-            records = self.log(sid).branch()
+        if before is None or self.meter_lines.get(sid) != compact_at:
             now = None
-            for each in records:
-                now = history.metered(now, each)
+            for each in self.log(sid).branch():
+                now = history.metered(now, each, compact_at)
         else:
-            now = history.metered(before, record)
+            now = history.metered(before, record, compact_at)
         self.meters[sid] = now
+        self.meter_lines[sid] = compact_at
         if now != before and now["tokens"]:
             self.publish(sid, {"context": now})
 

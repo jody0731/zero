@@ -12,7 +12,7 @@ from datetime import datetime
 from core import history
 from core.tools import tool
 from session_search.index import Unreadable
-from session_search.search import COUNT, EACH_SIDE, SearchError
+from session_search.search import SearchError, limit
 
 DESCRIPTION = (
     "Search what every session's log holds, running or done, this one "
@@ -201,9 +201,12 @@ def summary(args):
     around=("integer", "A record's number in that session (a result's #): the "
             "records near it, whole; a number past the last record reads the "
             "last ones."),
-    count=("integer", f"How many sessions, or records, at most, {COUNT} when "
-           f"not given; with no query, how many on each side, {EACH_SIDE} "
-           "when not given."),
+    count=("integer", lambda limits, context: (
+        "How many sessions, or records, at most, "
+        f"{limit(limits, 'session_search_count')} when not given; with no "
+        "query, how many on each side, "
+        f"{limit(limits, 'session_search_each_side')} when not given."
+    )),
 )
 def session_search(query=None, session=None, around=None, count=None,
                    search=None):

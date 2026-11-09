@@ -15,6 +15,7 @@ through it, `Config.set`); hand edits work too. A table in it is a face's own
 import json
 import os
 import tomllib
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -25,7 +26,9 @@ class Setting:
     """One setting: its group and label in the settings view (/settings), what
     holds without it, and what it takes. `kind`: "choice" (one of `choices`),
     "mode", "model", "int" (a whole number, `minimum` or more) or "number" (above
-    0). `unset_means`: what None means, where a setting can be left unset. `shown`:
+    0); either at most `maximum`, where it has one (a share in percent, an
+    API's own range). `unset_means`: what None means, where a setting can be
+    left unset. `shown`:
     False for a setting the view leaves out (config.toml may still set it).
     `needs`: (value, feature) pairs, the feature of its model's API each value
     needs (model/features.py); `runs_on`: the setting that names that model,
@@ -39,6 +42,7 @@ class Setting:
     kind: str
     choices: tuple = ()
     minimum: int = 1
+    maximum: int | None = None
     unset_means: str | None = None
     shown: bool = True
     needs: tuple = ()
@@ -47,8 +51,8 @@ class Setting:
 
 # Every setting ZERO knows, in the settings view's order (add); by name; what
 # holds without config.toml (model None: the model's default, model/); what
-# the view lists. The "Limits" group is a session's limits: it keeps the ones
-# it was made with
+# the view lists. The "Limits" group is every session's limits, read at each
+# use (LiveSettings), so a change reaches open sessions too
 SETTINGS = []
 BY_NAME = {}
 DEFAULTS = {}
@@ -124,11 +128,13 @@ def check(setting, value, mode=None):
             return f"{name} has the wrong type"
         if value < setting.minimum:
             return f"{name} must be {setting.minimum} or more"
-        return None
-    if not isinstance(value, (int, float)):
-        return f"{name} has the wrong type"
-    if value <= 0:
-        return f"{name} must be above 0"
+    else:
+        if not isinstance(value, (int, float)):
+            return f"{name} has the wrong type"
+        if value <= 0:
+            return f"{name} must be above 0"
+    if setting.maximum is not None and value > setting.maximum:
+        return f"{name} must be {setting.maximum} or less"
     return None
 
 
@@ -183,6 +189,38 @@ RETIRED = ("bash_output_chars", "read_chars", "web_fetch_chars",
            # estimate its yardstick (usage/); max_seconds was read as the
            # standing amount's minutes
            "standing_budget_minutes", "standing_budget_dollars", "max_seconds")
+
+
+class LiveSettings(Mapping):
+    """The settings as they stand, read at each use: `current()`, ZERO's
+    settings as the server holds them now (Config, which reads config.toml
+    again when it changes), with `fixed` on top, an eval's or a test's own
+    values (old names read as they are now). A session's limits are one of
+    these, handed down by the assembly in place of a copy, so a change
+    reaches every session, open ones too, at its next use; a call takes its
+    value when it starts and keeps it. A setting `current()` lacks holds its
+    default."""
+
+    def __init__(self, current=None, fixed=None):
+        self.current = current if current is not None else (lambda: DEFAULTS)
+        self.fixed = renamed(dict(fixed or {}))
+
+    def __getitem__(self, name):
+        if name in self.fixed:
+            return self.fixed[name]
+        values = self.current()
+        if name in values:
+            return values[name]
+        return DEFAULTS[name]
+
+    def __iter__(self):
+        return iter({**DEFAULTS, **self.current(), **self.fixed})
+
+    def __len__(self):
+        return len({**DEFAULTS, **self.current(), **self.fixed})
+
+    def __repr__(self):
+        return f"LiveSettings(fixed={self.fixed!r})"
 
 
 def renamed(values):

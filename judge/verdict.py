@@ -186,38 +186,63 @@ def parse(content):
 
 class Judge:
     """One model call per verdict: JSON at temperature 0, strict where the
-    model honours it (model/features.py)."""
+    model honours it (model/features.py). `limits`: its four, read at each
+    verdict (a session's as they stand, or a plain dict): judge_silence_seconds,
+    judge_retries, judge_output_chars (None shows no output) and
+    judge_reply_tokens (None: no ceiling)."""
 
-    def __init__(self, model, client=None, name=None, *, timeout, retries=1,
-                 effort=None, output_chars=None, view_bytes=None,
-                 reply_tokens=None, fallback=None):
+    def __init__(self, model, client=None, name=None, *, limits, effort=None,
+                 view_bytes=None, fallback=None):
         self.model = model
         server, self.served_name = resolve(model)
         self.api = server.api
-        # Seconds the judge may stay silent (complete's `silence`)
-        self.timeout = timeout
-        # Tries after a reply that isn't a verdict (judge_retries)
-        self.retries = retries
+        self.limits = limits
         # Its thinking (judge_thinking_effort); None sends nothing, so the
         # API's default holds
         self.effort = effort
-        # What it sees of each command's output (judge_output_chars); None
-        # shows none
-        self.output_chars = output_chars
         # The most its view of the session may take, in bytes of JSON lines,
         # so a long session's fits its window; None: no bound
         self.view_bytes = view_bytes
-        self.client = client or make_client(model, timeout)
+        # The SDK's per-read timeout, made again when the silence changes
+        self._scripted = client is not None
+        self._client_seconds = self.timeout
+        self.client = client or make_client(model, self._client_seconds)
         # The verdict's JSON schema, asked for as the model honours it
         self.schema = SCHEMA
-        # The ceiling on each verdict's reply, thinking included
-        # (judge_reply_tokens); the judge eval's --max-tokens sets its own
-        self.max_output_tokens = reply_tokens
-        # A judge on the fallback model, asked when this one's model fails to
-        # answer at all (an outage, not a bad verdict); None for none
+        # `fallback()`: a judge on the fallback model as the settings stand,
+        # asked when this one's model fails to answer at all (an outage, not
+        # a bad verdict); None, or None from it, for none
         self.fallback = fallback
         self.user = name or "the user"
         self.system = prompt(name)
+
+    @property
+    def timeout(self):
+        """Seconds the judge may stay silent now (complete's `silence`)."""
+        return self.limits["judge_silence_seconds"]
+
+    @property
+    def retries(self):
+        """Tries after a reply that isn't a verdict."""
+        return self.limits["judge_retries"]
+
+    @property
+    def output_chars(self):
+        """What it sees of each command's output; None shows none."""
+        return self.limits.get("judge_output_chars")
+
+    @property
+    def max_output_tokens(self):
+        """The ceiling on each verdict's reply, thinking included; the judge
+        eval's --max-tokens sets its own."""
+        return self.limits.get("judge_reply_tokens")
+
+    def client_for(self, seconds):
+        """The SDK's client for a verdict that may stay silent `seconds`."""
+        if not self._scripted and seconds != self._client_seconds:
+            self.client = make_client(self.model, seconds)
+            self._client_seconds = seconds
+        return self.client
 
     def message(self, history, command, offer=None):
         text = (
@@ -250,14 +275,16 @@ class Judge:
         tokens, errors = [0, 0, 0], []
         thought = None
         down = True
+        # Its limits as they stand when the verdict starts, kept for its tries
+        seconds, ceiling = self.timeout, self.max_output_tokens
         for _ in range(self.retries + 1):
             try:
                 reply = complete(
-                    self.api, self.client, self.served_name, messages,
-                    silence=self.timeout, check=check, temperature=0,
+                    self.api, self.client_for(seconds), self.served_name,
+                    messages, silence=seconds, check=check, temperature=0,
                     effort=features.thinking_effort_sent(self.model, self.api,
                                                          self.effort),
-                    max_output_tokens=self.max_output_tokens,
+                    max_output_tokens=ceiling,
                     **features.json_request(self.model, self.api, self.schema),
                     **progress(self.model, self.api),
                 )
@@ -267,7 +294,7 @@ class Judge:
                 thought = reply.reasoning
                 if reply.finish_reason == "length":
                     raise VerdictError(
-                        f"cut off at its ceiling of {self.max_output_tokens} "
+                        f"cut off at its ceiling of {ceiling} "
                         "tokens, thinking included"
                     )
                 verdict = parse(reply.content)
@@ -279,10 +306,11 @@ class Judge:
                 # A reply that came back, whatever it held, isn't an outage
                 down = down and not isinstance(e, VerdictError)
         else:
-            if down and self.fallback is not None:
-                verdict = self.fallback.decide(history, command, check, offer)
+            spare = self.fallback() if down and self.fallback is not None else None
+            if spare is not None:
+                verdict = spare.decide(history, command, check, offer)
                 verdict["retried"] = errors + verdict.get("retried", [])
-                verdict["fallback"] = self.fallback.model
+                verdict["fallback"] = spare.model
                 verdict["seconds"] = round(time.monotonic() - t0, 1)
                 return verdict
             verdict = {"decision": "failed", "error": errors.pop()}

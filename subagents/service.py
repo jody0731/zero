@@ -25,8 +25,8 @@ from start_subagent, the subagent its parent's from its task. A session
 tree is a session the user started and the subagents under it, through
 this table's `parent`; a fork the user makes of a subagent isn't in it, and
 starts a tree of its own. Depth counts levels below the session the user
-started (`max_subagent_depth`, the server's setting read at each use; 0:
-none); breadth has no cap. A stop ends one turn:
+started (`max_subagent_depth`, read from the session's limits at each use,
+as every limit is; 0: none); breadth has no cap. A stop ends one turn:
 the subagents below it go on.
 """
 
@@ -36,16 +36,12 @@ import uuid
 
 from core import history
 from server.services import Refused, Service
-from subagents import SETTINGS
 from subagents import tool as subtools
 from subagents.store import SCHEMA, SubagentStore
 from usage.spend import describe, log_use
 
 # What send_message returns when a message went through
 SENT = "Sent to session"
-
-# How deep subagents go, for a server whose settings name none
-MAX_DEPTH = {s.name: s.default for s in SETTINGS}["max_subagent_depth"]
 
 
 class SessionSubagents:
@@ -66,7 +62,11 @@ class SessionSubagents:
         return self._depth
 
     def max_depth(self):
-        return self.service.max_depth()
+        """How deep subagents go, from the session's limits as they stand."""
+        limits = self.session_of().tool_context.get("limits")
+        if limits is None:
+            return self.service.max_depth()
+        return limits["max_subagent_depth"]
 
     def can_start(self):
         """Whether start_subagent is offered: at every level while subagents
@@ -131,10 +131,10 @@ class SubagentsService(Service):
 
     def max_depth(self):
         """How deep subagents go, from the server's settings as they stand
-        (config.toml read again when it changes): a change reaches every
-        session, open ones too, at its next model call; 0, none."""
-        value = self.runtime.config().get("max_subagent_depth")
-        return MAX_DEPTH if value is None else value
+        (config.toml read again when it changes), for a session without
+        limits of its own: a change reaches every session, open ones too, at
+        its next model call; 0, none."""
+        return self.runtime.setting("max_subagent_depth")
 
     # The tree
 

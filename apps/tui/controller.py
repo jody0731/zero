@@ -310,14 +310,15 @@ WHEN_IT_APPLIES = {
         "next turn; the default's to sessions made from now."
     ),
     "Limits": (
-        "For sessions made from now: a session keeps the limits it was made "
-        "with. Evals keep their own."
+        "Applies at once, to every session, open ones too, at its next use; "
+        "a call already running keeps its number. Evals keep their own."
     ),
     "Server": "Counts at the server's next look, within a second.",
 }
 # A line more for a setting whose effect depends on the server
 SETTING_NOTES = {
-    "max_subagent_depth": "Applies at once, to every session; 0 is off.",
+    "max_subagent_depth": "0 is off.",
+    "fallback_model": "Applies at once, to every session, at a call that fails.",
     "thinking_effort": "Sent to DeepSeek; other servers get none.",
     "judge_thinking_effort": "Sent to DeepSeek; other servers get none.",
 }

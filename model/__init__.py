@@ -42,8 +42,7 @@ SETTINGS = (
             "number"),
     Setting("model_retries", "Limits", "Retries after a model error", 3, "int",
             minimum=0),
-    # About this, twice that, four times that between retries; left out of
-    # the view, since it has no visible effect
+    # About this, twice that, four times that between retries
     Setting("model_retry_seconds", "Limits", "Seconds before the first retry", 1.0,
-            "number", shown=False),
+            "number"),
 )

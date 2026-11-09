@@ -7,6 +7,7 @@ and the records it kept, then every record after it (`replay`). Each user
 message carries its time at its end, so a gap between two shows.
 """
 
+import re
 from datetime import datetime
 
 from core import tools
@@ -22,6 +23,13 @@ SENT = "[Sent {when}]"
 # The records that carry a system message: the session's first, one rebuilt
 # (a model switch, new code) and a compaction's
 SYSTEM_RECORDS = ("session", "system", "compaction")
+# Around a notice in the model's copy: who sent it, by its source (NOTICES).
+# What a notice is, the system message says once (prompt/instructions.py);
+# until 0.6.4 each notice said it itself, at a cost in every notice
+NOTICE = '<notice from="{source}">\n{text}\n</notice>'
+# A closing tag inside a notice (a job's output may hold anything) is
+# escaped, so what follows it still reads as the notice's
+CLOSING_TAG = re.compile(r"<(/\s*notice)", re.IGNORECASE)
 # Before a compaction's handoff, in the model's copy
 HANDOFF = (
     "[Compacted {when}: the conversation before this point is replaced by "
@@ -165,8 +173,13 @@ def when(iso):
 
 
 def sent(record):
-    """A user message's text with its time at the end."""
-    return f"{record['text']}\n\n{SENT.format(when=when(record['time']))}"
+    """A user message's text with its time at the end; a notice's in its
+    tag."""
+    text = record["text"]
+    if is_notice(record):
+        text = NOTICE.format(source=record["source"],
+                             text=CLOSING_TAG.sub(r"<\\\1", text))
+    return f"{text}\n\n{SENT.format(when=when(record['time']))}"
 
 
 def compacted(record):
@@ -207,9 +220,11 @@ def message(record):
     return None
 
 
-# The sources whose messages are notices from ZERO, not the user's words (a
-# job's end): each part that sends them declares its own (jobs/tool.py)
-NOTICES = set()
+# The sources whose messages are notices from ZERO, not the user's words, each
+# with what sends it, as the system message names it: each part that sends
+# them declares its own (jobs/tool.py), so a new one (a subagent's report) is
+# one more entry
+NOTICES = {}
 
 
 def is_notice(message):

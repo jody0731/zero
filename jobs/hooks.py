@@ -1,10 +1,16 @@
 """The cap on a session's running jobs: past it, starting another one is an
-ask, decided as any ask in the mode (bypassPermissions loads no caps)."""
+ask, decided as any ask in the mode (bypassPermissions loads no caps); and
+the jobs a turn the user interrupted leaves running."""
 
 from core import tools
 from core.hooks import Hook
 
 SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
+# After the note of a turn the user interrupted: its jobs run on
+STILL_RUNNING = (
+    "\n[Harness note: these background jobs of this session still run, until "
+    "each ends or is stopped: {jobs}.]"
+)
 
 
 def ordinal(n):
@@ -37,3 +43,18 @@ class JobLimit(Hook):
             ),
         }
         return None
+
+
+class RunningJobs(Hook):
+    """Says which jobs still run when the user interrupts a turn: a job
+    outlives its turn, and stopping the turn stops none."""
+
+    def interrupted(self, session):
+        jobs = session.tool_context.get("jobs")
+        if jobs is None:
+            return ""
+        running = [row for row in jobs.list() if row["state"] == "running"]
+        if not running:
+            return ""
+        named = ", ".join(f"{row['id']} (`{row['command']}`)" for row in running)
+        return STILL_RUNNING.format(jobs=named)

@@ -7,6 +7,13 @@ from pathlib import Path
 
 from core.hooks import Hook
 
+# A restart gives each session a new scratch folder (sandbox/sandbox.py's
+# LASTS), while its system message keeps the one it was written with
+NEW_SCRATCH = (
+    "[Harness note: ZERO restarted, and this session's scratch folder, "
+    "$TMPDIR, is now {path}, new and empty.]"
+)
+
 
 class Environment(Hook):
     def __init__(self, sandbox, mode=None):
@@ -30,6 +37,18 @@ class Environment(Hook):
             f"- date: {now:%A %d %B %Y, %H:%M %Z}"
         )
 
+    def turn_start(self, turn):
+        """The scratch folder, said again when the context no longer names
+        the one the session has: after a restart."""
+        private_tmp = getattr(self.sandbox, "private_tmp", None)
+        if private_tmp is None:
+            return
+        path = private_tmp()
+        session = turn.session
+        if any(path in str(m.get("content") or "") for m in session.messages):
+            return
+        session.write("note", kind="new_scratch_folder",
+                      text=NEW_SCRATCH.format(path=path))
 
     def switched(self, session):
         """After a change of mode, model or folder: where commands now

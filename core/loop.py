@@ -264,7 +264,8 @@ class Session:
         except KeyboardInterrupt as error:
             self.close_dangling_calls()
             # Otherwise the model thinks the unfinished task went fine
-            self.write("note", kind="interrupted", text=INTERRUPTED)
+            extra = self.hooks.collect("interrupted", self)
+            self.write("note", kind="interrupted", text=INTERRUPTED + extra)
             detail = "Ctrl+C"
             if isinstance(error, Stopped):
                 detail = error.detail

@@ -60,7 +60,7 @@ from rounds.hooks import Budget, Rounds
 from rounds.service import RoundsService
 from jobs import SETTINGS as JOB_SETTINGS
 from jobs.service import JobsService
-from jobs.hooks import JobLimit
+from jobs.hooks import JobLimit, RunningJobs
 from shell import SETTINGS as SHELL_SETTINGS
 from files import SETTINGS as FILE_SETTINGS
 from files.seen import ChangedFiles, SeenFiles
@@ -131,6 +131,8 @@ def code_mark(session):
     )
     for name in SYSTEM_MESSAGE_SOURCES:
         digest.update((HERE / name).read_bytes())
+    # Who sends notices, which the system message names
+    digest.update(json.dumps(history.NOTICES, sort_keys=True).encode())
     return digest.hexdigest()[:12]
 
 
@@ -364,6 +366,8 @@ def make_session(
     )
     # On a resume, the files the cut-off turn touched that changed meanwhile
     hooks.append(ChangedFiles())
+    # On an interruption, the jobs the turn leaves running
+    hooks.append(RunningJobs())
     llm = Model(
         model, client, timeout=limits["model_silence_seconds"],
         effort=thinking_effort,

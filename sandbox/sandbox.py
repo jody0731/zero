@@ -24,6 +24,12 @@ from model.servers import ModelServerError, key_envs
 
 # Hidden behind an empty folder: keys, the gpg keyring, Claude's own login
 SECRETS = [".ssh", ".gnupg", ".claude"]
+# The network as the line says it: none, each command in a network of its
+# own, so a server a job runs is out of another command's reach
+NO_NETWORK = (
+    "there is no network, and each command has a loopback of its own, so a "
+    "server one command starts can't be reached from another"
+)
 # How long the scratch folder lasts, as the line says it: the server keeps it
 # while it runs (Scratch)
 LASTS = (
@@ -212,7 +218,7 @@ class Sandbox:
             return (
                 "sandbox: on, read-only. The system is read-only, /tmp included; "
                 f"only this session's scratch folder, $TMPDIR ({tmp}), is "
-                f"writable; {LASTS}; there is no network"
+                f"writable; {LASTS}; {NO_NETWORK}"
             )
         # .git stays read-only (its hooks and config run outside, later), so
         # the line says how a repository changes, not a list of what's locked
@@ -221,7 +227,7 @@ class Sandbox:
             f"workspace and this session's scratch folder, $TMPDIR ({tmp}), are "
             f"writable; {LASTS}; git's own folder (.git) is read-only, so a git "
             "command that changes a repository, such as a commit, runs outside "
-            "the sandbox; there is no network"
+            f"the sandbox; {NO_NETWORK}"
         )
 
 

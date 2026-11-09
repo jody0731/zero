@@ -13,9 +13,10 @@ import time
 from core import history
 from core.tools import tool
 
-# A round's opening message to its session: a notice, not the user's words
+# A round's opening message to its session: a notice, not the user's
+# words; the system message names who sends them
 SOURCE = "rounds"
-history.NOTICES.add(SOURCE)
+history.NOTICES[SOURCE] = "work in rounds"
 
 STATUSES = ("going_on", "done", "stuck")
 # A done check still running after this is stopped and counts as failed: a
@@ -28,7 +29,6 @@ SHELL = "/bin/bash"
 
 NOT_HERE = "Work in rounds isn't available in this session."
 NO_RUN = "No work in rounds is under way in this session."
-FROM_ZERO = "(A message from ZERO, not from the user.)"
 
 
 def duration(minutes):
@@ -273,7 +273,7 @@ def round_text(run, folder, handoff_name, early=None):
     budget = budget_text(run["budget_rounds"], run["budget_minutes"],
                          run["budget_dollars"])
     lines = [
-        f"[Round {number} of {run['budget_rounds']} of {run['id']}, toward: "
+        f"Round {number} of {run['budget_rounds']} of {run['id']}, toward: "
         f"\"{run['objective']}\".",
         f"Spent: {spent}, of a budget of {budget}.",
     ]
@@ -294,7 +294,7 @@ def round_text(run, folder, handoff_name, early=None):
             f"{went_on(early)}; the workspace is as it left it. Each round's "
             f"handoff is in {folder}. A round ends with end_round."
         )
-    return "\n".join(lines) + f"\n{FROM_ZERO}]"
+    return "\n".join(lines)
 
 
 def spent_text(run, folder, early=None):
@@ -309,9 +309,9 @@ def spent_text(run, folder, early=None):
         else "The context started fresh: the handoff above is the last round's"
     )
     return (
-        f"[{run['id']}, toward \"{run['objective']}\", has spent its budget: "
+        f"{run['id']}, toward \"{run['objective']}\", has spent its budget: "
         f"{spent} of {budget}. No round starts without a new budget: "
         "start_rounds with the same objective and an estimate of what the rest "
         f"needs from now goes to the user. {context}; each round's is in "
-        f"{folder}.\n{FROM_ZERO}]"
+        f"{folder}."
     )

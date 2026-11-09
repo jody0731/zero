@@ -3,6 +3,21 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.4.1
+
+Notices labelled once.
+
+- **A notice is tagged, not explained each time:** a background job's or work in rounds' message to ZERO
+  now comes as `<notice from="job">…</notice>` (or `from="rounds"`), and what a notice is, ZERO's and not
+  yours, is said once in ZERO's instructions. Before, every notice ended with a sentence saying so, some
+  25 tokens each. Sessions from before keep their notices' words, tagged.
+- **Three facts ZERO was missing:**
+  - In the sandbox each command has a loopback of its own, so a server one command starts can't be
+    reached from another; the sandbox's line says so.
+  - After ZERO restarts, a session's scratch folder (`$TMPDIR`) is a new, empty one; the session's next
+    turn is told its path.
+  - When you stop a turn, ZERO is told which of the session's background jobs still run.
+
 ## 0.6.4
 
 Long work in rounds.

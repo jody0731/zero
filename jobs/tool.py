@@ -10,21 +10,16 @@ everything in the foreground.
 from core import history
 from core.tools import tool
 
-# A job's messages to its session: notices, not the user's words
+# A job's messages to its session: notices, not the user's words; the
+# system message names who sends them
 SOURCE = "job"
-history.NOTICES.add(SOURCE)
+history.NOTICES[SOURCE] = "a background job"
 
 # A job with no estimate checks in first after this, then each time it has run
 # as long again
 FIRST_CHECKIN = 30 * 60
 
 NOT_HERE = "Background jobs aren't available in this session."
-# The second sentence: without it the model hesitated over ending a notice's
-# turn, as if that left the user without an answer
-FROM_ZERO = (
-    "(A notice from ZERO, not a message from the user. The reply in this turn "
-    "reaches the user as any reply does.)"
-)
 
 
 def minutes(seconds):
@@ -82,8 +77,8 @@ def tail(text):
 
 def ended_notice(row, last, now):
     return (
-        f"[Background job {row['id']} {state_text(row, now)}. Command: "
-        f"`{row['command']}`. Last output:\n{tail(last) or '(none)'}\n{FROM_ZERO}]"
+        f"Background job {row['id']} {state_text(row, now)}. Command: "
+        f"`{row['command']}`. Last output:\n{tail(last) or '(none)'}"
     )
 
 
@@ -94,10 +89,10 @@ def lost_notice(row, last, now, crashed):
     )
     ran = minutes(now - row["started_at"])
     return (
-        f"[Background job {row['id']} was cut off {how}, after running "
+        f"Background job {row['id']} was cut off {how}, after running "
         f"{'at least ' if crashed else ''}{ran}. Its outcome is unknown. "
         f"Command: `{row['command']}`. "
-        f"Last output:\n{tail(last) or '(none)'}\n{FROM_ZERO}]"
+        f"Last output:\n{tail(last) or '(none)'}"
     )
 
 
@@ -108,9 +103,8 @@ def checkin_notice(row, last, now):
     else:
         where = f"has run {ran} and is past its estimate"
     return (
-        f"[Check-in: background job {row['id']} {where}; it is still running. "
-        f"Command: `{row['command']}`. Last output:\n{tail(last) or '(none)'}\n"
-        f"{FROM_ZERO}]"
+        f"Check-in: background job {row['id']} {where}; it is still running. "
+        f"Command: `{row['command']}`. Last output:\n{tail(last) or '(none)'}"
     )
 
 

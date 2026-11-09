@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import paths
+from core import history
 
 HERE = Path(__file__).resolve().parent
 SOUL = HERE / "SOUL.md"
@@ -57,6 +58,15 @@ INTENT = (
 # each call returns
 TURN_RULE = (
     "\nWhen you have the answer, reply in plain text without calling a tool.\n"
+)
+# What a notice is, said once: each one carries only its tag
+# (core/history.py), and each part that sends them names itself. The reply's
+# fact: without it the model hesitated over ending a notice's turn, as if
+# that left the user without an answer
+NOTICE_FACT = (
+    'A message in a <notice from="…"> tag is a notice from ZERO, not a message '
+    "from the user: {senders}. The reply to a notice reaches the user as any "
+    "reply does."
 )
 # The longest piece of a line a cut quotes
 QUOTED_CHARS = 60
@@ -207,16 +217,25 @@ def read(instructions, workspace, most_chars):
     return found
 
 
+def notice_fact():
+    """What a notice is, with each part that sends them."""
+    senders = "; ".join(
+        f'from="{source}", {what}' for source, what in history.NOTICES.items()
+    )
+    return NOTICE_FACT.format(senders=senders)
+
+
 def system_prompt(found, model):
     """The system prompt's start: what ZERO is and runs on (`model`, the
     session's) and when it acts, what the session read
-    (`found`, a Read; None for nothing), then how a turn ends; the hooks'
-    parts follow."""
+    (`found`, a Read; None for nothing), then how a turn ends and what a
+    notice is; the hooks' parts follow."""
     opening = f"{HARNESS.format(model=model)}\n{INTENT}"
     read_in = found.text if found is not None else ""
+    ending = f"{TURN_RULE}{notice_fact()}\n"
     if not read_in:
-        return f"{opening}\n{TURN_RULE}"
-    return f"{opening}\n\n{read_in}\n{TURN_RULE}"
+        return f"{opening}\n{ending}"
+    return f"{opening}\n\n{read_in}\n{ending}"
 
 
 def user_instructions():

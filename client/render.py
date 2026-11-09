@@ -55,6 +55,12 @@ def compaction_text(record):
     return f"context compacted {why}, {how}: {before} → {after} tokens"
 
 
+def rewind_text(record):
+    """A rewind, in a line: the records it left behind."""
+    return (f"rewound here: records {record['left_from']}–{record['left_to']} "
+            "left behind, kept in the log; files stay as they are")
+
+
 # What a client says to `session/compact`'s reply
 COMPACTING = {"now": "Compacting now.",
               "before_next_step": "Compacting before the turn's next step."}
@@ -248,6 +254,8 @@ class Renderer:
             return [f"({switch_text(record)})"]
         if kind in ("compaction", "compaction_failed"):
             return [f"({compaction_text(record)})"]
+        if kind == "rewind":
+            return [f"({rewind_text(record)})"]
         if kind == "turn_end":
             elapsed = duration(record, self.started, self.restarts)
             if record["outcome"] == "answered":

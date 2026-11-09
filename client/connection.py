@@ -262,6 +262,23 @@ class Connection:
         "before_next_step"."""
         return self.call(build("session/compact", session=session))
 
+    def user_messages(self, session):
+        """The user's own messages on the session's current branch that start
+        a turn, newest first (seq, time, text): where a rewind or fork begins."""
+        return self.call(build("session/user_messages", session=session))["messages"]
+
+    def rewind(self, session, seq):
+        """`session/rewind`'s reply: the rewind's record, and the message's
+        text for the input."""
+        return self.call(build("session/rewind", session=session, seq=seq))
+
+    def fork(self, session, seq=None):
+        """`session/fork`'s reply: the new session's row, and the message's
+        text for its input ("" when all of the conversation was taken)."""
+        fields = {} if seq is None else {"seq": seq}
+        return self.call(build("session/fork", session=session,
+                               source=self.source, **fields))
+
     def archive(self, session, archived=True):
         name = "session/archive" if archived else "session/unarchive"
         return self.call(build(name, session=session))

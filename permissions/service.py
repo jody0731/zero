@@ -75,7 +75,7 @@ class PermissionsService(Service):
             raise Refused(f"no session {sid!r}")
         path = self.saved_permissions and self.saved_permissions()
         held = grants.listing(
-            self.runtime.log(sid).records(), path, info["mode"] in JUDGED
+            self.runtime.log(sid).branch(), path, info["mode"] in JUDGED
         )
         return [{**g, "description": grants.describe(g["grant"])} for g in held]
 

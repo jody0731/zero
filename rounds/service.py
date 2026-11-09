@@ -221,6 +221,9 @@ class RoundsService(Service):
             return "work in rounds is open in this session; stop it first"
         return None
 
+    def refuse_rewind(self, sid):
+        return self.refuse_delete(sid)
+
     def settled(self, sid):
         run = self.store.open_run(sid)
         return {"rounds": summary(run) if run else None}

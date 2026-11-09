@@ -242,6 +242,9 @@ class Index:
             f.seek(start)
             data = f.read(stat.st_size - start)
         whole = data[: data.rfind(b"\n") + 1]
+        # A fork's log opens with the records it copied from the session it
+        # came from, all written at once: found there, not again here
+        copied_to = 0
         for line in whole.split(b"\n")[:-1]:
             try:
                 record = json.loads(line.decode("utf-8"))
@@ -249,7 +252,13 @@ class Index:
                 # A broken line holds nothing to find; the log's reader says
                 # what is wrong with it
                 continue
-            found = searchable(record) if isinstance(record, dict) else None
+            if not isinstance(record, dict):
+                continue
+            if start == 0 and record.get("type") == "session":
+                copied_to = (record.get("forked_from") or {}).get("seq", 0)
+            if copied_to and (record.get("seq") or 0) <= copied_to:
+                continue
+            found = searchable(record)
             if found is None or not found[2]:
                 continue
             kind, tool_or_source, text = found

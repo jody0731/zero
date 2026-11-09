@@ -255,7 +255,7 @@ class GrantCheck(Hook):
         return None
 
     def _granted(self, call):
-        records = call.turn.session.log.records()
+        records = call.turn.session.log.branch()
         who = plan_grants(records).get(call.key)
         if who is not None:
             return {"scope": "plan", "by": who}

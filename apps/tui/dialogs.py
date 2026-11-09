@@ -58,11 +58,13 @@ class ChoiceView(ModalScreen):
 
     BINDINGS = [Binding("escape", "dismiss(None)", show=False)]
 
-    def __init__(self, label, choices, current=None):
+    def __init__(self, label, choices, current=None, values=None):
+        """`values`: what each choice gives back, when not the choice itself."""
         super().__init__()
         self.label = label
         self.choices = choices
         self.current = current
+        self.values = values
 
     def compose(self):
         with Vertical():
@@ -80,7 +82,8 @@ class ChoiceView(ModalScreen):
 
     def on_option_list_option_selected(self, event):
         event.stop()
-        self.dismiss(self.choices[event.option_index])
+        values = self.values or self.choices
+        self.dismiss(values[event.option_index])
 
 
 class KeyCaptureView(ModalScreen):

@@ -38,7 +38,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     archived INTEGER NOT NULL DEFAULT 0,
     -- What the user set since the last turn started, as JSON: the next new
     -- turn logs it as a switch and clears it
-    switch TEXT
+    switch TEXT,
+    -- The session a fork was made from; NULL for any other
+    parent TEXT
 );
 CREATE TABLE IF NOT EXISTS inbox (
     -- The order messages arrived in
@@ -85,6 +87,9 @@ RENAMED_COLUMNS = {
     "inbox": {"created": "created_at", "resumes": "resume_count"},
     "asks": {"created": "created_at", "closed": "closed_at"},
 }
+# Columns added since a database was made (0.6.6): table → {name: its SQL
+# type}, added when the store opens (add_columns)
+ADDED_COLUMNS = {"sessions": {"parent": "TEXT"}}
 # Beside the database, a copy of it as it was before a rename
 BACKUP_SUFFIX = ".before-renames-"
 # A user message that waits for the turn's answer instead of steering it
@@ -125,10 +130,21 @@ def rename_columns(db, path, renamed_columns):
     db.execute("COMMIT")
 
 
+def add_columns(db, added_columns):
+    """Add each column a table made before it lacks: no copy needed, since
+    nothing is lost and an older ZERO reads past it."""
+    for table, columns in added_columns.items():
+        have = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        for name, kind in columns.items():
+            if name not in have:
+                db.execute(f'ALTER TABLE {table} ADD COLUMN "{name}" {kind}')
+
+
 class Store:
-    def __init__(self, path, schemas=(), renamed_columns=()):
+    def __init__(self, path, schemas=(), renamed_columns=(), added_columns=()):
         """`schemas`: the server services' tables, made with the kernel's;
-        `renamed_columns`: their RENAMED_COLUMNS, renamed with the kernel's."""
+        `renamed_columns` and `added_columns`: their RENAMED_COLUMNS and
+        ADDED_COLUMNS, renamed and added with the kernel's."""
         path.parent.mkdir(parents=True, exist_ok=True)
         # One connection shared by the runtime's threads, one transaction at a time
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
@@ -147,6 +163,11 @@ class Store:
             self.db.executescript(SCHEMA)
             for schema in schemas:
                 self.db.executescript(schema)
+            add_columns(self.db, {
+                **ADDED_COLUMNS,
+                **{table: columns for each in added_columns
+                   for table, columns in each.items()},
+            })
         self.on_change = None
 
     @contextmanager
@@ -279,8 +300,16 @@ class Store:
             f"(({user} AND arrival > ?) OR {NOTICE}) ORDER BY arrival",
             session, after,
         )
-        return [{"text": json.loads(row["payload"])["text"], "inbox": row["id"],
-                 "source": row["source"]} for row in rows]
+        found = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            steer = {"text": payload["text"], "inbox": row["id"],
+                     "source": row["source"]}
+            # A notice's sender started from this record (jobs/store.py)
+            if payload.get("started_from_seq") is not None:
+                steer["started_from_seq"] = payload["started_from_seq"]
+            found.append(steer)
+        return found
 
     def withdraw_messages(self, session, after):
         """A stop takes back the user's steers and follow-ups its turn hasn't
@@ -433,6 +462,21 @@ class Store:
             "ORDER BY seen_at DESC LIMIT 1"
         )
         return rows[0]["id"] if rows else None
+
+    def add_session(self, session, row):
+        """A session made without a message, idle (a fork): its title,
+        source, model, mode, workspace, a switch its first turn takes, its
+        parent, and the newest record the user has seen."""
+        now = time.time()
+        with self.transaction() as db:
+            db.execute(
+                "INSERT INTO sessions (id, title, source, model, mode, workspace, "
+                "switch, parent, seen_seq, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)",
+                (session, row["title"], row["source"], row["model"], row["mode"],
+                 row["workspace"], row.get("switch"), row.get("parent"),
+                 row.get("seen_seq", 0), now, now),
+            )
 
     def update_session(self, session, **fields):
         names = ", ".join(f"{name} = ?" for name in fields)

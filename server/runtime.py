@@ -37,12 +37,10 @@ tables, messages, reply step and share of each session.
 """
 
 import json
-import secrets
 import threading
 import traceback
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 import settings
@@ -54,7 +52,9 @@ from sessions import upgrade
 from sessions.log import Log, fresh_log
 from sessions.lock import Busy, SessionLock
 from server.services import Refused
-from server.session_actions import SessionActions, check_thinking_effort, title
+from server.session_actions import (
+    SessionActions, check_thinking_effort, new_id, title,
+)
 from server.store import Store, UnknownSession
 
 FAILED = ("crashed", "cut_off", "failed")
@@ -140,11 +140,6 @@ class Watcher:
             return events
 
 
-def new_id():
-    """Sortable by creation time and short enough to type."""
-    return f"{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
-
-
 class Runtime(SessionActions):
     def __init__(self, paths, make_session, modes, services=(), model=None,
                  mode=None, config=None, default_model=None):
@@ -165,6 +160,7 @@ class Runtime(SessionActions):
         self.store = Store(
             paths.db, [service.schema for service in services if service.schema],
             [service.renamed_columns for service in services],
+            [service.added_columns for service in services],
         )
         self.config = config or (lambda: settings.DEFAULTS)
         self.make_session = make_session
@@ -257,7 +253,7 @@ class Runtime(SessionActions):
         session, then record by record (core/history.py)."""
         before = self.meters.get(sid)
         if before is None:
-            records = self.log(sid).records()
+            records = self.log(sid).branch()
             now = None
             for each in records:
                 now = history.metered(now, each)
@@ -379,7 +375,7 @@ class Runtime(SessionActions):
                 raise Refused("a turn is running in this session; nothing to continue")
             if self.store.open_ask(sid) is not None:
                 raise Refused("a question is waiting in this session: answer it")
-        ends = [r for r in self.log(sid).records() if r["type"] == "turn_end"]
+        ends = [r for r in self.log(sid).branch() if r["type"] == "turn_end"]
         if not ends:
             raise Refused("this session has no turn to go on with")
         if ends[-1]["outcome"] == "answered":
@@ -432,7 +428,7 @@ class Runtime(SessionActions):
         row = current
         log = self.log(sid, lock)
         try:
-            all_records = log.records()
+            all_records = log.branch()
             records = [r for r in all_records if r.get("inbox") == row["id"]]
             ends = [r for r in records if r["type"] == "turn_end"]
             outcome = ends[-1]["outcome"] if ends else None
@@ -466,7 +462,7 @@ class Runtime(SessionActions):
                 try:
                     if history.log_format(all_records) != history.LOG_FORMAT:
                         self.upgrade_session(sid, log)
-                        pending = history.unfinished_turn(log.records())
+                        pending = history.unfinished_turn(log.branch())
                 except Exception:
                     upgrade.record_failure(log, row["id"], traceback.format_exc())
                     self.store.finish(row["arrival"], sid, "failed")
@@ -492,7 +488,7 @@ class Runtime(SessionActions):
 
     def repair_end(self, log, pending, row, outcome, detail, stopped=False):
         """Close a cut-off turn without calling either model."""
-        if history.log_format(log.records()) == history.LOG_FORMAT:
+        if history.log_format(log.branch()) == history.LOG_FORMAT:
             writer = self.live.get(row["session"])
             if writer is None:
                 writer = Session(None, [], "", log, {})
@@ -600,7 +596,7 @@ class Runtime(SessionActions):
     def _run_turn(self, sid, row, lock, control):
         log = self.log(sid, lock)
         try:
-            records = log.records()
+            records = log.branch()
             pending = history.unfinished_turn(records)
             begun = any(
                 r["type"] == "user" and r.get("inbox") == row["id"] for r in records
@@ -620,7 +616,7 @@ class Runtime(SessionActions):
         try:
             if log.path.exists() and history.log_format(records) != history.LOG_FORMAT:
                 self.upgrade_session(sid, log)
-                records = log.records()
+                records = log.branch()
         except Exception:
             upgrade.record_failure(log, row["id"], traceback.format_exc())
             self.store.finish(row["arrival"], sid, "failed")
@@ -653,7 +649,7 @@ class Runtime(SessionActions):
             )
             self.store.finish(row["arrival"], sid, "failed")
             return
-        records = session.log.records()
+        records = session.log.branch()
         begun = any(
             r["type"] == "user" and r.get("inbox") == row["id"] for r in records
         )
@@ -664,6 +660,7 @@ class Runtime(SessionActions):
                 text, inbox=row["id"], source=row["source"], control=control,
                 continued=bool(payload.get("continue")),
                 rounds=bool(payload.get("rounds")),
+                started_from_seq=payload.get("started_from_seq"),
             )
         self.store.begin(row["arrival"], sid)
         self.finish_turn(sid, session, turn, row)
@@ -691,13 +688,13 @@ class Runtime(SessionActions):
         try:
             outcome = session.run(turn)
         except Exception:
-            ends = [r for r in session.log.records()
+            ends = [r for r in session.log.branch()
                     if r["type"] == "turn_end" and r.get("inbox") == row["id"]]
             if not ends:
                 raise
             outcome = ends[-1]["outcome"]
         if outcome == "waiting":
-            self.store.park(sid, history.parked_ask(session.log.records()), row["id"])
+            self.store.park(sid, history.parked_ask(session.log.branch()), row["id"])
             return
         state = "failed" if outcome in FAILED else "idle"
         with self.changed:
@@ -806,8 +803,8 @@ class Runtime(SessionActions):
         elif log is not None:
             session = self.live[sid]
             session.log.lock = log.lock
-            session.log.count = None
-            if session.log.records():
+            session.log.last_seq = None
+            if session.log.branch():
                 session.restore(session.log)
         return self.live[sid]
 
@@ -828,7 +825,7 @@ class Runtime(SessionActions):
                     raise Refused("message id already used")
                 return {"stopped": True, "withdrawn": []}
             running = self.running.get(sid)
-            if running is None or not history.unfinished_turn(self.log(sid).records()):
+            if running is None or not history.unfinished_turn(self.log(sid).branch()):
                 return {"stopped": False, "withdrawn": []}
             control, row = running
             self.store.admit(msg_id, sid, "stop", source, {"turn": row["id"]})
@@ -929,7 +926,7 @@ class Runtime(SessionActions):
                                   "can be asked for once it runs again")
                 session.compact_asked = "user"
                 return {"compacting": "before_next_step"}
-            if not any(r["type"] == "user" for r in self.log(sid).records()):
+            if not any(r["type"] == "user" for r in self.log(sid).branch()):
                 raise Refused("the session has no conversation yet")
             thread = threading.Thread(target=self._compact, args=(sid,),
                                       name=f"compact-{sid}", daemon=True)

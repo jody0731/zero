@@ -51,10 +51,12 @@ SERVED = ("server/hello", "server/stop", "session/send", "session/continue",
           "session/stop", "session/list", "session/read", "session/watch",
           "session/mark_seen", "session/rename", "session/archive",
           "session/unarchive", "session/delete", "session/set", "session/compact",
+          "session/user_messages", "session/rewind", "session/fork",
           "setting/list", "setting/set")
 # Those of them that only look, which ZERO's own commands may send too
 # (peers.py); a service names its own in `looking`
-LOOKING_MESSAGES = ("server/hello", "session/list", "session/read", "session/watch")
+LOOKING_MESSAGES = ("server/hello", "session/list", "session/read", "session/watch",
+                    "session/user_messages")
 SESSION_EDITS = ("session/mark_seen", "session/rename", "session/archive",
                  "session/unarchive", "session/delete", "session/set")
 
@@ -267,6 +269,29 @@ class Server:
         except OSError:
             pass
 
+    def tree_message(self, name, request):
+        """The conversation's tree: the user's messages to begin from, a
+        rewind to before one, a fork into a new session."""
+        sid, seq = request.get("session"), request.get("seq")
+        if not isinstance(sid, str):
+            return error(f"{name} needs a session string")
+        if seq is not None and (not isinstance(seq, int) or isinstance(seq, bool)):
+            return error("seq is a record's number")
+        try:
+            if name == "session/user_messages":
+                return {"ok": True, "messages": self.runtime.rewind_points(sid)}
+            if name == "session/rewind":
+                if seq is None:
+                    return error("session/rewind needs the seq of one of the "
+                                 "user's messages")
+                return {"ok": True, **self.runtime.rewind(sid, seq)}
+            source = request.get("source")
+            return {"ok": True, **self.runtime.fork(
+                sid, seq, source if isinstance(source, str) else "user"
+            )}
+        except Refused as exc:
+            return error(str(exc))
+
     def answer(self, request):
         if not isinstance(request, dict):
             return error("a request is a JSON object")
@@ -295,6 +320,8 @@ class Server:
                 return {"ok": True, **self.runtime.compact(sid)}
             except Refused as exc:
                 return error(str(exc))
+        if name in ("session/user_messages", "session/rewind", "session/fork"):
+            return self.tree_message(name, request)
         if name == "session/continue":
             sid, msg_id = request.get("session"), request.get("id")
             source = request.get("source")

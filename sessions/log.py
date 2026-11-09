@@ -1,6 +1,9 @@
 """A session's history: one JSON record per line, append-only, never edited.
 
-Each record has seq (its line number), time and type. Every append reaches the
+Each record has seq (one more than the record above it; a fork's copied
+records keep their parent's numbers), time and type; a rewind's also names
+its parent, the record the conversation goes on from (core/history.py), so
+the log is a tree and `branch()` its current branch. Every append reaches the
 disk (fsync) before the caller goes on, so what the log says happened did. A
 crash mid-write can leave half a line at the end: reading leaves it out, and the
 next append cuts it off first so the file stays whole. `on_append` hears each
@@ -15,14 +18,18 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 
+from core import history
+
 
 class Log:
     def __init__(self, path, lock=None, on_append=None):
         self.path = path
         self.lock = lock
         self.on_append = on_append
-        # Whole records so far; counted on the first append
-        self.count = None
+        # The newest whole record's seq, read on the first append: a fork's
+        # log holds its parent's records with their numbers, so its seqs can
+        # skip where the parent's branch did
+        self.last_seq = None
 
     def records(self):
         """Every newline-terminated record; broken whole lines are errors."""
@@ -39,13 +46,28 @@ class Log:
                 raise ValueError(f"broken record at {self.path}:{n}") from None
         return records
 
+    def first_record(self):
+        """The log's first record, its header, read alone; None while empty."""
+        if not self.path.exists():
+            return None
+        with open(self.path, "rb") as f:
+            line = f.readline()
+        if not line.endswith(b"\n"):
+            return None
+        return json.loads(line.decode("utf-8"))
+
+    def branch(self):
+        """The records of the conversation's current branch, in order: all of
+        them in a log no rewind has branched (core/history.py's `branch`)."""
+        return history.branch(self.records())
+
     def append(self, type, **fields):
         """Write one record to disk and return it."""
         self.check_lock()
-        if self.count is None:
-            self.count = self._repair()
+        if self.last_seq is None:
+            self.last_seq = self._repair()
         record = {
-            "seq": self.count + 1,
+            "seq": self.last_seq + 1,
             "time": datetime.now().astimezone().isoformat(timespec="seconds"),
             "type": type,
             **fields,
@@ -62,7 +84,7 @@ class Log:
                 os.fsync(folder)
             finally:
                 os.close(folder)
-        self.count += 1
+        self.last_seq = record["seq"]
         if self.on_append is not None:
             self.on_append(record)
         return record
@@ -72,7 +94,8 @@ class Log:
             raise RuntimeError("the session lock must be held before writing its log")
 
     def _repair(self):
-        """Cut off a broken last line; return how many whole records are left."""
+        """Cut off a broken last line; return the last whole record's seq (0
+        for none)."""
         if not self.path.exists():
             return 0
         data = self.path.read_bytes()
@@ -82,7 +105,24 @@ class Log:
                 f.truncate(len(whole))
                 f.flush()
                 os.fsync(f.fileno())
-        return len(self.records())
+        records = self.records()
+        return records[-1].get("seq", len(records)) if records else 0
+
+
+def write_copy(path, records):
+    """A new log at `path` holding `records` as they are, numbers kept (a
+    fork's: its parent's branch up to where it was made); refused when the
+    file exists. Reaches the disk before it returns, as an append does."""
+    data = "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
+    with open(path, "x", encoding="utf-8") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    folder = os.open(Path(path).parent, os.O_RDONLY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
 
 
 class _FreshLog(Log):
@@ -95,6 +135,9 @@ class _FreshLog(Log):
 
     def records(self):
         return super().records() if self.claimed else []
+
+    def first_record(self):
+        return super().first_record() if self.claimed else None
 
     def append(self, type, **fields):
         new = not self.claimed

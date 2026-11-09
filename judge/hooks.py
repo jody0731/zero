@@ -141,7 +141,7 @@ class JudgeApproval(Hook):
         """Counted from the open turn's records, so a turn that comes back
         after a restart keeps its count (empty for a new turn)."""
         self._refusal_streak = self._refusals = 0
-        for record in log_history.unfinished_turn(turn.session.log.records()):
+        for record in log_history.unfinished_turn(turn.session.log.branch()):
             if record["type"] != "tool":
                 continue
             if record.get("notes", {}).get("judge_refused"):
@@ -154,7 +154,7 @@ class JudgeApproval(Hook):
         if not ask_of(call):
             return None
         history = view(
-            call.turn.session.log.records(), self.judge.output_chars,
+            call.turn.session.log.branch(), self.judge.output_chars,
             self.judge.view_bytes,
         )
         verdict = self._verdict(

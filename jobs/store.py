@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- How far into its output the model has looked
     read_bytes INTEGER NOT NULL DEFAULT 0,
     -- model or user
-    stopped_by TEXT
+    stopped_by TEXT,
+    -- The session log's record the job was started from (the call's), so a
+    -- notice from a part a rewind left behind says so
+    started_from_seq INTEGER
 );
 CREATE INDEX IF NOT EXISTS jobs_running ON jobs (state, session);
 """
@@ -38,6 +41,9 @@ RENAMED_COLUMNS = {
              "due": "due_at", "checkin": "next_checkin_at",
              "checkins": "checkin_count", "read": "read_bytes"},
 }
+# Columns added since a database was made (0.6.6), added when the server's
+# store opens
+ADDED_COLUMNS = {"jobs": {"started_from_seq": "INTEGER"}}
 
 
 class JobStore:
@@ -47,14 +53,14 @@ class JobStore:
         self.store = store
 
     def add_job(self, id, session, command, pid, started_at, due_at,
-                next_checkin_at, pid_start=None):
+                next_checkin_at, pid_start=None, started_from_seq=None):
         with self.store.transaction() as db:
             db.execute(
                 "INSERT INTO jobs (id, session, command, pid, pid_start, state, "
-                "started_at, due_at, next_checkin_at) "
-                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)",
+                "started_at, due_at, next_checkin_at, started_from_seq) "
+                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
                 (id, session, command, pid, pid_start, started_at, due_at,
-                 next_checkin_at),
+                 next_checkin_at, started_from_seq),
             )
 
     def job(self, id):
@@ -91,12 +97,14 @@ class JobStore:
                 return False
             if notice is not None:
                 msg_id, text = notice
-                session = db.execute(
-                    "SELECT session FROM jobs WHERE id = ?", (id,)
-                ).fetchone()["session"]
-                self.store.queue_notice(
-                    db, msg_id, session, SOURCE, {"text": text, "job": id}
-                )
+                row = db.execute(
+                    "SELECT session, started_from_seq FROM jobs WHERE id = ?", (id,)
+                ).fetchone()
+                payload = {"text": text, "job": id}
+                if row["started_from_seq"] is not None:
+                    # Where it started, for a notice from a part left behind
+                    payload["started_from_seq"] = row["started_from_seq"]
+                self.store.queue_notice(db, msg_id, row["session"], SOURCE, payload)
         return True
 
     def withdraw(self, msg_id):

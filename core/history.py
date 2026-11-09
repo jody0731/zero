@@ -1,10 +1,14 @@
 """Pure views of the session log: model messages and the evals' turn shape.
 
-The log keeps everything; the context, what one model call sends, is a view
-of it: the latest system message (the session's own, or one rebuilt since:
-a `system` record, or a compaction's), then the latest compaction's handoff
-and the records it kept, then every record after it (`replay`). Each user
-message carries its time at its end, so a gap between two shows.
+The log keeps everything, as a tree: a record's parent is the one before
+it, unless it names another (a `rewind`'s is the point the user went back
+to), and the current branch is the path from the last record back to the
+first (`branch`). A log with no rewind is one straight branch, as every log
+written before 0.6.6 is. The context, what one model call sends, is a view
+of the branch: the latest system message (the session's own, or one rebuilt
+since: a `system` record, or a compaction's), then the latest compaction's
+handoff and the records it kept, then every record after it (`replay`).
+Each user message carries its time at its end, so a gap between two shows.
 """
 
 import re
@@ -49,6 +53,36 @@ HANDED_OFF = "the conversation before the kept steps became the handoff above."
 ROUND_ENDED = ("a round ended, and the conversation before this point became "
                "the handoff above.")
 SIZE = " The context is now about {tokens:,} tokens of the {line:,} it is kept under."
+
+# Where the user rewound, as the model reads it: what was left behind and
+# what of it still stands; each part that changes things adds its lines
+# (the `rewound` hooks), so the note names what the log knows exactly
+REWOUND = (
+    "[Rewound {when}: the user went back to before their message of "
+    "{asked}. The conversation from there, records {first}–{last} of this "
+    "session's log{session}, is left behind and is no longer in your "
+    "context; the log keeps it, and session_search reads it by those record "
+    "numbers. What was done there stays done: files and memory are as it "
+    "left them.{part}{extra}]"
+)
+# The session's id in the rewind's note, where the server gives it
+REWOUND_SESSION = " (session {session})"
+# What a part of the conversation the context doesn't hold did, in the
+# rewind's note (the part left behind) and a fork's (the part its parent
+# went on with): the user's messages there, then the calls that ran
+PART_MESSAGES = "\nThe user's messages there:\n{messages}"
+# One of the user's messages there: its record and its first line, the
+# whole in the log
+PART_MESSAGE = "- record {seq}: {line}"
+# The calls that ran there, counted by tool
+PART_CALLS = "\nCalls that ran there, by tool: {counts}."
+# Past this, a message's line is cut, the cut saying so
+PART_LINE_CHARS = 200
+# Inside a notice whose sender started on a part a rewind left behind
+LEFT_BEHIND = (
+    "[This started from record {seq} of this session's log, on a part of the "
+    "conversation a rewind left behind.]"
+)
 
 
 class OldLog(ValueError):
@@ -159,6 +193,94 @@ def context_meter(records):
     return meter if meter and meter["tokens"] else None
 
 
+def parent_of(record):
+    """A record's parent: the one it names (a rewind's), else the one before."""
+    return record.get("parent", record["seq"] - 1)
+
+
+def branch(records):
+    """The current branch: from the first record to the last along their
+    parents, in order. A log no rewind has branched is all of its records."""
+    if not any("parent" in record for record in records):
+        return records
+    by_seq = {record["seq"]: record for record in records}
+    path = []
+    record = records[-1]
+    while record is not None:
+        path.append(record)
+        record = by_seq.get(parent_of(record))
+    path.reverse()
+    return path
+
+
+def is_rewind_point(record):
+    """Whether the user can rewind to before this record: one of their own
+    messages that starts a turn (not a steer, a notice or a `continue`)."""
+    return (record["type"] == "user" and not record.get("steer")
+            and not record.get("continue") and not is_notice(record))
+
+
+def rewind_points(records):
+    """The user's own messages on the current branch that start a turn,
+    oldest first: where a rewind or a fork can begin."""
+    return [record for record in branch(records) if is_rewind_point(record)]
+
+
+def left_behind_by(records, seq):
+    """What a rewind to before the user's message `seq` leaves behind: the
+    branch from that message on. ValueError if it isn't a rewind point on
+    the current branch."""
+    path = branch(records)
+    for index, record in enumerate(path):
+        if record.get("seq") == seq:
+            if not is_rewind_point(record):
+                raise ValueError(f"record {seq} isn't one of the user's messages "
+                                 "that starts a turn")
+            return path[index - 1], path[index:]
+    raise ValueError(f"record {seq} isn't on the conversation's current branch")
+
+
+def part_lines(part):
+    """What a part of the conversation did, from its records: the user's
+    messages there (steers included; not notices or a `continue`), each by
+    its record and first line, then the calls that ran there counted by
+    tool. The rewind's note says it of the part left behind, a fork's of the
+    part its parent went on with."""
+    lines = []
+    for record in part:
+        if (record["type"] != "user" or record.get("continue")
+                or is_notice(record)):
+            continue
+        text = record["text"].strip()
+        line = text.splitlines()[0] if text else ""
+        if len(line) > PART_LINE_CHARS or line != text:
+            line = line[:PART_LINE_CHARS].rstrip() + " … (the whole in the log)"
+        lines.append(PART_MESSAGE.format(seq=record["seq"], line=line))
+    counts = {}
+    for record in part:
+        if record["type"] == "tool" and record.get("ran"):
+            counts[record["tool"]] = counts.get(record["tool"], 0) + 1
+    text = PART_MESSAGES.format(messages="\n".join(lines))
+    if counts:
+        text += PART_CALLS.format(counts=", ".join(
+            f"{name} {count}" for name, count in counts.items()
+        ))
+    return text
+
+
+def rewind_note(when_iso, left, extra="", session=None):
+    """The rewind's note, from the part it leaves: what was done there
+    (`part_lines`), what the hooks add (`extra`: the files written there,
+    the jobs started there that still run), and `session`, its id, for
+    session_search."""
+    return REWOUND.format(
+        when=when(when_iso), asked=when(left[0]["time"]),
+        first=left[0]["seq"], last=left[-1]["seq"],
+        session=REWOUND_SESSION.format(session=session) if session else "",
+        part=part_lines(left), extra=extra,
+    )
+
+
 def log_format(records):
     if records and records[0].get("type") == "session":
         if records[0].get("format") == LOG_FORMAT:
@@ -174,9 +296,11 @@ def when(iso):
 
 def sent(record):
     """A user message's text with its time at the end; a notice's in its
-    tag."""
+    tag, saying so when its sender started on a part a rewind left behind."""
     text = record["text"]
     if is_notice(record):
+        if record.get("left_behind"):
+            text = f"{LEFT_BEHIND.format(seq=record['started_from_seq'])}\n{text}"
         text = NOTICE.format(source=record["source"],
                              text=CLOSING_TAG.sub(r"<\\\1", text))
     return f"{text}\n\n{SENT.format(when=when(record['time']))}"
@@ -205,7 +329,7 @@ def message(record):
         return {"role": "user", "content": f"{MID_TURN}\n{sent(record)}"}
     if kind == "user":
         return {"role": "user", "content": sent(record)}
-    if kind == "note":
+    if kind in ("note", "rewind"):
         return {"role": "user", "content": record["text"]}
     if kind == "compaction":
         return {"role": "user", "content": compacted(record)}
@@ -237,7 +361,7 @@ def steer_fields(steer):
     own are `mid_turn`, so the model reads that they came while it
     worked; a notice says what it is itself."""
     fields = {"text": steer["text"], "steer": True}
-    for name in ("inbox", "source"):
+    for name in ("inbox", "source", "started_from_seq"):
         if steer.get(name) is not None:
             fields[name] = steer[name]
     if not is_notice(steer):
@@ -285,11 +409,12 @@ def handoff(compaction):
 
 
 def replay(records):
-    """The context: the latest system message, the latest compaction's
-    handoff, then the messages of the records in it, with the outputs that
-    compaction cleared as it left them."""
+    """The context: of the log's current branch, the latest system message,
+    the latest compaction's handoff, then the messages of the records in it,
+    with the outputs that compaction cleared as it left them."""
     if not records:
         return []
+    records = branch(records)
     system = system_now(records)
     messages = [{"role": "system", "content": system["system_prompt"]}]
     compaction = latest_compaction(records)

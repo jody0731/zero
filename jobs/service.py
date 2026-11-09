@@ -21,7 +21,7 @@ from pathlib import Path
 from server.services import Service, Refused
 from jobs import SETTINGS, process
 from jobs import tool as jobtools
-from jobs.store import RENAMED_COLUMNS, SCHEMA, JobStore
+from jobs.store import ADDED_COLUMNS, RENAMED_COLUMNS, SCHEMA, JobStore
 
 # Running jobs before another one asks, for a session whose limits name none
 MAX_JOBS = {s.name: s.default for s in SETTINGS}["max_jobs"]
@@ -53,11 +53,14 @@ def kill_leftover(row):
 class SessionJobs:
     """What one session's tools get as `jobs`: the server, bound to the session."""
 
-    def __init__(self, service, sid, limit):
+    def __init__(self, service, sid, limit, log_of=None):
         self.service = service
         self.sid = sid
         # Running jobs before another one asks: the session's max_jobs
         self.limit = limit
+        # The session's log as it stands: a job keeps the record it was
+        # started from (the call's), its newest
+        self.log_of = log_of
 
     def spawn(self, argv, **options):
         return process.SPAWNER.popen(argv, **options)
@@ -70,7 +73,10 @@ class SessionJobs:
         return len(self.service.store.jobs(self.sid, running=True))
 
     def start(self, proc, command, expect_minutes=None, ran=0.0):
-        return self.service.start(self.sid, proc, command, expect_minutes, ran)
+        log = self.log_of() if self.log_of is not None else None
+        started_from_seq = log.last_seq if log is not None else None
+        return self.service.start(self.sid, proc, command, expect_minutes, ran,
+                                  started_from_seq)
 
     def now(self):
         return self.service.clock()
@@ -106,6 +112,7 @@ class JobsService(Service):
     looking_messages = ("job/list",)
     schema = SCHEMA
     renamed_columns = RENAMED_COLUMNS
+    added_columns = ADDED_COLUMNS
     tables = ("jobs",)
 
     def __init__(self, tick=2.0, clock=time.time):
@@ -151,13 +158,14 @@ class JobsService(Service):
         now = time.time()
         return [{**row, "state_text": jobtools.state_text(row, now)} for row in rows]
 
-    def session(self, sid, limit):
-        return SessionJobs(self, sid, limit)
+    def session(self, sid, limit, log_of=None):
+        return SessionJobs(self, sid, limit, log_of)
 
     def session_built(self, sid, session):
         """The session's tools start jobs through the server, up to its limit."""
         limit = session.tool_context.get("limits", {}).get("max_jobs")
-        session.tool_context["jobs"] = self.session(sid, limit or MAX_JOBS)
+        session.tool_context["jobs"] = self.session(sid, limit or MAX_JOBS,
+                                                    lambda: session.log)
 
     def busy_with(self):
         return {"jobs": [row["id"] for row in self.running_jobs()]}
@@ -192,7 +200,8 @@ class JobsService(Service):
         """The output the model hasn't looked at, for a notice."""
         return self.files(row["id"]).read(row["read_bytes"])[0]
 
-    def start(self, sid, proc, command, expect_minutes=None, ran=0.0):
+    def start(self, sid, proc, command, expect_minutes=None, ran=0.0,
+              started_from_seq=None):
         """Record a running process as a job and start its pump. `ran`: how
         long it already ran in the foreground (a command moved at bash's
         timeout), so its clock starts with the command; its estimate and first
@@ -203,7 +212,7 @@ class JobsService(Service):
         next_checkin_at = (due_at if due_at is not None
                            else now + jobtools.FIRST_CHECKIN)
         self.store.add_job(id, sid, command, proc.pid, now - ran, due_at,
-                           next_checkin_at, pid_start(proc.pid))
+                           next_checkin_at, pid_start(proc.pid), started_from_seq)
         job = process.Job(id, proc, self.files(id), self.ended)
         with self.lock:
             self.live[id] = job

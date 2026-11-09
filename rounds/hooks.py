@@ -100,7 +100,7 @@ class Budget(Hook):
         """Rebuilt from the open turn's records: what it spent, and each yes to
         go on, so a parked or restarted turn keeps its raised budget."""
         session = turn.session
-        records = history.unfinished_turn(session.log.records())
+        records = history.unfinished_turn(session.log.branch())
         self._spent = turn_dollars(records, session.settings.get("price"))
         self._raised = 0
         self._refused = False
@@ -271,7 +271,7 @@ def running_round(turn):
         return None
     if turn.inbox == run["round_inbox"]:
         return run
-    records = history.unfinished_turn(turn.session.log.records())
+    records = history.unfinished_turn(turn.session.log.branch())
     return run if started_in(records, run["id"]) else None
 
 
@@ -298,7 +298,7 @@ class Rounds(Hook):
         session = turn.session
         if session.tool_context.get("session_rounds") is None:
             return
-        records = history.unfinished_turn(session.log.records())
+        records = history.unfinished_turn(session.log.branch())
         if not records or not records[0].get("rounds"):
             return
         if not any(r["type"] == "note" and r.get("kind") == "rounds_asked"
@@ -310,7 +310,7 @@ class Rounds(Hook):
         rounds = session.tool_context.get("session_rounds")
         if rounds is None or rounds.open() is not None:
             return None
-        records = history.unfinished_turn(session.log.records())
+        records = history.unfinished_turn(session.log.branch())
         compactions = sum(r["type"] == "compaction" for r in records)
         offered = any(r["type"] == "note" and r.get("kind") == "rounds_offered"
                       for r in records)
@@ -341,7 +341,7 @@ class Rounds(Hook):
         run = rounds.open()
         if run is None:
             return
-        records = history.unfinished_turn(session.log.records())
+        records = history.unfinished_turn(session.log.branch())
         if not started_in(records, run["id"]) and turn.inbox != run["round_inbox"]:
             return
         end = round_end(records, run["id"])
@@ -351,7 +351,7 @@ class Rounds(Hook):
         fresh = False
         if state in ("running", "waiting") and turn.outcome not in FAILED:
             session.compact("round", end["handoff"] if end else None)
-            done = history.unfinished_turn(session.log.records())
+            done = history.unfinished_turn(session.log.branch())
             cut = next((r for r in reversed(done) if r["type"] == "compaction"
                         and r.get("reason") == "round"), None)
             fresh = cut is not None

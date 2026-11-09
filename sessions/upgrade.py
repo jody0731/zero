@@ -151,7 +151,7 @@ def upgrade_file(log, header):
         backup = log.path.with_name(f"{log.path.stem}.format-{source}.jsonl")
         _backup(backup, original)
         os.replace(temp, log.path)
-        log.count = None
+        log.last_seq = None
         folder = os.open(log.path.parent, os.O_RDONLY)
         try:
             os.fsync(folder)
@@ -180,4 +180,4 @@ def record_failure(log, inbox, error):
         stream.write(separator + ending)
         stream.flush()
         os.fsync(stream.fileno())
-    log.count = None
+    log.last_seq = None

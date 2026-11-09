@@ -12,6 +12,11 @@ holding any of them are given instead, and the reply says which
 (`matched_by`): a long query of a model's or a person's still finds its
 nearest records.
 
+A session's log keeps the parts of its conversation a rewind left behind
+(core/history.py): a record found there is marked `left_behind`. A fork's
+records copied from the session it came from aren't searched in the fork
+(index.py): they are found in that session.
+
 Each use returns the reply `session/search` gives (protocol/messages.py),
 which the tool puts in words for ZERO (tool.py) and the command in lines
 for a person. Every session the list holds is searched: running or done,
@@ -20,6 +25,7 @@ archived, the one asking; a deleted one isn't listed.
 
 import json
 
+from core import history
 from session_search.index import fts_query, named, searchable
 
 # How many sessions, or records, a search gives when the caller names no
@@ -70,7 +76,31 @@ def find(index, sessions, logs, query=None, session=None, around=None,
             reply = matched(index, listed, target, either, count, asking)
             reply["matched_by"] = "any word"
     reply["query"] = query
+    marked(reply, logs)
     return reply
+
+
+def off_branch(path):
+    """The seqs of a log's records off its current branch: the parts a
+    rewind left behind."""
+    records = [r for r in log_records(path) if "seq" in r]
+    on = {record["seq"] for record in history.branch(records)} if records else set()
+    return {record["seq"] for record in records} - on
+
+
+def marked(reply, logs):
+    """Each record found on a part a rewind left behind marked so."""
+    if "records" in reply:
+        pairs = [(reply["session"]["id"], record) for record in reply["records"]]
+    else:
+        pairs = [(row["id"], row["best"]) for row in reply.get("sessions", [])
+                 if row.get("best")]
+    left = {}
+    for sid, record in pairs:
+        if sid not in left:
+            left[sid] = off_branch(logs / f"{sid}.jsonl")
+        if record.get("seq") in left[sid]:
+            record["left_behind"] = True
 
 
 def matched(index, listed, target, words, count, asking):
@@ -149,8 +179,10 @@ def log_records(path):
 
 def near(target, path, around, each_side=EACH_SIDE):
     """The searched records nearest record `around`: `each_side` before it,
-    the one at it (or the first after it), `each_side` after."""
+    the one at it (or the first after it), `each_side` after; each on a
+    part a rewind left behind marked so."""
     records = []
+    left = off_branch(path)
     for record in log_records(path):
         found = searchable(record)
         if found is None or not found[2]:
@@ -158,7 +190,9 @@ def near(target, path, around, each_side=EACH_SIDE):
         kind, tool_or_source, text = found
         records.append({"seq": record.get("seq"), "kind": kind,
                         "time": record.get("time"), "text": text,
-                        **named(kind, tool_or_source)})
+                        **named(kind, tool_or_source),
+                        **({"left_behind": True}
+                           if record.get("seq") in left else {})})
     at = next((i for i, r in enumerate(records) if r["seq"] >= around),
               len(records) - 1)
     start = max(0, at - each_side)

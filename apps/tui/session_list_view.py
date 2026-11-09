@@ -82,7 +82,8 @@ class SessionListView(Screen):
                 line = (f"+ New session in {session_list.tilde_path(self.zero.cwd)}   "
                         f"({self.zero.first_key('new_elsewhere')}: in another folder)")
             else:
-                line = (f"{session_list.row_mark(row)} {row['title'][:40]:<40} "
+                title = session_list.row_title(row)[:40]
+                line = (f"{session_list.row_mark(row)} {title:<40} "
                         f"{session_list.short_path(row['workspace'], 26):<26} "
                         f"{session_list.row_state(row, now)}")
             text.append(line + "\n", style=style)
@@ -107,7 +108,7 @@ class SessionListView(Screen):
         if row is None:
             return ""
         where = session_list.tilde_path(row["workspace"])
-        parts = [(f"{row['title']} · {where}\n", "bold")]
+        parts = [(f"{session_list.row_title(row)} · {where}\n", "bold")]
         ask = row.get("ask")
         if ask is not None:
             parts += [("? ", "bold $text-warning"), ask["command"]]

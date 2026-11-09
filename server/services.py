@@ -23,6 +23,9 @@ class Service:
     # Its tables' columns renamed since a database was made: table → {old
     # name: new name}, renamed in place when the store opens
     renamed_columns = {}
+    # Its tables' columns added since a database was made: table → {name:
+    # its SQL type}, added when the store opens
+    added_columns = {}
     # Its tables with a `session` column: a deleted session's rows go too
     tables = ()
     # Its messages that only look, which ZERO's own commands may send too
@@ -53,6 +56,10 @@ class Service:
 
     def refuse_delete(self, sid):
         """Why the session can't be deleted now, or None."""
+        return None
+
+    def refuse_rewind(self, sid):
+        """Why the session's conversation can't be rewound now, or None."""
         return None
 
     def session_files(self, sid):

@@ -48,6 +48,15 @@
       "$ref": "#/$defs/session.compact"
     },
     {
+      "$ref": "#/$defs/session.user_messages"
+    },
+    {
+      "$ref": "#/$defs/session.rewind"
+    },
+    {
+      "$ref": "#/$defs/session.fork"
+    },
+    {
       "$ref": "#/$defs/session.set"
     },
     {
@@ -935,6 +944,129 @@
             "now",
             "before_next_step"
           ]
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.user_messages": {
+      "type": "object",
+      "description": "The user's own messages on a session's current branch that start a turn, newest first: where a rewind or a fork begins.",
+      "properties": {
+        "message": {
+          "const": "session/user_messages"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "session.user_messages.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "seq, time and text of each"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.rewind": {
+      "type": "object",
+      "description": "Go back to before one of the user's messages: what came after it is left behind, kept in the log, and the files and memory stay as they are. Refused while a turn runs or waits.",
+      "properties": {
+        "message": {
+          "const": "session/rewind"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "seq": {
+          "type": "integer",
+          "description": "the user's message's seq, one of session/user_messages'"
+        }
+      },
+      "required": [
+        "message",
+        "session",
+        "seq"
+      ],
+      "additionalProperties": false
+    },
+    "session.rewind.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "rewind": {
+          "type": "object",
+          "description": "the rewind's record"
+        },
+        "text": {
+          "type": "string",
+          "description": "the message's text, for the input"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.fork": {
+      "type": "object",
+      "description": "A new session from a session's conversation, up to before one of the user's messages or all of it, its records copied as they are; the same workspace, mode and model. The session goes on untouched.",
+      "properties": {
+        "message": {
+          "const": "session/fork"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "seq": {
+          "type": "integer",
+          "description": "the user's message's seq, one of session/user_messages'; none: all of the conversation, its last turn ended"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "session.fork.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "session": {
+          "type": "object",
+          "description": "the new session's row"
+        },
+        "text": {
+          "type": "string",
+          "description": "the message's text, for the new session's input; empty for all of it"
         }
       },
       "required": [

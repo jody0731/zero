@@ -49,6 +49,10 @@ from client.render import jobs_text
 
 # Records a switch shows at most; a scroll to the top pages back by as many
 MAX_RECORDS_SHOWN = 50
+
+# In /fork's list: all of the conversation, not one of the user's messages
+ALL_OF_IT = "all"
+
 # ZERO's themes: a blue-black ground; cyan is ZERO (its mark, the
 # input, what's new), amber only what needs you (an ask, a waiting command, the
 # attention line), violet the mode you set
@@ -427,6 +431,10 @@ class ZeroApp(SafeClicks, App):
         if generation is not None and generation != self.generation:
             return
         record = event.get("record")
+        if record is not None and record["type"] == "rewind":
+            # The conversation went back: its view is the branch it left
+            self.open(self.client.session, remember=False)
+            return
         if record is not None:
             self.transcript.add(record, self.connection.source)
             if record["type"] in ("turn_end", "ask"):
@@ -610,6 +618,16 @@ class ZeroApp(SafeClicks, App):
             elif name == "/compact":
                 reply = self.connection.compact(sid)
                 self.note(render.COMPACTING[reply["compacting"]])
+            elif name == "/rewind":
+                self.pick_message(
+                    sid, "Rewind to before which of your messages? Its text goes "
+                    "back into the input; files stay as they are.", self.rewind_to,
+                )
+            elif name == "/fork":
+                self.pick_message(
+                    sid, "A new session from this conversation, up to before "
+                    "which of your messages?", self.fork_from, whole=True,
+                )
             elif name == "/archive":
                 archived = not (self.row() or {}).get("archived", False)
                 self.connection.archive(sid, archived)
@@ -644,6 +662,50 @@ class ZeroApp(SafeClicks, App):
                 self.push_screen(TextView("Jobs", body))
         except Exception as error:
             self.failed(error)
+
+    def pick_message(self, sid, label, then, whole=False):
+        """A list of the user's messages on the conversation's current branch,
+        newest first, to rewind or fork from; `whole`: all of it on top."""
+        messages = self.connection.user_messages(sid)
+        if not messages and not whole:
+            self.note("No message of yours to go back to yet.")
+            return
+        choices, values = [], []
+        if whole:
+            choices.append("All of the conversation")
+            values.append(ALL_OF_IT)
+        for found in messages:
+            when = datetime.fromisoformat(found["time"]).strftime("%d %b %H:%M")
+            lines = found["text"].strip().splitlines() or [""]
+            choices.append(f"{when}  {lines[0][:70]}")
+            values.append(found["seq"])
+        self.push_screen(ChoiceView(label, choices, values=values),
+                         lambda value: value is not None and then(sid, value))
+
+    def rewind_to(self, sid, seq):
+        """Rewind, then show the branch it leaves, the message in the input."""
+        try:
+            reply = self.connection.rewind(sid, seq)
+        except Exception as error:
+            self.failed(error)
+            return
+        self.open(sid, remember=False)
+        self.fill_input(reply["text"])
+
+    def fork_from(self, sid, value):
+        """Fork, then open the new session, the message in its input."""
+        try:
+            reply = self.connection.fork(sid, None if value == ALL_OF_IT else value)
+        except Exception as error:
+            self.failed(error)
+            return
+        self.open(reply["session"]["id"])
+        self.fill_input(reply["text"])
+
+    def fill_input(self, text):
+        field = self.view.query_one("#message", MessageBox)
+        field.value = text
+        self.focus_input()
 
     def session_value(self, name):
         """The session's mode, model or workspace as it stands (the next

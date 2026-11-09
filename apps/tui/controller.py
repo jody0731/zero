@@ -32,6 +32,10 @@ COMMANDS = {
     "/rename": "rename this session: /rename TITLE",
     "/compact": "compact this session's context: now, or before the next step "
                 "while a turn runs",
+    "/rewind": "go back to before one of your messages, its text back in the "
+               "input; what came after is left behind, files stay as they are",
+    "/fork": "a new session from this conversation, up to one of your messages "
+             "or all of it",
     "/archive": "archive this session (or bring it back)",
     "/delete": "move this session to the trash (asked first)",
     "/jobs": "this session's background jobs",

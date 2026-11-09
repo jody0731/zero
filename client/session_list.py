@@ -120,6 +120,11 @@ def row_state(row, now=None):
     return f"{state} {ago(now - row['updated_at'])}"
 
 
+def row_title(row):
+    """A list row's title, a fork's marked as one."""
+    return f"{row['title']} (fork)" if row.get("parent") else row["title"]
+
+
 def row_mark(row):
     if row.get("ask") is not None:
         return "?"

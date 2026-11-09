@@ -27,8 +27,11 @@ DESCRIPTION = (
     "whole word, case and accents aside; when no record does, the records "
     "holding any of them come instead, and the reply says so. OR between "
     "words matches any of them, \"quotes\" make a phrase, and a word ending "
-    "in * matches the words that start with it. It runs outside the "
-    "sandbox, which hides the logs from commands."
+    "in * matches the words that start with it. A session's log keeps the "
+    "parts of its conversation a rewind left behind, and a record found "
+    "there says so; a fork's records copied from the session it came from "
+    "are found in that session. It runs outside the sandbox, which hides "
+    "the logs from commands."
 )
 NOT_HERE = "Not searched: session search isn't available in this session."
 
@@ -67,7 +70,10 @@ def session_text(session, first=False):
 
 
 def record_head(record):
-    return f"#{record['seq']} on {when(record['time'])}, {kind_text(record)}"
+    head = f"#{record['seq']} on {when(record['time'])}, {kind_text(record)}"
+    if record.get("left_behind"):
+        head += ", on a part a rewind left behind"
+    return head
 
 
 def snippet(record):

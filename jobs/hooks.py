@@ -1,6 +1,7 @@
 """The cap on a session's running jobs: past it, starting another one is an
-ask, decided as any ask in the mode (bypassPermissions loads no caps); and
-the jobs a turn the user interrupted leaves running."""
+ask, decided as any ask in the mode (bypassPermissions loads no caps); the
+jobs a turn the user interrupted leaves running; and those a rewind leaves
+behind still running."""
 
 from core import tools
 from core.hooks import Hook
@@ -10,6 +11,11 @@ SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
 STILL_RUNNING = (
     "\n[Harness note: these background jobs of this session still run, until "
     "each ends or is stopped: {jobs}.]"
+)
+# In a rewind's note: the jobs started on the part it leaves that still run
+STARTED_THERE = (
+    "\nJobs started there that still run: {jobs}. Their notices come here, "
+    "each saying it started on a part left behind."
 )
 
 
@@ -46,8 +52,20 @@ class JobLimit(Hook):
 
 
 class RunningJobs(Hook):
-    """Says which jobs still run when the user interrupts a turn: a job
-    outlives its turn, and stopping the turn stops none."""
+    """Says which jobs still run when the user interrupts a turn, or rewinds
+    past where they started: a job outlives its turn, and neither stops it."""
+
+    def rewound(self, session, left):
+        jobs = session.tool_context.get("jobs")
+        if jobs is None:
+            return ""
+        there = {record["seq"] for record in left}
+        running = [row for row in jobs.list() if row["state"] == "running"
+                   and row.get("started_from_seq") in there]
+        if not running:
+            return ""
+        named = ", ".join(f"{row['id']} (`{row['command']}`)" for row in running)
+        return STARTED_THERE.format(jobs=named)
 
     def interrupted(self, session):
         jobs = session.tool_context.get("jobs")

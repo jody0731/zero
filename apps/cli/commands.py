@@ -47,7 +47,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from client import render
+from client import render, session_list
 from client.connection import NotRunning, ProtocolError
 from client.render import duration, jobs_text
 from client.result import CHOICES, Result
@@ -59,6 +59,8 @@ FAMILIES = ("session", "job", "rounds", "grant", "model", "setting")
 NO_COMMAND = {
     "session/mark_seen": "a person's read mark, which the full screen sends for what "
                     "it has shown; a caller reads a session with session read",
+    "session/user_messages": "session rewind ID, with no SEQ, lists them, the "
+                             "numbers session rewind and session fork take",
 }
 THINKING_EFFORT_HELP = "the model's thinking effort from the next turn"
 MODES_HELP = "the mode (/mode in zero lists them)"
@@ -94,7 +96,7 @@ def history_text(info, records, working=True, runs_with=None, context=None):
     lines = [
         f"{info['id']}  {info['state']}  {info['mode']}  {info['model']}  "
         f"{info['workspace']}",
-        info["title"], "",
+        session_list.row_title(info), "",
     ]
     if runs_with:
         judge = runs_with.get("judge_model") or "the session's model"
@@ -131,6 +133,8 @@ def history_text(info, records, working=True, runs_with=None, context=None):
             lines.append(f"{clock}  you  {reply}")
         elif record["type"] in ("compaction", "compaction_failed"):
             lines.append(f"--- {render.compaction_text(record)} ---")
+        elif record["type"] == "rewind":
+            lines.append(f"--- {render.rewind_text(record)} ---")
         elif record["type"] == "turn_end":
             lines.append(f"{clock}  {NAME}  {ending(record, started, restarts)}")
     ask = info.get("ask")
@@ -172,7 +176,8 @@ def list_sessions(server, sessions=None):
         mark = "  (a question waits)" if info.get("ask") else ""
         lines.append(
             f"{info['id']}  {info['state']}  {info['mode']}  "
-            f"{clock:%Y-%m-%d %H:%M}  {info['workspace']}  {info['title']}{mark}"
+            f"{clock:%Y-%m-%d %H:%M}  {info['workspace']}  "
+            f"{session_list.row_title(info)}{mark}"
         )
     return "\n".join(lines) if lines else "No sessions yet."
 
@@ -396,6 +401,24 @@ def parser(prog="zero"):
     session_arg(compact)
     json_flag(compact)
     compact.set_defaults(handler=compact_command)
+    rewind = actions.add_parser(
+        "rewind", help="go back to before one of your messages: what came "
+                       "after is left behind, files stay as they are; with "
+                       "no SEQ, your messages to pick from")
+    session_arg(rewind)
+    rewind.add_argument("seq", metavar="SEQ", type=int, nargs="?",
+                        help="the message's number, as the list shows it")
+    json_flag(rewind)
+    rewind.set_defaults(handler=rewind_command)
+    fork = actions.add_parser(
+        "fork", help="a new session from this one's conversation, up to "
+                     "before one of your messages (SEQ, as `session rewind ID` "
+                     "lists them) or all of it")
+    session_arg(fork)
+    fork.add_argument("seq", metavar="SEQ", type=int, nargs="?",
+                      help="the message's number; none: all of it")
+    json_flag(fork)
+    fork.set_defaults(handler=fork_command)
     for name, about in (("archive", "out of the list, kept"),
                         ("unarchive", "back to the list"),
                         ("delete", "its files to the trash")):
@@ -650,8 +673,9 @@ def record_kind(record):
 
 def hit_line(record):
     snippet = " ".join(str(record.get("snippet") or "").split())
+    left = " (left behind by a rewind)" if record.get("left_behind") else ""
     return (f"#{record['seq']}  {clock_of(record['time'])}  "
-            f"{record_kind(record)}  {snippet}")
+            f"{record_kind(record)}{left}  {snippet}")
 
 
 def watch_command(connection, args, out):
@@ -672,6 +696,38 @@ def watch_command(connection, args, out):
 def rename_command(connection, args, out):
     reply = connection.rename(session_id(connection, args.id), args.title)
     return print_reply(args, out, reply, "Renamed.")
+
+
+def rewind_command(connection, args, out):
+    """No SEQ: the user's messages, newest first, each by its number. A
+    SEQ: the rewind, and the message's text, to send again as it is or
+    changed."""
+    sid = session_id(connection, args.id)
+    if args.seq is None:
+        messages = connection.user_messages(sid)
+        if args.json:
+            out(json.dumps({"messages": messages}, ensure_ascii=False))
+        elif not messages:
+            out("No message of yours on this session's conversation yet.")
+        else:
+            for found in messages:
+                clock = datetime.fromisoformat(found["time"]).strftime("%d %b %H:%M")
+                lines = found["text"].strip().splitlines() or [""]
+                out(f"{found['seq']:>6}  {clock}  {lines[0][:70]}")
+        return 0
+    reply = connection.rewind(sid, args.seq)
+    return print_reply(args, out, reply,
+                       f"Rewound. Your message, to send again as it is or "
+                       f"changed:\n{reply['text']}")
+
+
+def fork_command(connection, args, out):
+    reply = connection.fork(session_id(connection, args.id), args.seq)
+    new = reply["session"]["id"]
+    text = f"Forked: {new}."
+    if reply["text"]:
+        text += f" Your message, to send there as it is or changed:\n{reply['text']}"
+    return print_reply(args, out, reply, text)
 
 
 def compact_command(connection, args, out):

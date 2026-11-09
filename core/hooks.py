@@ -25,8 +25,10 @@ WATCH = {"turn_start", "after_model", "after_tool", "turn_end", "compaction_aske
 # switched: what a session runs with after the user changed it between
 # turns, told to the model in a note; resumed: what the restart note adds,
 # when a turn cut off by a stopped server goes on; interrupted: what the
-# note of a turn the user interrupted adds (the jobs still running)
-COLLECT = {"system_prompt", "switched", "resumed", "interrupted"}
+# note of a turn the user interrupted adds (the jobs still running);
+# rewound: what the note of a rewind adds of the part it leaves behind (the
+# files written there, the jobs started there that still run)
+COLLECT = {"system_prompt", "switched", "resumed", "interrupted", "rewound"}
 DECIDE = {"before_model", "model_error", "before_tool", "approve", "step_end"}
 # tool_result: a call's result before it is logged; notice: a notice's text
 # (a job's end) before it is logged (the context component saves one past

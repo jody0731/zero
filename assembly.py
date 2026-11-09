@@ -285,13 +285,20 @@ def make_session(
     def results():
         # A new log is named when its first turn starts
         return folder_of(session_log.path)
+    # A fork's copied context names the outputs its parents saved: their
+    # folders are shown too, read-only, at their own paths
+    head = session_log.first_record() or {}
+    shown = [results, *(
+        folder_of(session_log.path.parent / f"{ancestor}.jsonl")
+        for ancestor in (head.get("forked_from") or {}).get("ancestors", [])
+    )]
     # A sandbox of its own per session: its scratch folder starts empty, and a
     # session made later can't swap it out
     if box is not None:
         if spec.sandbox == "read-only" or not workspace_writes:
             raise ValueError("a box of its own has no read-only workspace")
         sandbox = box(workspace, private=private_folders())
-        sandbox.shown.append(results)
+        sandbox.shown.extend(shown)
     elif spec.sandbox is not None:
         read_only = spec.sandbox == "read-only" or not workspace_writes
         # A project's ZERO.md, read by later sessions, stays read-only
@@ -299,7 +306,7 @@ def make_session(
         protected = (PROJECT_FILE,) if instructions and instructions.project else ()
         sandbox = Sandbox(workspace, read_only=read_only,
                           private=private_folders(), protected=protected,
-                          scratch=scratch, shown=[results])
+                          scratch=scratch, shown=shown)
     else:
         sandbox = Unsandboxed(workspace)
     # Where one call runs once its ask to leave the sandbox is approved: only
@@ -429,7 +436,7 @@ def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options)
     first message's. `options` go to make_session and win over these."""
     log = log if log is not None else Log(paths.sessions / f"{sid}.jsonl")
     config = config or {}
-    limits, judge, effort = logged_settings(log.records())
+    limits, judge, effort = logged_settings(log.branch())
     if judge is None:
         judge = {
             "judge_model": config.get("judge_model"),

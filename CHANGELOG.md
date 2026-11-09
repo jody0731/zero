@@ -3,6 +3,30 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.6
+
+Rewind and fork.
+
+- **`/rewind`:** go back to before one of your messages (a list of them, newest first); its text comes
+  back in the input, to send as it is or changed. What came after is left behind: out of ZERO's
+  context, kept in the log. ZERO reads a note in its place: your messages there, the calls that ran
+  (by tool), the files its file tools wrote and the jobs still running from there, and that files and
+  memory stay as they are. The conversation goes back, not the machine. Not while a turn runs or
+  waits, a message waits in line, or a rounds run is open. A mode, model or folder you changed on the
+  part left behind stays as you left it.
+- **`/fork`:** a new session from this one's conversation, up to one of your messages or all of it, in
+  the same folder with the same mode and model; marked "(fork)" in the list. Its first call starts from
+  the server's cache, as the session it came from would; ZERO reads a note saying whose fork it is,
+  that files and memory are shared, and, when that session had gone on past the point, what it did
+  there. The session it came from goes on untouched.
+- **A job's notice from a part left behind** still comes, saying it started there.
+- **Session search** marks what it finds on a part left behind, and finds a fork's copied records once,
+  in the session that wrote them.
+- **`zero session rewind ID [SEQ]`** and **`zero session fork ID [SEQ]`** (no SEQ: your messages to pick
+  from; for a fork, all of it).
+- **Your sessions:** old logs read as they are and stay unchanged; the state database gains two
+  columns in place (`sessions.parent`, `jobs.started_from_seq`).
+
 ## 0.6.5
 
 Session search.

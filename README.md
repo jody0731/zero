@@ -32,6 +32,7 @@
 - **Long sessions keep going:** near its line (the model's context window, or the one you set), a session's context is compacted: older outputs are saved to files, then ZERO writes itself a handoff. Nothing ZERO reads has a fixed cap: a long result past its share of the room is saved whole, and ZERO reads its start and end and where the rest is.
 - **Long work in rounds:** leave ZERO a long job (or send it with `--rounds`) and it works in rounds, each a turn that starts fresh from the last one's handoff, until its done check passes, it is stuck, or its budget is spent. Nothing in a round waits on you: you approve the budget at the start and read the report at the end. Every other turn runs under a budget of time and dollars (2 h and $2.00 unless you set another); past it, ZERO asks you, in every mode, never the judge.
 - **Session search:** ZERO searches what every session's log holds, running or done (your messages, its replies, each command with its output, the handoffs), by its words, and reads the records near a match; so does `zero session search`.
+- **Rewind and fork:** `/rewind` goes back to before one of your messages, its text put back in the input to send as it is or changed; what came after is left behind, kept in the log, and ZERO reads a note of what it held (your messages, the calls that ran, the files written and the jobs still running there). Files and memory stay as they are: the conversation goes back, not the machine. `/fork` starts a new session from the conversation up to one of your messages, or all of it, in the same folder; it starts from the server's cache, as the session it came from would.
 - **A fallback model:** when the session's model fails, the turn goes on with the one you set (`fallback_model`).
 - **It trusts the model:** what the model reads states facts, never guardrails; the limits live in code; it is built for the models to come.
 
@@ -96,7 +97,7 @@ zero -r              # the session list (--resume)
 zero -p "a question" # one question, for scripts (--print)
 ```
 
-Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's model and its thinking; `/compact` compacts the session's context now; `/settings` sets this session, what new sessions start with, the theme, the models and keys and the key bindings, and in **Advanced…** the judge, the limits (**Compact at (tokens)** among them) and the server. The status line shows the context's size against its line and the share of the last call the server's cache served, as `context 42k/1M · cache 96%`.
+Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's model and its thinking; `/compact` compacts the session's context now; `/rewind` and `/fork` go back to one of your messages; `/settings` sets this session, what new sessions start with, the theme, the models and keys and the key bindings, and in **Advanced…** the judge, the limits (**Compact at (tokens)** among them) and the server. The status line shows the context's size against its line and the share of the last call the server's cache served, as `context 42k/1M · cache 96%`.
 
 ### CLI
 
@@ -106,6 +107,8 @@ Everything a caller does has a command, named as its message: a family, then the
 zero session send "a task" --cd ~/project --json   # one result object when it settles; --rounds
 zero session list                                  # read, watch, stop, continue, compact, rename, archive, delete, set
 zero session search proxy port                     # what every session's log holds; --session ID, --around N
+zero session rewind ID [SEQ]                       # back to before your message SEQ; with no SEQ, your messages
+zero session fork ID [SEQ]                         # a new session from this one, up to SEQ or all of it
 zero job list                                      # job stop JOB
 zero rounds list                                   # rounds stop ID
 zero grant list ID                                 # grant forget ID GRANT

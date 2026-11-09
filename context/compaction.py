@@ -161,7 +161,7 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens):
     tokens (the server's count where there is one). Raises
     CompactionFailed when no handoff comes back, NothingToCompact when there
     is nothing to hand off."""
-    records = session.log.records()
+    records = session.log.branch()
     before = room.measure(records, session.messages, session.tool_schemas(),
                           tokens)
     body = history.in_context(records)
@@ -252,7 +252,7 @@ def fresh(session, handoff, at, tokens=room.tokens, check=None):
     `handoff` (the round's own, from end_round); with none, the model writes
     one from the whole conversation, as a compaction's. The log keeps
     everything. Raises CompactionFailed when no handoff comes back."""
-    records = session.log.records()
+    records = session.log.branch()
     before = room.measure(records, session.messages, session.tool_schemas(),
                           tokens)
     fields = {"reason": "round", "tokens_before": before.tokens, "line": at}

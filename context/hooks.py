@@ -106,7 +106,7 @@ class Context(Hook):
         return room.line(session.settings, window)
 
     def _size(self, session):
-        return room.measure(session.log.records(), session.messages,
+        return room.measure(session.log.branch(), session.messages,
                             session.tool_schemas(), counter(session))
 
     def turn_start(self, turn):
@@ -159,7 +159,7 @@ class Context(Hook):
         if getattr(session, "compact_asked", None):
             session.compact_asked = None
             return "user"
-        for record in reversed(session.log.records()):
+        for record in reversed(session.log.branch()):
             if record["type"] in ("compaction", "compaction_failed", "system",
                                   "session"):
                 return None

@@ -73,7 +73,7 @@ class Session:
         # What the model reads of the code (its tools, the system message's
         # parts), as a short hash; None: never checked
         self.code_mark = code_mark
-        records = log.records()
+        records = log.branch()
         self.prompt_tokens = 0
         if records:
             self.restore(log)
@@ -94,7 +94,7 @@ class Session:
         on: `why` is "model" (a switch) or "code" (new code)."""
         self.write("system", system_prompt=self.system_text(), why=why,
                    **self.marked())
-        self.messages = history.replay(self.log.records())
+        self.messages = history.replay(self.log.branch())
 
     def compact(self, reason, handoff=None):
         """A compaction now, between turns: what the hooks' crashes say when
@@ -114,8 +114,27 @@ class Session:
         message as things stand now, and take the context it leaves."""
         record = self.write("compaction", system_prompt=self.system_text(),
                             **self.marked(), **fields)
-        self.messages = history.replay(self.log.records())
+        self.messages = history.replay(self.log.branch())
         return record
+
+    def rewind(self, seq, session_id=None):
+        """Go back to before the user's message `seq`, one that starts a turn
+        on the current branch: a `rewind` record whose parent is the record
+        before it, its note saying what it leaves behind (core/history.py's
+        rewind_note, with what the `rewound` hooks add), and the context the
+        branch now holds. Files and memory stay as they are: the harness
+        undoes nothing. `session_id`: the server's id for the session, which
+        the note names. Returns (the record, the part left behind)."""
+        parent, left = history.left_behind_by(self.log.branch(), seq)
+        extra = self.hooks.collect("rewound", self, left)
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        record = self.write(
+            "rewind", parent=parent["seq"], left_from=left[0]["seq"],
+            left_to=left[-1]["seq"],
+            text=history.rewind_note(now, left, extra, session_id),
+        )
+        self.messages = history.replay(self.log.branch())
+        return record, left
 
     def tool_schemas(self):
         """The tools as this session tells them: bash's says its timeout."""
@@ -123,7 +142,7 @@ class Session:
 
     def restore(self, log):
         """Restore the logged prompt and messages without rebuilding hooks."""
-        records = log.records()
+        records = log.branch()
         if not records or log_format(records) != LOG_FORMAT:
             raise OldLog("This session needs a log upgrade before it can run")
         self.log = log
@@ -156,12 +175,12 @@ class Session:
         return record
 
     def open_turn(self, text, inbox=None, source=None, control=None,
-                  continued=False, rounds=False):
+                  continued=False, rounds=False, started_from_seq=None):
         """`continued`: the turn is a server's `continue`, its text a
         harness note the user asked for, not words they typed. `rounds`: the
         user sent it to be worked on in rounds (rounds/hooks.py tells the
         model)."""
-        records = self.log.records()
+        records = self.log.branch()
         if not records:
             fields = self.session_record()
             self.messages = []
@@ -176,6 +195,9 @@ class Session:
             fields["inbox"] = inbox
         if source is not None:
             fields["source"] = source
+        if started_from_seq is not None:
+            # The record a notice's sender started from
+            fields["started_from_seq"] = started_from_seq
         if continued:
             fields["continue"] = True
         if rounds:
@@ -207,7 +229,7 @@ class Session:
 
     def resume(self, inbox=None, control=None):
         """Repair an unfinished turn, returning it ready for run()."""
-        records = history.unfinished_turn(self.log.records())
+        records = history.unfinished_turn(self.log.branch())
         if not records:
             raise ValueError("no open turn to resume")
         user = records[0]
@@ -220,11 +242,11 @@ class Session:
             extra = self.hooks.collect("resumed", self, records)
             text = history.restart_note(records, extra=extra)
             self.close_dangling_calls(history.UNKNOWN, "unknown")
-            lost = history.lost_reply(self.log.records())
+            lost = history.lost_reply(self.log.branch())
             if lost is not None:
                 self.write_reply(lost)
             self.write("note", kind="restarted", text=text)
-        self.back_to_main(self.log.records())
+        self.back_to_main(self.log.branch())
         number = max((r.get("step", 0) for r in records), default=0)
         turn = Turn(
             self, user["text"], user.get("inbox"), user.get("source"), number,
@@ -388,10 +410,18 @@ class Session:
 
     def fitted(self, fields):
         """A user record's fields, a notice's text fitted by the hooks first
-        (one past its share goes to a file)."""
+        (one past its share goes to a file), and marked `left_behind` when the
+        record its sender started from (`started_from_seq`) is off the current branch:
+        a rewind left it behind."""
         if not history.is_notice(fields):
             return fields
-        return {**fields, "text": self.hooks.pipe("notice", fields["text"], self)}
+        fields = {**fields, "text": self.hooks.pipe("notice", fields["text"], self)}
+        started_from = fields.get("started_from_seq")
+        if started_from is not None and started_from not in {
+            record["seq"] for record in self.log.branch()
+        }:
+            fields["left_behind"] = True
+        return fields
 
     def call_model(self, step):
         """One streamed model call (core/llm.py, complete), on every path with
@@ -471,7 +501,7 @@ class Session:
         `fields`: ask (its id), yes (a plain yes, from the consent check), inbox,
         source, text, consent (the check's verdict or None).
         """
-        records = self.log.records()
+        records = self.log.branch()
         ask = history.parked_ask(records)
         if ask is None or ask["ask"] != fields["ask"]:
             raise ValueError(f"no open ask {fields['ask']!r} in this session")
@@ -582,7 +612,7 @@ class Session:
         A call interrupted while running already got its own result in execute;
         the calls left on Ctrl+C never started.
         """
-        records = history.unfinished_turn(self.log.records())
+        records = history.unfinished_turn(self.log.branch())
         for fields in history.closing_results(records, result, closed):
             self.write("tool", **fields)
 

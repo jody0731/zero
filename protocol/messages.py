@@ -210,6 +210,38 @@ MESSAGES = {
         reply={"compacting": {"type": "string",
                               "enum": ["now", "before_next_step"]}},
     ),
+    "session/user_messages": message(
+        "The user's own messages on a session's current branch that start a "
+        "turn, newest first: where a rewind or a fork begins.",
+        {"session": SESSION}, required=("session",),
+        reply={"messages": rows("seq, time and text of each")},
+    ),
+    "session/rewind": message(
+        "Go back to before one of the user's messages: what came after it is "
+        "left behind, kept in the log, and the files and memory stay as they "
+        "are. Refused while a turn runs or waits.",
+        {"session": SESSION,
+         "seq": {**INTEGER, "description": "the user's message's seq, one of "
+                 "session/user_messages'"}},
+        required=("session", "seq"),
+        reply={"rewind": {**OBJECT, "description": "the rewind's record"},
+               "text": {**STRING, "description": "the message's text, for "
+                        "the input"}},
+    ),
+    "session/fork": message(
+        "A new session from a session's conversation, up to before one of the "
+        "user's messages or all of it, its records copied as they are; the "
+        "same workspace, mode and model. The session goes on untouched.",
+        {"session": SESSION,
+         "seq": {**INTEGER, "description": "the user's message's seq, one of "
+                 "session/user_messages'; none: all of the conversation, its "
+                 "last turn ended"},
+         "source": SOURCE},
+        required=("session",),
+        reply={"session": {**OBJECT, "description": "the new session's row"},
+               "text": {**STRING, "description": "the message's text, for "
+                        "the new session's input; empty for all of it"}},
+    ),
     "session/set": message(
         "Change a session's mode, model, workspace, thinking effort or judge "
         "from its next turn.",

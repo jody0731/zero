@@ -221,6 +221,40 @@ MESSAGES = {
         required=("session",),
         reply={"set": OBJECT, "next_turn": BOOLEAN},
     ),
+    "session/search": message(
+        "Search what every session's log holds, running or done: with query "
+        "alone, the sessions whose records match, best first, each with its "
+        "best record; with query and session, that session's matching "
+        "records; with session and around, the records near one, whole.",
+        {
+            "query": {**STRING, "description": "words a record holds, each "
+                      "whole; OR, \"a phrase\" and word* as FTS5 reads them"},
+            "session": {**STRING, "description": "a session's id or the start "
+                        "of it"},
+            "around": {**INTEGER, "description": "a record's seq in that "
+                       "session"},
+            "count": {**INTEGER, "description": "how many sessions, or "
+                      "records, at most (10); with no query, how many on each "
+                      "side (5)"},
+        },
+        reply={
+            "query": maybe(STRING),
+            "session": {**OBJECT, "description": "the session searched or "
+                        "read: id, title, workspace, state, mode, archived, "
+                        "updated_at"},
+            "sessions": rows("the matching sessions, best first: a session's "
+                             "fields, record_count and its best record"),
+            "records": rows("records: seq, kind (user, notice, reply, call, "
+                            "handoff), a call's tool or a notice's source, "
+                            "time, and a snippet (a match marked « ») or, near "
+                            "around, the whole text"),
+            "session_count": INTEGER, "record_count": INTEGER,
+            "matched_by": {**one_of("every word", "any word"),
+                           "description": "what the records hold: every word, "
+                           "or, when no record does, any of them"},
+            "around": INTEGER, "earlier_count": INTEGER, "later_count": INTEGER,
+        },
+    ),
     "job/list": message(
         "A session's background jobs, ended ones too; with none, every "
         "running job.",

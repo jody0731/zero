@@ -3,6 +3,28 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.5
+
+Session search.
+
+- **ZERO searches its sessions:** a new tool, `session_search`, searches what every session's log holds,
+  running or done, this one included: your messages, notices, ZERO's replies (not its thinking), each
+  command or tool call with its result as ZERO saw it (not its own searches, which repeat the rest),
+  and compaction handoffs. Ask "what did we find about X last week?" and ZERO looks. It gives the
+  sessions that match, best first, each with its best record; then one session's matching records;
+  then the records near one, whole.
+  - A record matches when it holds every word, each whole, case and accents aside; when none does, the
+    records holding any of the words come instead, and the reply says so. `OR` between words finds any,
+    `"a phrase"` a phrase, `word*` the words that start with it.
+  - The session that searches comes after the others: its own question always matches.
+  - It reads ZERO's own records and changes nothing, so it runs unasked in every mode, readOnly too.
+- **`zero session search WORDS`:** the same search for you and other agents, with `--session ID`,
+  `--around N` (the records near record N; `--session` alone reads its first ones), `--count N` and
+  `--json`; its lines are `session list`'s, each with its best record.
+- **The index** is `~/.zero/state/session_search.sqlite`, made from the logs at the first search and
+  caught up at each one; the logs stay the record, so a missing or broken index is made again. Nothing
+  else in `~/.zero` changes.
+
 ## 0.6.4.1
 
 Notices labelled once.

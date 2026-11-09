@@ -31,6 +31,7 @@
 - **One server:** it runs every session. Turns, background jobs and waiting questions go on after the terminal closes, and every app reaches the server the same way.
 - **Long sessions keep going:** near its line (the model's context window, or the one you set), a session's context is compacted: older outputs are saved to files, then ZERO writes itself a handoff. Nothing ZERO reads has a fixed cap: a long result past its share of the room is saved whole, and ZERO reads its start and end and where the rest is.
 - **Long work in rounds:** leave ZERO a long job (or send it with `--rounds`) and it works in rounds, each a turn that starts fresh from the last one's handoff, until its done check passes, it is stuck, or its budget is spent. Nothing in a round waits on you: you approve the budget at the start and read the report at the end. Every other turn runs under a budget of time and dollars (2 h and $2.00 unless you set another); past it, ZERO asks you, in every mode, never the judge.
+- **Session search:** ZERO searches what every session's log holds, running or done (your messages, its replies, each command with its output, the handoffs), by its words, and reads the records near a match; so does `zero session search`.
 - **A fallback model:** when the session's model fails, the turn goes on with the one you set (`fallback_model`).
 - **It trusts the model:** what the model reads states facts, never guardrails; the limits live in code; it is built for the models to come.
 
@@ -104,6 +105,7 @@ Everything a caller does has a command, named as its message: a family, then the
 ```bash
 zero session send "a task" --cd ~/project --json   # one result object when it settles; --rounds
 zero session list                                  # read, watch, stop, continue, compact, rename, archive, delete, set
+zero session search proxy port                     # what every session's log holds; --session ID, --around N
 zero job list                                      # job stop JOB
 zero rounds list                                   # rounds stop ID
 zero grant list ID                                 # grant forget ID GRANT
@@ -166,7 +168,7 @@ git -C ~/Applications/zero checkout --detach \
 | Path | What it holds |
 | --- | --- |
 | `~/Applications/zero/` | the code (this repository) and its `.venv/` |
-| `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), and in `state/` the sessions and their history (`state/sessions/results/` holds the outputs kept out of a session's context) |
+| `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), and in `state/` the sessions and their history (`state/sessions/results/` holds the outputs kept out of a session's context; `state/session_search.sqlite`, the search's index, is made again from the logs whenever it's gone) |
 
 ## Uninstall
 

@@ -306,6 +306,14 @@ class Connection:
         fields = {} if session is None else {"session": session}
         return self.call(build("job/list", **fields))["jobs"]
 
+    def search(self, query=None, session=None, around=None, count=None):
+        """What every session's log holds (session/search): the reply."""
+        given = {"query": query, "session": session, "around": around,
+                 "count": count}
+        fields = {name: value for name, value in given.items()
+                  if value is not None}
+        return self.call(build("session/search", **fields))
+
     def watch(self, session, after=0):
         return self.stream(build("session/watch", session=session, after=after))
 

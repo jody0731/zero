@@ -6,6 +6,7 @@ A message only a screen needs has no command; NO_COMMAND says why.
         [--json | --events]
     zero session list [--archived | --all] [--cd DIR] [--watch]
     zero session read ID · watch ID · stop ID · continue ID
+    zero session search [WORDS] [--session ID] [--around N] [--count N]
     zero session rename ID TITLE · archive ID · unarchive ID · delete ID
     zero session set ID [--mode M] [--model M] [--cd DIR] [--thinking-effort E]
         [--judge-model M] [--judge-thinking-effort E]
@@ -357,6 +358,24 @@ def parser(prog="zero"):
     read.add_argument("--before", type=int, metavar="SEQ")
     json_flag(read)
     read.set_defaults(handler=read_command)
+    search = actions.add_parser(
+        "search", help="what every session's log holds: the sessions that "
+                       "match, best first",
+    )
+    search.add_argument("query", metavar="WORDS", nargs="*",
+                        help="words a record holds, each whole; OR, \"a "
+                             "phrase\" and word* as FTS5 reads them")
+    search.add_argument("--session", metavar="ID",
+                        help="only this session's records (its id or the "
+                             "start of it)")
+    search.add_argument("--around", type=int, metavar="N",
+                        help="with --session: the records near record N, "
+                             "whole; --session alone: its first ones")
+    search.add_argument("--count", type=int, metavar="N",
+                        help="how many sessions, or records, at most (10); "
+                             "with no words, how many on each side (5)")
+    json_flag(search)
+    search.set_defaults(handler=search_command)
     watch = actions.add_parser(
         "watch", help="a session's records, then each new one, until Ctrl+C",
     )
@@ -570,6 +589,69 @@ def read_command(connection, args, out):
     text = history_text(info, reply["records"], runs_with=reply.get("runs_with"),
                         context=reply.get("context"))
     return print_reply(args, out, reply, text)
+
+
+def search_command(connection, args, out):
+    query = " ".join(args.query) or None
+    reply = connection.search(query=query, session=args.session,
+                              around=args.around, count=args.count)
+    return print_reply(args, out, reply, search_text(reply))
+
+
+def search_text(reply):
+    """A search's reply as lines: the sessions as `session list` shows them,
+    each with its best record; or one session's records."""
+    if "around" in reply:
+        lines = []
+        for record in reply.get("records", []):
+            lines += [f"#{record['seq']}  {clock_of(record['time'])}  "
+                      f"{record_kind(record)}", record["text"], ""]
+        return "\n".join(lines).rstrip() or "No records to show."
+    lines = []
+    if reply.get("matched_by") == "any word":
+        lines.append("(No record has every word; these have any of them.)")
+    if "sessions" in reply:
+        for info in reply["sessions"]:
+            count = info.get("record_count", 0)
+            lines.append(list_sessions(None, [info])
+                         + f"  ({count} record{'' if count == 1 else 's'})")
+            if info.get("best"):
+                lines.append(f"  {hit_line(info['best'])}")
+        if not reply["sessions"]:
+            return no_match(reply)
+        total = reply.get("session_count", len(reply["sessions"]))
+        if total > len(reply["sessions"]):
+            lines.append(f"(the first {len(reply['sessions'])} of {total})")
+        return "\n".join(lines)
+    if not reply.get("records"):
+        return no_match(reply)
+    lines += [hit_line(record) for record in reply["records"]]
+    return "\n".join(lines)
+
+
+def no_match(reply):
+    if reply.get("matched_by") == "any word":
+        return "No record has any of the words."
+    return "No record has every word."
+
+
+def clock_of(time):
+    return str(time or "")[:16].replace("T", " ")
+
+
+def record_kind(record):
+    """Whose a record is, in a word or two."""
+    if record["kind"] == "call":
+        return f"{record.get('tool', '')} call"
+    if record["kind"] == "notice":
+        return f"notice from {record.get('source', '')}"
+    return {"user": "you", "reply": NAME, "handoff": "handoff"}[record["kind"]]
+
+
+def hit_line(record):
+    snippet = " ".join(str(record.get("snippet") or "").split())
+    return (f"#{record['seq']}  {clock_of(record['time'])}  "
+            f"{record_kind(record)}  {snippet}")
 
 
 def watch_command(connection, args, out):

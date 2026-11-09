@@ -41,6 +41,7 @@ import permissions.tool
 import web.tool
 import context.tool
 import rounds.tool
+import session_search.tool
 from core import history
 from core.asking import PARK
 from core.loop import Session
@@ -58,6 +59,7 @@ from limits.repeats import RepeatGuard
 from rounds import SETTINGS as ROUND_SETTINGS
 from rounds.hooks import Budget, Rounds
 from rounds.service import RoundsService
+from session_search.service import SessionSearchService
 from jobs import SETTINGS as JOB_SETTINGS
 from jobs.service import JobsService
 from jobs.hooks import JobLimit, RunningJobs
@@ -494,4 +496,5 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
             return Consent(Model(model, timeout=config()["consent_silence_seconds"]))
 
     return [JobsService(tick=tick), PermissionsService(make_consent, saved_permissions),
-            ModelService(), ContextService(), RoundsService()]
+            ModelService(), ContextService(), RoundsService(),
+            SessionSearchService()]

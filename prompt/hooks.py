@@ -21,9 +21,22 @@ FORKED = (
     "from that conversation up to here. The conversation above is a copy of "
     "that session's, its record numbers kept, and session_search finds it "
     "there. From here on the two go their own ways. The workspace, its "
-    "files and memory are shared with it; jobs started above belong to that "
-    "session, and their notices go there.{scratch}{went_on}]"
+    "files and memory are shared with it; jobs and subagents started above "
+    "belong to that session, and their notices go there.{scratch}{went_on}]"
 )
+# A subagent's fork (subagents/): ZERO's copy of its parent's finished turns,
+# what differs said after the copied system message, its mode among it
+SUBAGENT_FORKED = (
+    "[ZERO started this session as a subagent of session {session} "
+    "(\"{title}\"), {when}, from a copy of that session's conversation up to "
+    "its last finished turn: the conversation above, its record numbers "
+    "kept, which session_search finds there. From here on the two go their "
+    "own ways. The workspace, its files and memory are shared with it; jobs "
+    "and subagents started above belong to that session, and their notices "
+    "go there.{mode}{scratch}]"
+)
+# In a subagent fork's note: its mode, and who answers its asks
+SUBAGENT_MODE = " This session's {line}."
 # In a fork's note, for a session with a scratch folder of its own
 FORK_SCRATCH = " This session's scratch folder, $TMPDIR, is {path}, new and empty."
 # In a fork's note, when the parent had gone on past the fork's point: its
@@ -59,7 +72,8 @@ class Environment(Hook):
 
     def turn_start(self, turn):
         """A fork's first turn: what differs from the session it came from
-        (FORKED). The scratch folder, said again when the context no longer
+        (FORKED; a subagent's, SUBAGENT_FORKED, with its mode). The scratch
+        folder, said again when the context no longer
         names the one the session has: after a restart."""
         session = turn.session
         private_tmp = getattr(self.sandbox, "private_tmp", None)
@@ -70,13 +84,21 @@ class Environment(Hook):
         if fork and not any(r.get("kind") == "forked" and r["seq"] > fork["seq"]
                             for r in session.log.branch()):
             scratch = FORK_SCRATCH.format(path=path) if path else ""
-            went = fork.get("went_on")
-            went_on = FORK_WENT_ON.format(**went) if went else ""
-            session.write("note", kind="forked", text=FORKED.format(
-                session=fork["session"], title=fork["title"],
-                when=history.when(fork["time"]), scratch=scratch,
-                went_on=went_on,
-            ))
+            if fork.get("started_by") == "zero":
+                text = SUBAGENT_FORKED.format(
+                    session=fork["session"], title=fork["title"],
+                    when=history.when(fork["time"]), scratch=scratch,
+                    mode=SUBAGENT_MODE.format(line=self.mode) if self.mode else "",
+                )
+            else:
+                went = fork.get("went_on")
+                went_on = FORK_WENT_ON.format(**went) if went else ""
+                text = FORKED.format(
+                    session=fork["session"], title=fork["title"],
+                    when=history.when(fork["time"]), scratch=scratch,
+                    went_on=went_on,
+                )
+            session.write("note", kind="forked", text=text)
             return
         if path is None:
             return

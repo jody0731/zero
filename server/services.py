@@ -54,6 +54,10 @@ class Service:
     def session_built(self, sid, session):
         """A harness the server built for this session."""
 
+    def turn_ended(self, sid, outcome):
+        """A turn of the session ended (its turn_end written) or parked on
+        an ask (outcome "waiting"), its row settled."""
+
     def refuse_delete(self, sid):
         """Why the session can't be deleted now, or None."""
         return None

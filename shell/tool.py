@@ -34,7 +34,7 @@ NOT_MOVED = (
 )
 
 
-def describe(limits):
+def describe(limits, context=None):
     """bash's description, with the session's timeout; without a session's
     limits (the registry's own copy), the timeout isn't a number yet."""
     timeout = limits.get("bash_foreground_seconds")

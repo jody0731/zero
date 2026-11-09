@@ -30,7 +30,8 @@
 - **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
 - **One server:** it runs every session. Turns, background jobs and waiting questions go on after the terminal closes, and every app reaches the server the same way.
 - **Long sessions keep going:** near its line (the model's context window, or the one you set), a session's context is compacted: older outputs are saved to files, then ZERO writes itself a handoff. Nothing ZERO reads has a fixed cap: a long result past its share of the room is saved whole, and ZERO reads its start and end and where the rest is.
-- **Long work in rounds:** leave ZERO a long job (or send it with `--rounds`) and it works in rounds, each a turn that starts fresh from the last one's handoff, until its done check passes, it is stuck, or its budget is spent. Nothing in a round waits on you: you approve the budget at the start and read the report at the end. Every other turn runs under a budget of time and dollars (2 h and $2.00 unless you set another); past it, ZERO asks you, in every mode, never the judge.
+- **Long work in rounds:** leave ZERO a long job (or send it with `--rounds`) and it works in rounds, each a turn that starts fresh from the last one's handoff, until its done check passes, it is stuck, or you stop it. ZERO states its estimate (rounds, time, dollars) and is told once if the work passes it; nothing stops at it. Nothing in a round waits on you: in default mode the judge answers what would have asked you.
+- **Subagents:** ZERO starts a subagent when it judges one fits: a session of its own under the one it works in, from a copy of the conversation so far or with its task alone, which reports back when it has finished. In default mode a subagent runs with the judge answering, its goal your words; subagents go two levels deep (a setting). Sessions message each other by id, and a message never answers a question. `usage` tells ZERO what a turn, a session and its subagents have used.
 - **Session search:** ZERO searches what every session's log holds, running or done (your messages, its replies, each command with its output, the handoffs), by its words, and reads the records near a match; so does `zero session search`.
 - **Rewind and fork:** `/rewind` goes back to before one of your messages, its text put back in the input to send as it is or changed; what came after is left behind, kept in the log, and ZERO reads a note of what it held (your messages, the calls that ran, the files written and the jobs still running there). Files and memory stay as they are: the conversation goes back, not the machine. `/fork` starts a new session from the conversation up to one of your messages, or all of it, in the same folder; it starts from the server's cache, as the session it came from would.
 - **A fallback model:** when the session's model fails, the turn goes on with the one you set (`fallback_model`).
@@ -114,7 +115,7 @@ zero rounds list                                   # rounds stop ID
 zero grant list ID                                 # grant forget ID GRANT
 zero model server list                             # probe, connect, disconnect
 zero model features MODEL                          # what it honours of its API; --test
-zero setting set standing_budget_minutes 240       # setting list
+zero setting set max_subagent_depth 1             # setting list
 zero server status                                 # whether the server runs and what keeps it busy
 ```
 

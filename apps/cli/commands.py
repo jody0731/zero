@@ -50,7 +50,7 @@ from pathlib import Path
 from client import render, session_list
 from client.connection import NotRunning, ProtocolError
 from client.render import duration, jobs_text
-from client.result import CHOICES, Result
+from client.result import CHOICES, Result, still_running_line
 
 NAME = "ZERO"
 # The families main.py hands here; `server` is main.py's own
@@ -229,6 +229,9 @@ def follow(connection, sid, after, args, out):
                     out("(nothing ran)")
                 else:
                     out(ending(result.last))
+                line = still_running_line(result.still_running)
+                if line:
+                    out(line)
             return result.exit_code()
     raise NotRunning("ZERO's watch ended before the session settled")
 
@@ -312,8 +315,7 @@ def send_flags(parser):
                         help="answer the waiting question with one of its "
                              "choices")
     parser.add_argument("--rounds", action="store_true",
-                        help="work on it in rounds: ZERO's estimate of the "
-                             "budget comes to you")
+                        help="work on it in rounds")
     follow_flags(parser)
 
 

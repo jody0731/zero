@@ -111,7 +111,7 @@ def search_ready(context):
     return net is not None and net.search is not None
 
 
-def search_describe(limits):
+def search_describe(limits, context=None):
     return (
         "Search the web through DeepSeek's Search API. Each result has its title, "
         "URL, date, site and a summary of the page. The query takes operators: "

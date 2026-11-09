@@ -11,12 +11,15 @@ server/main.py hands the server kernel: how it makes a session
 
 A mode (permissions/modes.py) picks the sandbox and who decides an ask. The
 judge never asks the user. With nobody there to ask (evals, tests: ask=None)
-the user's asks are refused. The evals' server (dev/evalkit/) hands each session
-its own box, the shipped SOUL.md and no saved permissions, and a budget of
-its own. In every mode a turn runs under its budget (rounds/hooks.py): past
-the standing amount (2 h, $2.00) its next call asks the user to go on, never
-the judge; wherever anything asks, an 11th running job asks too. Who ZERO
-and the user are comes from SOUL.md and ZERO.md (prompt/), never from here.
+the user's asks are refused. Work nobody watches raises the approver, never
+the sandbox (6.7): a subagent ZERO started runs default as auto
+(`unattended`), and in default a round's asks go to the judge
+(DefaultApproval); readOnly is never raised. The evals' server (dev/evalkit/)
+hands each session its own box, the shipped SOUL.md and no saved
+permissions, and keeps its own clock. No limit stops a turn's spend: ZERO's
+estimate is its yardstick (usage/, principle 3). Wherever anything asks, an
+11th running job asks too. Who ZERO and the user are comes from SOUL.md and
+ZERO.md (prompt/), never from here.
 `session_hooks` is a function, not a list, because hooks keep state per session.
 Order in the list matters for system-prompt text, and for a note one hook
 sets before another reads it (the permissions memory's `granted`, read by
@@ -41,6 +44,8 @@ import permissions.tool
 import web.tool
 import context.tool
 import rounds.tool
+import subagents.tool
+import usage.tool
 import session_search.tool
 from core import history
 from core.asking import PARK
@@ -56,9 +61,12 @@ from context.hooks import Context
 from context.results import folder_of
 from context.service import ContextService
 from limits.repeats import RepeatGuard
-from rounds import SETTINGS as ROUND_SETTINGS
-from rounds.hooks import Budget, Rounds
+from rounds.hooks import Rounds, running_round
 from rounds.service import RoundsService
+from subagents import SETTINGS as SUBAGENT_SETTINGS
+from subagents.hooks import PastEstimate
+from subagents.service import SubagentsService
+from usage.spend import SessionUse
 from session_search.service import SessionSearchService
 from jobs import SETTINGS as JOB_SETTINGS
 from jobs.service import JobsService
@@ -73,13 +81,15 @@ from judge.hooks import JudgeApproval
 from judge.verdict import Judge
 from permissions import SETTINGS as PERMISSION_SETTINGS
 from permissions.approval import (
-    READ_ONLY, UserApproval, PermissionAsks, Refuse, ask_user,
+    READ_ONLY, DefaultApproval, UserApproval, PermissionAsks, Refuse, ask_user,
 )
 from permissions.asks import Asks, AskWhen
 from permissions.consent import Consent
 from permissions.grants import GrantCheck
 from permissions.service import PermissionsService
-from permissions.modes import JUDGED, MODES, UNSANDBOXED, answers_line, canonical
+from permissions.modes import (
+    JUDGED, MODES, UNSANDBOXED, answers_line, canonical, raised,
+)
 from limits.stops import BrokenReplyLimit
 from prompt.hooks import Environment
 from prompt.instructions import PROJECT_FILE, read, system_prompt, user_instructions
@@ -96,24 +106,24 @@ from sandbox.sandbox import (
 # and the view lists them as here
 SETTINGS_ORDER = (
     "mode", "model", "fallback_model", "thinking_effort", "judge_model",
-    "judge_thinking_effort", "standing_budget_minutes", "standing_budget_dollars",
-    "max_jobs", "bash_foreground_seconds", "web_timeout", "compact_at_tokens",
+    "judge_thinking_effort", "max_jobs", "max_subagent_depth",
+    "bash_foreground_seconds", "web_timeout", "compact_at_tokens",
     "model_silence_seconds", "judge_silence_seconds", "judge_reply_tokens",
     "judge_retries", "judge_output_chars", "model_retries", "model_retry_seconds",
     "max_broken_replies", "server_idle_minutes", "consent_silence_seconds",
 )
 settings.add(
-    *MODEL_SETTINGS, *LIMIT_SETTINGS, *ROUND_SETTINGS, *CONTEXT_SETTINGS,
-    *JOB_SETTINGS,
+    *MODEL_SETTINGS, *LIMIT_SETTINGS, *CONTEXT_SETTINGS,
+    *JOB_SETTINGS, *SUBAGENT_SETTINGS,
     *SHELL_SETTINGS,
     *FILE_SETTINGS, *WEB_SETTINGS, *JUDGE_SETTINGS, *PERMISSION_SETTINGS,
     order=SETTINGS_ORDER,
 )
 
 # A session's limits at their defaults, from the services' settings, their one
-# home: the standing amount a turn spends before asking, compact_at_tokens
-# (None: the model's window), the model's and judge's silence, the judge's
-# ceiling, retries, and bash's time
+# home: the running jobs before another asks, how deep subagents go,
+# compact_at_tokens (None: the model's window), the model's and judge's
+# silence, the judge's ceiling, retries, and bash's time
 DEFAULT_LIMITS = settings.default_limits()
 HERE = Path(__file__).resolve().parent
 # The files whose code writes the system message: a change in one, or in the
@@ -150,30 +160,34 @@ def session_hooks(
     saved=None,
     own=None,
     results=None,
-    end_at_budget=False,
+    runs_as=None,
 ):
     """`outside`: where a call let out of the sandbox runs; None if it can't.
     `saved`: the user's saved permissions (permissions/grants.py), None for
     none. `own`: what the session knows of ZERO's own files (memory/), None
     where the memory tool isn't offered. `results()`: the session's results
-    folder (context/results.py). `end_at_budget`: a turn past its budget ends
-    rather than ask (the evals, where nobody answers)."""
+    folder (context/results.py). `runs_as`: the mode whose approver answers,
+    where nobody watches the session (a subagent ZERO started: permissions'
+    `raised`); None for `mode` itself. `judge`: the judge, which in default
+    answers only a round's asks."""
     mode = canonical(mode)
-    spec = MODES[mode]
-    hooks = [Environment(sandbox, answers_line(mode))]
+    runs_as = canonical(runs_as or mode)
+    spec = MODES[runs_as]
+    hooks = [Environment(sandbox, answers_line(mode, runs_as))]
     if own is not None:
         hooks.append(own)
     hooks += [
         ModelRetry(limits["model_retries"], limits["model_retry_seconds"]),
+        # After Context: a turn's second compaction is told of rounds
         Context(server.context_window, results),
-        # After Context: a turn's second compaction is told of rounds; a
-        # round refuses what would ask the user, where the user answers asks
-        Rounds(asks_user=spec.decides in ("user", None)),
+        Rounds(),
+        # A subagent's use against the estimate it was started with
+        PastEstimate(),
     ]
     # The permissions memory where someone answers asks; before the
     # repeat guard, which lets a granted call through
     if spec.decides in ("user", "judge", "every call"):
-        hooks.append(GrantCheck(saved, judged=mode in JUDGED))
+        hooks.append(GrantCheck(saved, judged=runs_as in JUDGED))
     hooks += [
         RepeatGuard(),
         BrokenReplyLimit(limits["max_broken_replies"]),
@@ -185,18 +199,16 @@ def session_hooks(
     # The jobs' soft cap asks wherever anything asks
     if spec.decides is not None:
         hooks.append(JobLimit())
-    # The budget is the user's in every mode, and asks before the approvers,
-    # so its question is the one put (with any other the call has)
-    hooks.append(Budget(limits["standing_budget_minutes"],
-                        limits["standing_budget_dollars"],
-                        None if end_at_budget else ask))
     if spec.decides == "nobody":
         hooks.append(Refuse(READ_ONLY))
-    # With nobody to ask, the user's asks are refused
-    elif spec.decides == "user" and ask is None:
-        hooks.append(Refuse())
     elif spec.decides == "user":
-        hooks.append(UserApproval(ask))
+        # The user answers, or nobody there refuses; in a round, nobody
+        # watches, and the judge answers instead
+        user = UserApproval(ask) if ask is not None else Refuse()
+        hooks.append(DefaultApproval(
+            user, JudgeApproval(judge),
+            lambda turn: running_round(turn) is not None,
+        ))
     elif spec.decides in ("judge", "every call"):
         # auto+ has no rules: what needs permission asks
         if spec.decides == "every call":
@@ -208,6 +220,20 @@ def session_hooks(
         hooks.append(Asks(every_mode=True))
         hooks.append(UserApproval(ask) if ask is not None else Refuse())
     return hooks
+
+
+class LazyJudge:
+    """A judge made at its first use: default's, which answers only in a
+    round, so a session that never works in rounds never makes one."""
+
+    def __init__(self, make):
+        self._make = make
+        self._judge = None
+
+    def __getattr__(self, name):
+        if self._judge is None:
+            self._judge = self._make()
+        return getattr(self._judge, name)
 
 
 def make_session(
@@ -232,10 +258,10 @@ def make_session(
     scratch=None,
     fallback_model=None,
     fallback_client=None,
-    end_at_budget=False,
+    unattended=False,
 ):
-    """A session on the chat profile, its turns under the budget `limits`
-    sets (old names, max_seconds among them, read as they are now).
+    """A session on the chat profile, with the limits `limits` sets (old
+    names read as they are now).
 
     `log`: the session's log (the server's); else a new one named in `folder`
     (tests, the evals' scripts).
@@ -269,13 +295,14 @@ def make_session(
     `fallback_model`: what a turn goes on with when the session's model
     fails past its retries, and what a judge whose model fails asks; None
     for none. `fallback_client`: its client (tests).
-    `end_at_budget`: a turn past its budget ends rather than ask the user
-    (the evals' server, where nobody answers).
+    `unattended`: nobody watches the session (a subagent ZERO started), so
+    it runs as its mode raised: default as auto, the sandbox kept.
     """
     if workspace is None:
         raise ValueError("a session needs a workspace")
     mode = canonical(mode)
     spec = MODES[mode]
+    runs_as = raised(mode) if unattended else mode
     limits = {**DEFAULT_LIMITS, **current_names(limits or {})}
     server, _ = resolve(model)
     if log is None and folder is None:
@@ -330,7 +357,7 @@ def make_session(
         }
         own = ZeroFilesGuard(own_files, found.others, sandbox.workspace)
     judge = None
-    if mode in JUDGED:
+    if runs_as in JUDGED or runs_as == "default":
         # Its view of a long session takes half its model's window at most:
         # the rest is its prompt's, the proposed call's and its answer's
         def make_judge(name, client, fallback=None):
@@ -343,10 +370,14 @@ def make_session(
                 reply_tokens=limits["judge_reply_tokens"], fallback=fallback,
             )
 
-        spare = None
-        if fallback_model and fallback_model != (judge_model or model):
-            spare = make_judge(fallback_model, fallback_client)
-        judge = make_judge(judge_model or model, judge_client, spare)
+        def the_judge():
+            spare = None
+            if fallback_model and fallback_model != (judge_model or model):
+                spare = make_judge(fallback_model, fallback_client)
+            return make_judge(judge_model or model, judge_client, spare)
+
+        # default's answers only in a round: made when one first asks
+        judge = the_judge() if runs_as in JUDGED else LazyJudge(the_judge)
     settings = {
         **limits,
         "server": server.name,
@@ -363,15 +394,19 @@ def make_session(
         "judge_model": judge_model,
         "judge_thinking_effort": judge_thinking_effort,
         "judge": (
-            {"model": judge.model, "effort": judge.effort} if judge else None
+            {"model": judge.model, "effort": judge.effort}
+            if runs_as in JUDGED else None
         ),
         "kept_sandbox": box is not None and mode in UNSANDBOXED,
         "can_leave_sandbox": outside is not None,
         "thinking_effort": thinking_effort,
     }
+    if runs_as != mode:
+        # The mode whose approver answers, nobody watching
+        settings["runs_as"] = runs_as
     hooks = session_hooks(
         limits, server, sandbox, mode, ask, ask_when, judge, outside,
-        saved_permissions, own, results, end_at_budget,
+        saved_permissions, own, results, runs_as,
     )
     # On a resume, the files the cut-off turn touched that changed meanwhile
     hooks.append(ChangedFiles())
@@ -387,13 +422,15 @@ def make_session(
             fallback_model, fallback_client,
             timeout=limits["model_silence_seconds"], effort=thinking_effort,
         )
-    prompt = system_prompt(found, model)
+        # What its calls cost (usage/): the log carries it, as the model's
+        settings["fallback_price"] = fallback.server.price
+    prompt = system_prompt(found, model, server.price)
 
     def rebuild():
         # The user's files and the project's, read again as they stand now
         now = (read(instructions, sandbox.workspace, most_chars)
                if instructions else None)
-        return system_prompt(now, model)
+        return system_prompt(now, model, server.price)
 
     session = Session(
         llm, hooks, prompt, session_log, settings,
@@ -404,9 +441,18 @@ def make_session(
         },
         rebuild=rebuild, code_mark=lambda: code_mark(session), fallback=fallback,
     )
+    # A fork's log opens with its parent's header, whose settings a rebuild
+    # restores: who answers this session's asks is its own, as built
+    session.settings = {**session.settings, "judge": settings["judge"]}
+    if "runs_as" in settings:
+        session.settings["runs_as"] = runs_as
+    else:
+        session.settings.pop("runs_as", None)
     # What the file tools saw, from the session's log as it stands
     # (files/seen.py)
     session.tool_context["files"] = SeenFiles(lambda: session.log)
+    # What it has used, for `usage` (a server adds its subagents')
+    session.tool_context["session_use"] = SessionUse(lambda: session)
     return session
 
 
@@ -469,7 +515,7 @@ def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options)
         options["instructions"] = user_instructions()
     return make_session(
         info["model"], log=log, mode=info["mode"], ask=ask,
-        limits=limits, **options,
+        limits=limits, unattended=info.get("started_by") == "zero", **options,
     )
 
 
@@ -504,4 +550,4 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
 
     return [JobsService(tick=tick), PermissionsService(make_consent, saved_permissions),
             ModelService(), ContextService(), RoundsService(),
-            SessionSearchService()]
+            SubagentsService(), SessionSearchService()]

@@ -178,29 +178,20 @@ RENAMED = {
 RETIRED = ("bash_output_chars", "read_chars", "web_fetch_chars",
            "web_search_results", "judge_outputs",
            # Gone since 0.6.4: a turn's budget (rounds/) in place of its steps
-           "max_steps", "extra_steps")
-
-# Settings gone since 0.6.4 whose value still reads, in another unit, under
-# a new name: the old name, the new one, and the change. max_seconds was a
-# turn's hard stop (the evals'), now the minutes a turn runs before asking,
-# which with nobody to ask ends it
-CONVERTED = {
-    "max_seconds": ("standing_budget_minutes", lambda seconds: seconds / 60),
-}
+           "max_steps", "extra_steps",
+           # Gone since 0.6.7: no limit stops a turn's spend, ZERO's own
+           # estimate its yardstick (usage/); max_seconds was read as the
+           # standing amount's minutes
+           "standing_budget_minutes", "standing_budget_dollars", "max_seconds")
 
 
 def renamed(values):
     """`values` under the settings' names as they are now; a new name beats
-    its old one where a file has both; retired ones left out, converted
-    ones in their new unit (an unset old value is left out)."""
-    out = {}
-    for old, (new, change) in CONVERTED.items():
-        if values.get(old) is not None:
-            out[new] = change(values[old])
-    out.update({RENAMED.get(name, name): value for name, value in values.items()
-                if name in RENAMED})
+    its old one where a file has both; retired ones left out."""
+    out = {RENAMED.get(name, name): value for name, value in values.items()
+           if name in RENAMED}
     out.update({name: value for name, value in values.items()
-                if name not in RENAMED and name not in CONVERTED})
+                if name not in RENAMED})
     return {name: value for name, value in out.items() if name not in RETIRED}
 
 

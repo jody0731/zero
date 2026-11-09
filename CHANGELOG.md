@@ -3,6 +3,38 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.7
+
+Subagents.
+
+- **ZERO starts subagents itself** when it judges one fits: a session of its own under the one it works
+  in, which works on a task while ZERO goes on. It starts either from a copy of the conversation so far
+  (its first call from the server's cache) or with the task alone, written in full. Its task asks it to
+  report back when it has finished, and its report arrives in ZERO's session as a notice. If it ends a
+  turn without sending its answer, the answer is passed up; if one of its turns crashes, fails or is
+  stopped, ZERO is told. A subagent may start its own, two levels deep by default (`/settings` →
+  Advanced → Limits → Subagents depth; 0 turns subagents off, and a change applies at once to every
+  session, open ones too); there's no limit on how many.
+- **Messages between sessions:** ZERO's sessions message each other by id, as notices. A message never
+  answers a question.
+- **Nobody watches a subagent:** in default mode it runs with the judge answering what would have
+  asked you, its goal your words anywhere in the session tree; other modes run as they are. Work in
+  rounds does the same: in default, a round's questions go to the judge instead of being refused.
+- **`subagents`** lists the session tree with each session's state and use, reads one's last answer,
+  and stops a turn of one below; **`usage`** says what this turn and this session have used (time,
+  tokens, the cache's share, dollars), each subagent against the estimate it was started with.
+- **No spend limit stops a turn any more:** the standing amount (2 h, $2.00) and its question are gone.
+  ZERO states an estimate when it starts rounds or a subagent, and is told once if the work passes it.
+  It knows its model's price for that: the system prompt names it (a local model "has no price").
+  Amounts under a cent read to their first two figures ($0.0017), not $0.00.
+- **The session list** marks a subagent's session "(subagent)". **`zero -p --json`** and the MCP
+  server's `zero_wait` say what still runs once a session settles (jobs, rounds, subagents), and
+  `zero -p` prints a "Still running" line.
+- **Your sessions:** the state database gains `sessions.started_by` and a subagents table; work in
+  rounds keeps its runs, their budget columns renamed to estimates (a copy of the database kept beside
+  it). Old settings for the spend limits (`standing_budget_*`, `max_seconds`, `max_steps`) are ignored
+  and dropped at the next save.
+
 ## 0.6.6
 
 Rewind and fork.

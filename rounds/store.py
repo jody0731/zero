@@ -15,14 +15,16 @@ CREATE TABLE IF NOT EXISTS rounds (
     objective TEXT NOT NULL,
     -- A command the server runs when ZERO reports done; NULL with none
     done_check TEXT,
-    -- running, waiting (its budget is spent: a new one waits on the user),
-    -- done, stuck, stopped
+    -- running, done, stuck, stopped; waiting only in a database from before
+    -- 0.6.7, where a spent budget waited on the user
     state TEXT NOT NULL,
     -- The round under way, or the last one
     round_count INTEGER NOT NULL DEFAULT 1,
-    budget_rounds INTEGER NOT NULL,
-    budget_minutes REAL NOT NULL,
-    budget_dollars REAL NOT NULL,
+    -- ZERO's estimate of the whole: rounds, minutes of its working time,
+    -- dollars at the model's price
+    estimate_rounds INTEGER NOT NULL,
+    estimate_minutes REAL NOT NULL,
+    estimate_dollars REAL NOT NULL,
     spent_minutes REAL NOT NULL DEFAULT 0,
     spent_dollars REAL NOT NULL DEFAULT 0,
     -- Rounds in a row that ended failed (a model error, a crash)
@@ -35,12 +37,22 @@ CREATE TABLE IF NOT EXISTS rounds (
     check_exit_code INTEGER,
     check_output_path TEXT,
     started_at REAL NOT NULL,
-    ended_at REAL
+    ended_at REAL,
+    -- When the work passed its estimate and ZERO was told; NULL until then
+    past_estimate_at REAL
 );
 CREATE INDEX IF NOT EXISTS rounds_session ON rounds (session, state);
 """
-# The states a run stays in while it can go on
+# The states a run stays in while it can go on (waiting: from before 0.6.7)
 OPEN = ("running", "waiting")
+# Columns renamed since a database was made (0.6.7: a budget the user
+# approved became ZERO's estimate), renamed in place when it opens
+RENAMED_COLUMNS = {"rounds": {
+    "budget_rounds": "estimate_rounds", "budget_minutes": "estimate_minutes",
+    "budget_dollars": "estimate_dollars",
+}}
+# Columns added since a database was made (0.6.7)
+ADDED_COLUMNS = {"rounds": {"past_estimate_at": "REAL"}}
 
 
 class RoundStore:
@@ -49,12 +61,12 @@ class RoundStore:
     def __init__(self, store):
         self.store = store
 
-    def add(self, id, session, objective, done_check, budget, inbox):
-        rounds, minutes, dollars = budget
+    def add(self, id, session, objective, done_check, estimate, inbox):
+        rounds, minutes, dollars = estimate
         with self.store.transaction() as db:
             db.execute(
                 "INSERT INTO rounds (id, session, objective, done_check, state, "
-                "budget_rounds, budget_minutes, budget_dollars, round_inbox, "
+                "estimate_rounds, estimate_minutes, estimate_dollars, round_inbox, "
                 "started_at) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)",
                 (id, session, objective, done_check, rounds, minutes, dollars,
                  inbox, time.time()),

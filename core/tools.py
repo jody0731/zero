@@ -28,7 +28,8 @@ def tool(description, optional=(), summary=None, ready=None,
     json_type is a type's name or a whole JSON schema (an array's items, say).
     Arguments named
     in `optional` may be left out; the rest are required. `description` may be
-    a function of the session's limits (bash's timeout), written per session.
+    a function of the session's limits and its context (bash's timeout, how
+    deep subagents go), written at each call.
     `summary(args)`: the call in a line or a few, for an ask and the judge
     (bash's command, a write's path and its content); by default the raw
     arguments. One that cuts long text for an ask's screen takes `whole`,
@@ -109,7 +110,7 @@ def schemas(limits=None, context=None):
             continue
         schema = t["schema"]
         if t["describe"] is not None:
-            text = t["describe"](limits or {})
+            text = t["describe"](limits or {}, context or {})
             schema = {**schema, "function": {**schema["function"], "description": text}}
         told.append(schema)
     return told

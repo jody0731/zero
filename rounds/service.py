@@ -16,7 +16,7 @@ from pathlib import Path
 from server.services import Refused, Service
 from rounds import tool as roundtools
 from rounds.hooks import FAILED, STOPPED
-from rounds.store import SCHEMA, RoundStore
+from rounds.store import ADDED_COLUMNS, RENAMED_COLUMNS, SCHEMA, RoundStore
 
 # Rounds in a row that end failed before the run counts as stuck
 FAILED_ROUNDS = 2
@@ -38,14 +38,15 @@ def save(folder, name, text):
 
 
 def summary(run):
-    """A run in a line, as the status line and `zero rounds list` show it:
-    `round 3/8 · 42 min · $0.12 of $1.00`."""
+    """A run in a line, as the status line and `zero rounds list` show it,
+    each against ZERO's estimate: `round 3/8 · 42 min of 2 h · $0.12 of
+    $1.00`."""
     return (
-        f"round {run['round_count']}/{run['budget_rounds']} · "
+        f"round {run['round_count']}/{run['estimate_rounds']} · "
         f"{roundtools.duration(run['spent_minutes'])} of "
-        f"{roundtools.duration(run['budget_minutes'])} · "
-        f"{roundtools.dollars(run['spent_dollars'])} of "
-        f"{roundtools.dollars(run['budget_dollars'])}"
+        f"{roundtools.duration(run['estimate_minutes'])} · "
+        f"{roundtools.dollars_text(run['spent_dollars'])} of "
+        f"{roundtools.dollars_text(run['estimate_dollars'])}"
     )
 
 
@@ -72,29 +73,31 @@ class SessionRounds:
     def save(self, id, name, text):
         return save(self.run_folder(id), name, text)
 
-    def start(self, objective, check, budget):
-        """A new run, this turn its round 1; or, while one is open, its budget
-        from now: (its row, whether it was a new budget)."""
+    def start(self, objective, check, estimate):
+        """A new run, this turn its round 1; or, while one is open, its
+        estimate from now: (its row, whether it was a new estimate)."""
         run = self.open()
-        rounds, minutes, money = budget
+        rounds, minutes, money = estimate
         if run is None:
             id = new_id()
-            self.service.store.add(id, self.sid, objective, check, budget, None)
+            self.service.store.add(id, self.sid, objective, check, estimate, None)
             return self.service.store.run(id), False
         fields = {
             "objective": objective, "state": "running",
-            "budget_rounds": run["round_count"] + rounds,
-            "budget_minutes": run["spent_minutes"] + minutes,
-            "budget_dollars": run["spent_dollars"] + money,
+            "estimate_rounds": run["round_count"] + rounds,
+            "estimate_minutes": run["spent_minutes"] + minutes,
+            "estimate_dollars": run["spent_dollars"] + money,
+            # A new estimate is told again when the work passes it
+            "past_estimate_at": None,
         }
         if check:
             fields["done_check"] = check
         self.service.store.update(run["id"], **fields)
         return self.service.store.run(run["id"]), True
 
-    def next_state(self, run, outcome, end, minutes, money):
+    def next_state(self, run, outcome, end):
         """What a round's end makes of its run: running (the next round),
-        waiting (its budget spent), done, stuck or stopped."""
+        done, stuck or stopped. Its estimate stops nothing."""
         if outcome in STOPPED:
             return "stopped"
         if outcome in FAILED:
@@ -103,21 +106,16 @@ class SessionRounds:
         status = end["status"] if end else "going_on"
         if status in ("done", "stuck"):
             return status
-        if run["state"] == "waiting":
-            # The turn the spent budget opened gave no new one: it stops
-            # rather than ask again
-            return "stopped"
-        spent = (
-            run["round_count"] >= run["budget_rounds"]
-            or run["spent_minutes"] + minutes >= run["budget_minutes"]
-            or run["spent_dollars"] + money >= run["budget_dollars"] > 0
-        )
-        return "waiting" if spent else "running"
+        return "running"
+
+    def mark_past(self, id):
+        """The work passed its estimate, and ZERO was told."""
+        self.service.store.update(id, past_estimate_at=self.service.clock())
 
     def finish_round(self, id, state, outcome, end, minutes, money,
                      fresh=True):
         """The round's end written to its row, with the next round's message
-        (or the budget spent's) in the same transaction. `fresh`: the next
+        in the same transaction. `fresh`: the next
         round's context starts from the handoff; else (a failed round, a
         handoff that failed) it goes on from the last round's."""
         run = self.service.store.run(id)
@@ -147,12 +145,6 @@ class SessionRounds:
             text = roundtools.round_text({**run, **fields}, self.run_folder(id),
                                          handoff_name, last)
             notice = (msg_id, text)
-        elif state == "waiting":
-            msg_id = f"rounds:{id}:spent:{number}"
-            fields["round_inbox"] = msg_id
-            text = roundtools.spent_text({**run, **fields}, self.run_folder(id),
-                                         last)
-            notice = (msg_id, text)
         else:
             fields["ended_at"] = self.service.clock()
         self.service.store.update(id, notice=notice, **fields)
@@ -164,6 +156,8 @@ class RoundsService(Service):
     name = "rounds"
     looking_messages = ("rounds/list",)
     schema = SCHEMA
+    renamed_columns = RENAMED_COLUMNS
+    added_columns = ADDED_COLUMNS
     tables = ("rounds",)
 
     def __init__(self, clock=time.time):

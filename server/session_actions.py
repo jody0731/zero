@@ -198,12 +198,31 @@ class SessionActions:
 
     def rewind_points(self, sid):
         """The user's own messages on the conversation's current branch that
-        start a turn, newest first: where a rewind or a fork begins."""
+        start a turn, newest first: where a rewind or a fork begins. A
+        session ZERO started has none in what it copied from its parent: a
+        rewind there would leave its task behind."""
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
         records = self.log(sid).branch()
+        after = self.copied_to(sid)
         return [{"seq": r["seq"], "time": r["time"], "text": r["text"]}
-                for r in reversed(history.rewind_points(records))]
+                for r in reversed(history.rewind_points(records))
+                if r["seq"] > after]
+
+    def copied_to(self, sid):
+        """The last record a session ZERO started copied from its parent (a
+        subagent's fork), else 0: its rewind points start after it."""
+        if self.store.session(sid).get("started_by") != "zero":
+            return 0
+        head = self.log(sid).first_record() or {}
+        return (head.get("forked_from") or {}).get("seq", 0)
+
+    def refuse_copied(self, sid, seq):
+        """Refused for a record a subagent copied from its parent."""
+        if seq <= self.copied_to(sid):
+            raise Refused(f"record {seq} is in what this session copied from "
+                          "the session that started it; its rewind points "
+                          "start after its task")
 
     def carried_switch(self, sid, before, after):
         """What the part of branch `before` that branch `after` lacks had
@@ -262,6 +281,7 @@ class SessionActions:
                     # from before is built again from the log at its next use
                     self.live.pop(sid, None)
                     session = Session(None, [], "", log, {})
+                self.refuse_copied(sid, seq)
                 try:
                     record, left = session.rewind(seq, sid)
                 except ValueError as error:
@@ -280,7 +300,8 @@ class SessionActions:
         ended), copied record for record with their numbers, in a new log
         whose header names where it came from (`forked_from`); the same
         workspace, mode and model, its row's `parent` this session. The
-        parent goes on untouched. Returns the new session's row and the
+        parent goes on untouched. The user's: started by the user, whatever
+        the session it came from. Returns the new session's row and the
         message's text for its input ("" for all of it)."""
         info = self.store.session(sid)
         if info is None:
@@ -296,6 +317,7 @@ class SessionActions:
                               "user's messages, or once it ends")
             copied, text, went_on = records, "", None
         else:
+            self.refuse_copied(sid, seq)
             try:
                 _, left = history.left_behind_by(records, seq)
             except ValueError as error:
@@ -305,6 +327,35 @@ class SessionActions:
             # What the parent had done past the fork's point, for its note
             went_on = {"first": left[0]["seq"], "last": left[-1]["seq"],
                        "part": history.part_lines(left)}
+        new = self.copy_session(sid, info, records, copied, went_on,
+                                {"title": info["title"], "source": source,
+                                 "started_by": "user"})
+        return {"session": self.store.session(new), "text": text}
+
+    def fork_finished(self, sid, title, source):
+        """A new session from this one's finished turns: its current branch
+        up to the start of the turn under way (all of it, when none is), as
+        `fork` copies; ZERO's, a subagent's fork made mid-turn (DSH's "the
+        parent's completed conversation turns"). Returns the new session's
+        id."""
+        info = self.store.session(sid)
+        if info is None:
+            raise Refused(f"no session {sid!r}")
+        records = self.log(sid).branch()
+        if history.log_format(records) != history.LOG_FORMAT:
+            raise Refused("this session's log is from an older ZERO")
+        under_way = history.unfinished_turn(records)
+        copied = records[: len(records) - len(under_way)]
+        return self.copy_session(sid, info, records, copied, None,
+                                 {"title": title, "source": source,
+                                  "started_by": "zero"})
+
+    def copy_session(self, sid, info, records, copied, went_on, row):
+        """Write a fork: `copied` (the start of branch `records`) into a new
+        log, its header naming where it came from and what the parent did
+        past it (`went_on`), and its row: `row`'s title, source and who
+        started it, the parent's workspace, mode and model, what the copied
+        part lacks of what the parent runs with as a switch. Its id."""
         new = new_id()
         made = datetime.now().astimezone().isoformat(timespec="seconds")
         earlier = copied[0].get("forked_from") or {}
@@ -314,17 +365,36 @@ class SessionActions:
             # Every session it came from, the parent first: their saved
             # outputs, which its copied context names, stay readable
             "ancestors": [sid, *earlier.get("ancestors", [])],
+            "started_by": row["started_by"],
             **({"went_on": went_on} if went_on else {}),
         }}
         write_copy(self.paths.sessions / f"{new}.jsonl", [header, *copied[1:]])
         switch = self.carried_switch(sid, records, copied)
         self.store.add_session(new, {
-            "title": info["title"], "source": source, "model": info["model"],
-            "mode": info["mode"], "workspace": info["workspace"],
+            **row, "model": info["model"], "mode": info["mode"],
+            "workspace": info["workspace"],
             "switch": json.dumps(switch) if switch else None, "parent": sid,
             "seen_seq": copied[-1]["seq"],
         })
-        return {"session": self.store.session(new), "text": text}
+        return new
+
+    def new_child(self, sid, title, source):
+        """A new session under this one, its log empty: the same workspace,
+        mode and model, and the thinking effort the parent runs with, which
+        its first turn takes as a switch; ZERO's, a subagent's handoff.
+        Returns its id."""
+        info = self.store.session(sid)
+        if info is None:
+            raise Refused(f"no session {sid!r}")
+        effort = history.running_with(self.log(sid).branch()).get("thinking_effort")
+        new = new_id()
+        self.store.add_session(new, {
+            "title": title, "source": source, "model": info["model"],
+            "mode": info["mode"], "workspace": info["workspace"],
+            "switch": json.dumps({"thinking_effort": effort}) if effort else None,
+            "parent": sid, "started_by": "zero",
+        })
+        return new
 
     def delete(self, sid):
         """Move the session's log and its services' files (the jobs' output) to

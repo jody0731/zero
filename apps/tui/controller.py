@@ -317,6 +317,7 @@ WHEN_IT_APPLIES = {
 }
 # A line more for a setting whose effect depends on the server
 SETTING_NOTES = {
+    "max_subagent_depth": "Applies at once, to every session; 0 is off.",
     "thinking_effort": "Sent to DeepSeek; other servers get none.",
     "judge_thinking_effort": "Sent to DeepSeek; other servers get none.",
 }

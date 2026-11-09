@@ -9,6 +9,13 @@ the server's cache serves it (6.3: 95% of each call's history in real
 sessions, against 42% when only the latest outputs showed). A long session's
 view keeps every user message and notice; past the judge's room, its oldest
 commands are left out, and one line says how many.
+
+In a session tree (subagents/), the goal is the user's words anywhere in
+it: the server hands the session `tree_user_messages()`, the user's
+messages in the tree's other sessions, and where this session's own records
+start (a subagent's fork copies its parent's, which the tree's messages
+already hold). A task ZERO wrote reaches the judge as a notice,
+never as the user's words.
 """
 
 import json
@@ -21,8 +28,7 @@ from core.asking import ask_of
 from core.hooks import Deny, Hook, Stop
 
 # Claude Code's auto mode, Codex and Hermes: this many refusals in a row end
-# the turn. None counted per turn: a long turn's length is its budget's
-# (rounds/), and refusals spread over hours aren't a loop
+# the turn. None counted per turn: refusals spread over hours aren't a loop
 MAX_REFUSAL_STREAK = 3
 # A command's result when it became a job (jobs/tool.py's started_text and
 # moved_status), so the judge can tell which job a later `job` call means
@@ -73,14 +79,15 @@ def clip(text, chars):
     return f"{text[:half]}\n[{left} characters left out]\n{text[-half:]}"
 
 
-def view(records, output_chars=None, most_bytes=None):
+def view(records, output_chars=None, most_bytes=None, goal=()):
     """The judge sees what users said, ZERO's notices, and the commands with
-    recorded execution, a job's id with the command that became it. With
+    recorded execution, a job's id with the command that became it. `goal`:
+    the user's words in the session tree's other sessions, seen first. With
     `output_chars`, each command is followed by what it printed, cut to that
     many characters. With `most_bytes`, the oldest commands are left out
     until the entries fit in that many bytes of JSON lines, one entry saying
     how many."""
-    entries = []
+    entries = [{"user": text} for text in goal]
     for record in records:
         if record["type"] == "user" and log_history.is_notice(record):
             entries.append({"notice": notice_text(record["text"])})
@@ -153,10 +160,14 @@ class JudgeApproval(Hook):
     def approve(self, call):
         if not ask_of(call):
             return None
-        history = view(
-            call.turn.session.log.branch(), self.judge.output_chars,
-            self.judge.view_bytes,
-        )
+        session = call.turn.session
+        records, goal = session.log.branch(), ()
+        tree = session.tool_context.get("tree_user_messages")
+        if tree is not None:
+            goal, own_from = tree()
+            records = [r for r in records if r["seq"] > own_from]
+        history = view(records, self.judge.output_chars, self.judge.view_bytes,
+                       goal)
         verdict = self._verdict(
             call.turn.control, history, command_text(call, whole=True),
             call.notes.get("offer_text"),

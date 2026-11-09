@@ -452,10 +452,12 @@ class Runtime(SessionActions):
             self.store.park(sid, ask, row["id"])
             return
         if ends:
-            # It ended; only the row's update was lost
+            # It ended; only the row's update was lost (and the services'
+            # word of it, which they keep once)
             failed = outcome in FAILED
             state = "failed" if failed else "idle"
             self.store.finish(row["arrival"], sid, state)
+            self.turn_ended(sid, outcome)
         elif records:
             stops = self.store.stops(sid, row)
             if stops:
@@ -474,6 +476,7 @@ class Runtime(SessionActions):
                 for stop in stops:
                     self.store.mark_steer_done(stop["id"])
                 self.store.finish(row["arrival"], sid, "idle")
+                self.turn_ended(sid, "interrupted")
             elif row["clean_stop"]:
                 # A clean stop cut it off: it resumes without using a try
                 self.store.resume(row["arrival"], sid, counted=False)
@@ -482,6 +485,7 @@ class Runtime(SessionActions):
             else:
                 self.repair_end(log, pending, row, "failed", "cut off after 3 resumes")
                 self.store.finish(row["arrival"], sid, "failed")
+                self.turn_ended(sid, "failed")
         elif row["status"] == "delivered":
             # Marked begun with no record of it: nothing ran, so it can run
             self.store.requeue(row["arrival"], sid)
@@ -648,6 +652,7 @@ class Runtime(SessionActions):
                 error=traceback.format_exc(),
             )
             self.store.finish(row["arrival"], sid, "failed")
+            self.turn_ended(sid, "crashed")
             return
         records = session.log.branch()
         begun = any(
@@ -681,6 +686,7 @@ class Runtime(SessionActions):
             detail=f"this session's workspace {workspace} is gone",
         )
         self.store.finish(row["arrival"], sid, "failed")
+        self.turn_ended(sid, "failed")
 
     def finish_turn(self, sid, session, turn, row):
         """Run the turn, then settle its row: done, or still delivered while it
@@ -695,12 +701,14 @@ class Runtime(SessionActions):
             outcome = ends[-1]["outcome"]
         if outcome == "waiting":
             self.store.park(sid, history.parked_ask(session.log.branch()), row["id"])
+            self.turn_ended(sid, outcome)
             return
         state = "failed" if outcome in FAILED else "idle"
         with self.changed:
             self.store.finish(row["arrival"], sid, state)
             for stop in self.store.stops(sid, row):
                 self.store.mark_steer_done(stop["id"])
+        self.turn_ended(sid, outcome)
 
     def take_reply(self, sid, row, ask, turn_id, log, control):
         """The parked session's next message is the reply to its ask: what it
@@ -813,6 +821,22 @@ class Runtime(SessionActions):
         its tools start jobs through the server)."""
         for service in self.services.values():
             service.session_built(sid, session)
+
+    def turn_ended(self, sid, outcome):
+        """Each service told that a turn of the session ended or parked (a
+        subagent's report to its parent). A service that fails here leaves
+        the turn as it ended."""
+        for service in self.services.values():
+            try:
+                service.turn_ended(sid, outcome)
+            except Exception:
+                traceback.print_exc()
+
+    def turn_busy(self, sid):
+        """Whether a turn of the session runs, or a queued message would
+        start one."""
+        with self.lock:
+            return sid in self.runners or sid in self.store.waiting_sessions()
 
     def stop_turn(self, sid, msg_id, source):
         """Commit the stop before setting its flag or sending the ack."""

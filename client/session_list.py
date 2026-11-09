@@ -121,7 +121,9 @@ def row_state(row, now=None):
 
 
 def row_title(row):
-    """A list row's title, a fork's marked as one."""
+    """A list row's title, a subagent's and a fork's marked as one."""
+    if row.get("started_by") == "zero":
+        return f"{row['title']} (subagent)"
     return f"{row['title']} (fork)" if row.get("parent") else row["title"]
 
 

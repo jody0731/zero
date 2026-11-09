@@ -43,8 +43,14 @@ OTHER_AGENT_FILES = ("AGENTS.md", "CLAUDE.md")
 # before anything a file says
 HARNESS = (
     "You are Z.E.R.O. (a.k.a. Zealous Efferent Response Operator), an agent "
-    "running on this machine in its own harness, with the model {model}."
+    "running on this machine in its own harness, with the model {model}{price}."
 )
+# The model's price, which an estimate in dollars rests on; a model with none
+# (a local one) costs nothing
+PRICE = (
+    ", at ${miss} per million tokens in (${hit} from the cache) and ${out} out"
+)
+NO_PRICE = ", which has no price"
 # When to act: sure of the user's wish, from their words, and of the world,
 # from looking; a gap is filled before acting, not guessed over
 INTENT = (
@@ -225,12 +231,26 @@ def notice_fact():
     return NOTICE_FACT.format(senders=senders)
 
 
-def system_prompt(found, model):
+def price_text(price):
+    """The model's price (USD per 1M tokens: cache hit, miss, output) as the
+    opening says it."""
+    if not price:
+        return NO_PRICE
+
+    def amount(dollars):
+        return f"{dollars:.2f}" if dollars >= 0.01 else f"{dollars:g}"
+
+    hit, miss, out = price
+    return PRICE.format(hit=amount(hit), miss=amount(miss), out=amount(out))
+
+
+def system_prompt(found, model, price=None):
     """The system prompt's start: what ZERO is and runs on (`model`, the
-    session's) and when it acts, what the session read
+    session's, and its `price`) and when it acts, what the session read
     (`found`, a Read; None for nothing), then how a turn ends and what a
     notice is; the hooks' parts follow."""
-    opening = f"{HARNESS.format(model=model)}\n{INTENT}"
+    opening = (f"{HARNESS.format(model=model, price=price_text(price))}\n"
+               f"{INTENT}")
     read_in = found.text if found is not None else ""
     ending = f"{TURN_RULE}{notice_fact()}\n"
     if not read_in:

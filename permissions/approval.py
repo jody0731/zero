@@ -6,6 +6,11 @@ least to most permissive: readOnly (Refuse), default (Approval, or Refuse with
 nobody there), auto and auto+ (the judge, judge/), bypassPermissions
 (none: no rules are loaded). auto+ has no rules either: Permissions marks each
 call that needs permission, and the judge answers.
+
+Work nobody watches (6.7) raises default's approver to the judge, never the
+sandbox: a subagent ZERO started runs default as auto (the assembly), and in
+a session of the user's own a round's asks go to the judge (DefaultApproval).
+readOnly is never raised.
 """
 
 from core import tools
@@ -77,3 +82,31 @@ class UserApproval(Hook):
             return Deny(REFUSED.format(reason=hit["reason"]))
         if not answer:
             return Deny(DECLINED)
+
+
+class DefaultApproval(Hook):
+    """default's approver: the user, except in work nobody watches (a round
+    of work in rounds), where the judge answers what would have asked the
+    user. `user` and `judge`: their approvers' hooks (UserApproval, the
+    judge's); `unattended(turn)`: whether nobody watches this turn."""
+
+    def __init__(self, user, judge, unattended):
+        self.user = user
+        self.judge = judge
+        self.unattended = unattended
+
+    def turn_start(self, turn):
+        self.judge.turn_start(turn)
+
+    def approve(self, call):
+        if self.unattended(call.turn):
+            return self.judge.approve(call)
+        return self.user.approve(call)
+
+    def after_tool(self, call):
+        self.judge.after_tool(call)
+
+    def step_end(self, step):
+        if self.unattended(step.turn):
+            return self.judge.step_end(step)
+        return None

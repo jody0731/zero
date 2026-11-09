@@ -1,5 +1,5 @@
 """`start_rounds` and `end_round`, and the texts the model reads of rounds:
-a round's opening message, the budget spent, a run's end.
+a round's opening message, a run's end.
 
 What a run is in the session's state (its row, the next round's message)
 belongs to the server that hands a session its `session_rounds`
@@ -12,6 +12,7 @@ import time
 
 from core import history
 from core.tools import tool
+from usage.spend import dollars_text
 
 # A round's opening message to its session: a notice, not the user's
 # words; the system message names who sends them
@@ -40,39 +41,26 @@ def duration(minutes):
     return f"{hours} h {rest} min" if rest else f"{hours} h"
 
 
-def dollars(amount):
-    return f"${amount:,.2f}"
+def estimate_text(rounds, minutes, money):
+    return f"{rounds} rounds, {duration(minutes)}, {dollars_text(money)}"
 
 
-def budget_text(rounds, minutes, money):
-    return f"{rounds} rounds, {duration(minutes)}, {dollars(money)}"
-
-
-def describe(limits):
-    """start_rounds' description, with the session's standing amount."""
-    minutes = limits.get("standing_budget_minutes")
-    money = limits.get("standing_budget_dollars")
-    standing = (
-        f"the standing amount of {duration(minutes)} and {dollars(money)}"
-        if minutes and money else "the session's standing amount"
-    )
-    return (
-        "Work toward an objective in rounds. The server carries the work on "
-        "from round to round with no message from the user, within one budget "
-        "the user approves for the whole of it. Each round is a turn of this "
-        "session whose context starts fresh from the handoff the round before "
-        "left with end_round, so it holds that round's work and not every "
-        "earlier one's; the handoffs are kept in the session's folder, and the "
-        "workspace stays as it is between rounds. Done is checked from "
-        "outside: `done_check` is a command the server runs where this "
-        "session's commands run when you report done, and exit code 0 is "
-        "done. The turn that calls it is round 1; the server starts each next "
-        "one, until the work is done, stuck, stopped by the user, or its "
-        "budget is spent. The estimate (rounds, minutes of your own working "
-        f"time, dollars at the model's price) is the budget: within {standing} "
-        "it starts at once; past it, or while work in rounds is already under "
-        "way here, it goes first to the user, never the judge."
-    )
+DESCRIPTION = (
+    "Work toward an objective in rounds. The server carries the work on "
+    "from round to round with no message from the user. Each round is a turn "
+    "of this session whose context starts fresh from the handoff the round "
+    "before left with end_round, so it holds that round's work and not every "
+    "earlier one's; the handoffs are kept in the session's folder, and the "
+    "workspace stays as it is between rounds. Done is checked from outside: "
+    "`done_check` is a command the server runs where this session's commands "
+    "run when you report done, and exit code 0 is done. The turn that calls "
+    "it is round 1; the server starts each next one, until the work is done, "
+    "stuck or stopped by the user. While rounds go on, what would ask the "
+    "user in default mode goes to the judge instead, which reads the user's "
+    "words. The estimate (rounds, minutes of your own working time, dollars "
+    "at the model's price) is yours: the work starts at once, nothing stops "
+    "at the estimate, and one note comes if the work passes it."
+)
 
 
 def start_summary(args):
@@ -82,7 +70,7 @@ def start_summary(args):
         text += f"; done check: `{args['done_check']}`"
     rounds, minutes, money = (args.get(k) for k in ("rounds", "minutes", "dollars"))
     if all(isinstance(v, (int, float)) for v in (rounds, minutes, money)):
-        text += f"; estimate {budget_text(int(rounds), minutes, money)}"
+        text += f"; estimate {estimate_text(int(rounds), minutes, money)}"
     return text
 
 
@@ -101,7 +89,7 @@ def check_estimate(rounds, minutes, money):
 
 
 @tool(
-    describe,
+    DESCRIPTION,
     optional=("done_check",),
     summary=start_summary,
     # The done check is a command: in auto+ the judge sees it first, as it
@@ -118,8 +106,8 @@ def check_estimate(rounds, minutes, money):
 def start_rounds(objective, rounds, minutes, dollars, done_check=None,
                  session_rounds=None, notes=None):
     """`session_rounds`: the session's rounds, from its server; None means
-    there are none. While a run is open, a new estimate is its budget from
-    now (the budget spent, or the user's change). `notes`: the call's own,
+    there are none. While a run is open, a new estimate is its estimate from
+    now. `notes`: the call's own,
     where the hooks find that this turn is one of the run's rounds."""
     if session_rounds is None:
         return NOT_HERE
@@ -134,19 +122,20 @@ def start_rounds(objective, rounds, minutes, dollars, done_check=None,
     )
     if notes is not None:
         notes["rounds_started"] = run["id"]
-    budget = budget_text(run["budget_rounds"], run["budget_minutes"],
-                         run["budget_dollars"])
+    estimate = estimate_text(run["estimate_rounds"], run["estimate_minutes"],
+                             run["estimate_dollars"])
     if extended:
         return (
-            f"The budget of {run['id']} is now {budget} in all, its spending "
-            "so far included. When end_round reports going_on, this turn "
-            "ends with its step and the next round starts."
+            f"The estimate of {run['id']} is now {estimate} in all, its "
+            "spending so far included. When end_round reports going_on, this "
+            "turn ends with its step and the next round starts."
         )
     tail = (f" The done check: `{check}`." if check
             else " No done check: done is your word.")
     return (
-        f"Started {run['id']}: this turn is round 1 of {run['budget_rounds']}, "
-        f"with a budget of {budget}.{tail} End each round with end_round: "
+        f"Started {run['id']}: this turn is round 1 of an estimated "
+        f"{run['estimate_rounds']}, with your estimate of {estimate}.{tail} "
+        "End each round with end_round: "
         "going_on ends this turn with its step, and the next round starts "
         "with a fresh context from your handoff."
     )
@@ -265,17 +254,18 @@ def went_on(early):
 
 
 def round_text(run, folder, handoff_name, early=None):
-    """The message that opens a round: the work, its budget spent and left,
-    the done check's last result, and where the handoffs are. `early`: why
-    the last round's context was kept (went_on), None when it wasn't."""
+    """The message that opens a round: the work, what it has used against
+    ZERO's estimate, the done check's last result, and where the handoffs
+    are. `early`: why the last round's context was kept (went_on), None when
+    it wasn't."""
     number = run["round_count"]
-    spent = budget_text(number - 1, run["spent_minutes"], run["spent_dollars"])
-    budget = budget_text(run["budget_rounds"], run["budget_minutes"],
-                         run["budget_dollars"])
+    spent = estimate_text(number - 1, run["spent_minutes"], run["spent_dollars"])
+    estimate = estimate_text(run["estimate_rounds"], run["estimate_minutes"],
+                             run["estimate_dollars"])
     lines = [
-        f"Round {number} of {run['budget_rounds']} of {run['id']}, toward: "
-        f"\"{run['objective']}\".",
-        f"Spent: {spent}, of a budget of {budget}.",
+        f"Round {number} of an estimated {run['estimate_rounds']} of "
+        f"{run['id']}, toward: \"{run['objective']}\".",
+        f"Used so far: {spent}, against your estimate of {estimate}.",
     ]
     if run["done_check"]:
         check = f"Done check: `{run['done_check']}`"
@@ -295,23 +285,3 @@ def round_text(run, folder, handoff_name, early=None):
             f"handoff is in {folder}. A round ends with end_round."
         )
     return "\n".join(lines)
-
-
-def spent_text(run, folder, early=None):
-    """The message when the budget is spent: no round starts until the user
-    approves a new one. `early`: as round_text's."""
-    spent = budget_text(run["round_count"], run["spent_minutes"],
-                        run["spent_dollars"])
-    budget = budget_text(run["budget_rounds"], run["budget_minutes"],
-                         run["budget_dollars"])
-    context = (
-        went_on(early) if early is not None
-        else "The context started fresh: the handoff above is the last round's"
-    )
-    return (
-        f"{run['id']}, toward \"{run['objective']}\", has spent its budget: "
-        f"{spent} of {budget}. No round starts without a new budget: "
-        "start_rounds with the same objective and an estimate of what the rest "
-        f"needs from now goes to the user. {context}; each round's is in "
-        f"{folder}."
-    )

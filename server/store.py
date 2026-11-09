@@ -39,8 +39,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- What the user set since the last turn started, as JSON: the next new
     -- turn logs it as a switch and clears it
     switch TEXT,
-    -- The session a fork was made from; NULL for any other
-    parent TEXT
+    -- The session a sub-session sits under (a fork, a subagent); NULL for
+    -- any other
+    parent TEXT,
+    -- Who started it: zero (a subagent), else the user (NULL before 0.6.7)
+    started_by TEXT
 );
 CREATE TABLE IF NOT EXISTS inbox (
     -- The order messages arrived in
@@ -87,9 +90,9 @@ RENAMED_COLUMNS = {
     "inbox": {"created": "created_at", "resumes": "resume_count"},
     "asks": {"created": "created_at", "closed": "closed_at"},
 }
-# Columns added since a database was made (0.6.6): table → {name: its SQL
-# type}, added when the store opens (add_columns)
-ADDED_COLUMNS = {"sessions": {"parent": "TEXT"}}
+# Columns added since a database was made (0.6.6, 0.6.7): table → {name:
+# its SQL type}, added when the store opens (add_columns)
+ADDED_COLUMNS = {"sessions": {"parent": "TEXT", "started_by": "TEXT"}}
 # Beside the database, a copy of it as it was before a rename
 BACKUP_SUFFIX = ".before-renames-"
 # A user message that waits for the turn's answer instead of steering it
@@ -464,18 +467,19 @@ class Store:
         return rows[0]["id"] if rows else None
 
     def add_session(self, session, row):
-        """A session made without a message, idle (a fork): its title,
-        source, model, mode, workspace, a switch its first turn takes, its
-        parent, and the newest record the user has seen."""
+        """A session made without a message, idle (a fork, a subagent): its
+        title, source, model, mode, workspace, a switch its first turn takes,
+        its parent, who started it, and the newest record the user has
+        seen."""
         now = time.time()
         with self.transaction() as db:
             db.execute(
                 "INSERT INTO sessions (id, title, source, model, mode, workspace, "
-                "switch, parent, seen_seq, state, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)",
+                "switch, parent, started_by, seen_seq, state, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)",
                 (session, row["title"], row["source"], row["model"], row["mode"],
                  row["workspace"], row.get("switch"), row.get("parent"),
-                 row.get("seen_seq", 0), now, now),
+                 row.get("started_by"), row.get("seen_seq", 0), now, now),
             )
 
     def update_session(self, session, **fields):

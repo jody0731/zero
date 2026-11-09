@@ -35,9 +35,6 @@ NOT_ASKED = (
 # the caps', which it never does
 CALL_ASKS = ("rule", "permission")
 LIMIT_ASKS = ("limit",)
-# The asks only the user answers, in every mode (rounds/hooks.py, Budget):
-# the mode's approver leaves them alone
-USER_ASKS = ("budget",)
 # What the user may answer at the box: "session" and "saved" only when
 # the call's ask has a grant to offer (permissions/grants.py)
 YES, SESSION, SAVED, NO = "yes", "session", "saved", "no"
@@ -54,7 +51,7 @@ def ask_of(call):
 
 def waiting_ask(notes, granted=True):
     """ask_of() from a call's notes; with granted=False, as if nothing were
-    granted. A user's ask (USER_ASKS) isn't among them: its hook asks it."""
+    granted."""
     names = CALL_ASKS + LIMIT_ASKS
     if granted and notes.get("granted") is not None:
         names = LIMIT_ASKS
@@ -82,14 +79,14 @@ def choices(notes):
     """The answers an ask offers: a grant's two only when the call's own ask
     is all that asks and it has one to offer."""
     if notes.get("offer") and not any(notes.get(name)
-                                      for name in LIMIT_ASKS + USER_ASKS):
+                                      for name in LIMIT_ASKS):
         return list(CHOICES)
     return [YES, NO]
 
 
 def put_to_user(call, ask, why):
     """Pass on why, then ask. The wait is the user's time, not the
-    agent's (a turn's budget counts agent time)."""
+    agent's (its working time, usage/, leaves it out)."""
     t0 = time.monotonic()
     try:
         return ask(call, why)

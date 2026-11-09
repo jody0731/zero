@@ -48,6 +48,15 @@ def canonical(mode):
     return mode
 
 
-def answers_line(mode):
-    """The mode and who answers its asks: the environment's line."""
-    return f"mode: {mode}; {ANSWERS[MODES[canonical(mode)].decides]}"
+def raised(mode):
+    """The mode a session nobody watches runs as (a subagent ZERO started):
+    default as auto, the sandbox kept and the judge answering; every other
+    mode as itself, readOnly never raised."""
+    return "auto" if canonical(mode) == "default" else mode
+
+
+def answers_line(mode, runs_as=None):
+    """The mode and who answers its asks: the environment's line. `runs_as`:
+    the mode whose approver answers, where nobody watches (raised)."""
+    decides = MODES[canonical(runs_as or mode)].decides
+    return f"mode: {mode}; {ANSWERS[decides]}"

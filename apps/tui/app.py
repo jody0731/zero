@@ -971,7 +971,9 @@ class ZeroApp(SafeClicks, App):
 
     def draw(self):
         view = self.view
-        if not view.is_mounted:
+        # Textual's shutdown stops the app running before it takes the views'
+        # parts down, and the draw timer can fire in between
+        if not view.is_mounted or not self.is_running:
             return
         row = self.row()
         if self.client.session is None:

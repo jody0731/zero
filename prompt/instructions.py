@@ -252,7 +252,8 @@ def walk(root, workspace):
 def read(instructions, workspace, most_chars):
     """What a session with these instructions reads in `workspace`: its
     files in order, SOUL.md, the user's ZERO.md, the project's, in
-    `most_chars` characters together."""
+    `most_chars` characters together. A file met once they are spent is
+    still named, with the line where it starts, so none goes unsaid."""
     found = InstructionsRead(soul=instructions.soul, user=instructions.user)
     parts = []
     room = most_chars
@@ -264,7 +265,7 @@ def read(instructions, workspace, most_chars):
         room -= len(block) + 2
 
     for path in (instructions.soul, instructions.user):
-        if path is not None and room > 0:
+        if path is not None:
             body = text(path)
             if body:
                 add("", body, path)
@@ -276,7 +277,7 @@ def read(instructions, workspace, most_chars):
                              if (folder / n).is_file()]
             path = folder / PROJECT_FILE
             body = text(path) if path.is_file() else ""
-            if not body or room <= 0:
+            if not body:
                 continue
             add(f"The project's ZERO.md ({path}):\n", body, path)
             found.project.append(path)

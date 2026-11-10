@@ -21,6 +21,7 @@ Usage:
     zero install [--bin DIR] put the zero command on the PATH (~/.local/bin)
     zero uninstall           remove the command
     zero update              an installed ZERO to its newest release
+    zero --version           this copy of ZERO's version
 
 Full screen. Inside, Enter sends (a steer while a turn runs), Shift+Enter
 starts a new line, Ctrl+J or Alt+Enter queues a follow-up, Tab (or Ctrl+O) goes
@@ -87,7 +88,7 @@ from client.connection import (  # noqa: E402
 from client.launcher import (  # noqa: E402
     Hung, busy_text, ensure_server, hello, server_pid,
 )
-from paths import Paths  # noqa: E402
+from paths import Paths, changelog_version  # noqa: E402
 
 NAME = "ZERO"
 
@@ -315,6 +316,9 @@ def parser_for(argv):
                              "session settles, print the answer (for scripts); "
                              "- reads stdin")
     commands.send_flags(parser)
+    parser.add_argument("--version", action="version",
+                        version=f"zero {changelog_version() or '(no CHANGELOG.md)'}",
+                        help="this copy of ZERO's version")
     parser.add_argument("words", nargs="*", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     args.command = None

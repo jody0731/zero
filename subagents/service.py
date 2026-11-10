@@ -11,7 +11,8 @@ first message, a notice from "session", which asks it, last, to report back
 with send_message when it has finished: the subagent writes its own report,
 since it alone knows all of its results. The harness passes up what it
 didn't send, as a notice from "subagent": a turn's answer whose last call
-wasn't a message to its parent that went through (DSH's settlement rule), a
+wasn't a message to its parent that went through (DSH's settlement rule),
+unless every line of it, marks aside, is in what the turn did send there, a
 turn it couldn't finish (a crash, a failure, a stop), both to its parent; a
 turn parked on a question, to the top session of its tree. Each notice is
 written once by its id, so a crash between the turn's end and the notice is
@@ -31,6 +32,7 @@ the subagents below it go on.
 """
 
 import json
+import re
 import time
 import uuid
 
@@ -44,6 +46,8 @@ from usage.spend import (
 
 # What send_message returns when a message went through
 SENT = "Sent to session"
+# Markdown's marks, which a report sent again as an answer may change
+MARKS = re.compile(r"[`*_#>]")
 
 
 class SessionSubagents:
@@ -331,8 +335,9 @@ class SubagentsService(Service):
         """A subagent's turn ended or parked on a question. The subagent
         reports with send_message; the harness passes up what it didn't send:
         a turn's answer whose last call wasn't a message to its parent that
-        went through (once it rests: with a message already queued, the next
-        round's or a steer, the next turn's answer is the one), a turn it
+        went through, and that holds a line the turn's messages there didn't
+        (once it rests: with a message already queued, the next round's or a
+        steer, the next turn's answer is the one), a turn it
         couldn't finish (a crash, a failure, a stop), both to its parent; a
         question waiting for the user, to the top session of its tree. Kept
         once by its id."""
@@ -355,8 +360,11 @@ class SubagentsService(Service):
             if end is None:
                 return
             answered = end["outcome"] == "answered"
-            if answered and (self.runtime.store.next_queued(sid) is not None
-                             or sent_last(records, end, row["parent"])):
+            if answered and (
+                self.runtime.store.next_queued(sid) is not None
+                or sent_last(records, end, row["parent"])
+                or answer_was_sent(records, end, row["parent"])
+            ):
                 return
             use = self.subtree_use(sid)
             key, to = end["seq"], row["parent"]
@@ -422,25 +430,56 @@ def last_end(records):
                  if r["type"] == "turn_end" and r["seq"] > start), None)
 
 
-def sent_last(records, end, parent):
-    """Whether the turn `end` closes made, as its last call, a message to
-    `parent` that went through (DSH's rule: any call after it voids it)."""
+def turn_calls(records, end):
+    """The calls of the turn `end` closes, in order."""
     start = max([copied_to(records)]
                 + [r["seq"] for r in records
                    if r["type"] == "turn_end" and r["seq"] < end["seq"]])
-    calls = [r for r in records
-             if r["type"] == "tool" and start < r["seq"] < end["seq"]]
-    if not calls:
-        return False
-    last = calls[-1]
-    if (last.get("tool") != "send_message"
-            or not str(last.get("result", "")).startswith(SENT)):
-        return False
+    return [r for r in records
+            if r["type"] == "tool" and start < r["seq"] < end["seq"]]
+
+
+def sent_text(call, parent):
+    """What `call` sent `parent`, if it is a message to it that went through;
+    else None."""
+    if (call.get("tool") != "send_message"
+            or not str(call.get("result", "")).startswith(SENT)):
+        return None
     try:
-        args = json.loads(last.get("arguments") or "{}")
+        args = json.loads(call.get("arguments") or "{}")
     except ValueError:
+        return None
+    if not isinstance(args, dict):
+        return None
+    if str(args.get("session", "")).strip() != parent:
+        return None
+    return str(args.get("text", ""))
+
+
+def sent_last(records, end, parent):
+    """Whether the turn `end` closes made, as its last call, a message to
+    `parent` that went through (DSH's rule: any call after it voids it)."""
+    calls = turn_calls(records, end)
+    return bool(calls) and sent_text(calls[-1], parent) is not None
+
+
+def answer_was_sent(records, end, parent):
+    """Whether every line of the answer `end` holds, its marks aside, is in a
+    message the same turn sent `parent` that went through: a report sent,
+    a call after it, then the report again as the answer (seen at 6.8)."""
+    sent = [text for call in turn_calls(records, end)
+            if (text := sent_text(call, parent)) is not None]
+    if not sent:
         return False
-    return isinstance(args, dict) and str(args.get("session", "")).strip() == parent
+    said = " ".join(plain(text) for text in sent)
+    lines = [plain(line) for line in (end.get("answer") or "").splitlines()]
+    return all(line in said for line in lines if line)
+
+
+def plain(text):
+    """`text` without Markdown's marks (code, emphasis, headings, quotes)
+    and with its spaces collapsed, so a line reworded only in marks matches."""
+    return " ".join(MARKS.sub("", text).split())
 
 
 def copied_to(records):

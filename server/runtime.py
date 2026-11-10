@@ -20,6 +20,9 @@ Each session has a workspace, a folder fixed when the session is made; none
 means `/`, the whole machine. Every record a session's log appends is
 handed to the session's watchers in memory, so a watch reads the log only once,
 for its catch-up. busy_with() says what keeps the server up; a parked ask doesn't.
+A runner past its last turn still has its last word to say (`settled`, then a
+dispatch that starts a turn on a message admitted meanwhile), so the runtime
+isn't at rest until it has: `wait` and the idle close count it (`leaving`).
 A clean stop marks the turns it cuts off, so they resume without using a try:
 only a crash uses one (Pi's "a close is not a crash").
 
@@ -171,6 +174,11 @@ class Runtime(SessionActions):
         self.live = {}
         # One runner thread per session with work: id → thread
         self.runners = {}
+        # Sessions whose runner has left `runners` and still has its last word
+        # to say (settled, then dispatch), as id → how many: that dispatch may
+        # start a turn on a message admitted meanwhile, so nothing is at rest
+        # until it has
+        self.leaving = {}
         self.running = {}
         self.blocked = set()
         # Watching connections: session id → {token: Watcher}
@@ -549,16 +557,37 @@ class Runtime(SessionActions):
             with self.changed:
                 lock.release()
                 del self.runners[sid]
+                # Past its last turn, the runner still has its last word to
+                # say: `settled`, then a dispatch that starts a turn on a
+                # message admitted meanwhile
+                self.begin_leaving(sid)
                 if not drained:
                     # Left to the next start's repair: its queued message no
                     # longer keeps this server up
                     self.blocked.add(sid)
                 self.changed.notify_all()
-        if drained:
-            settled = self.settled(sid)
-            if settled is not None:
-                self.publish(sid, {"settled": settled})
-            self.dispatch()
+        try:
+            if drained:
+                settled = self.settled(sid)
+                if settled is not None:
+                    self.publish(sid, {"settled": settled})
+                self.dispatch()
+        finally:
+            with self.changed:
+                self.end_leaving(sid)
+                self.changed.notify_all()
+
+    def begin_leaving(self, sid):
+        """`self.changed` held: a thread of the session's has left `runners`
+        with its last word still to say (`settled`, then a dispatch that may
+        start a turn on a message admitted meanwhile)."""
+        self.leaving[sid] = self.leaving.get(sid, 0) + 1
+
+    def end_leaving(self, sid):
+        """`self.changed` held: that thread has said it."""
+        self.leaving[sid] -= 1
+        if not self.leaving[sid]:
+            del self.leaving[sid]
 
     def run_queued(self, sid, lock):
         while True:
@@ -975,18 +1004,25 @@ class Runtime(SessionActions):
         finally:
             with self.changed:
                 del self.runners[sid]
+                # Its last word is still to say, as a turn runner's is
+                self.begin_leaving(sid)
                 self.changed.notify_all()
-        settled = self.settled(sid)
-        if settled is not None:
-            self.publish(sid, {"settled": settled})
-        self.dispatch()
+        try:
+            settled = self.settled(sid)
+            if settled is not None:
+                self.publish(sid, {"settled": settled})
+            self.dispatch()
+        finally:
+            with self.changed:
+                self.end_leaving(sid)
+                self.changed.notify_all()
 
     def busy_with(self):
-        """What keeps the server up besides its clients: turns running or
-        resuming, messages that can start one, running jobs. A parked ask waits
-        on disk and keeps nothing up."""
+        """What keeps the server up besides its clients: turns running, resuming
+        or saying their last word, messages that can start one, running jobs. A
+        parked ask waits on disk and keeps nothing up."""
         with self.lock:
-            turns = sorted(self.runners)
+            turns = sorted(set(self.runners) | set(self.leaving))
             queued = [s for s in self.store.waiting_sessions() if s not in self.blocked]
         reasons = {"turns": turns, "queued": sorted(set(queued) - set(turns))}
         for service in self.services.values():
@@ -994,11 +1030,13 @@ class Runtime(SessionActions):
         return {name: value for name, value in reasons.items() if value}
 
     def wait(self, timeout=None):
-        """True once no turn is running and nothing is queued (or stopping)."""
+        """True once no turn is running or about to start and nothing is queued
+        (or stopping)."""
 
         def idle():
             waiting = set(self.store.waiting_sessions()) - self.blocked
-            return not self.runners and (not self.accepting or not waiting)
+            return (not self.runners and not self.leaving
+                    and (not self.accepting or not waiting))
 
         with self.changed:
             return self.changed.wait_for(idle, timeout)
@@ -1010,7 +1048,7 @@ class Runtime(SessionActions):
             queued = [s for s in self.store.waiting_sessions() if s not in self.blocked]
             services = any(v for service in self.services.values()
                            for v in service.busy_with().values())
-            if self.runners or queued or services:
+            if self.runners or self.leaving or queued or services:
                 return False
             self.accepting = False
             return True

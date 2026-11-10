@@ -3,6 +3,27 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.9
+
+The last release of ZERO's sixth generation (memory and long work): fixes, and ZERO's version.
+
+- **ZERO knows its version.** Its system message says which release it is, read from this
+  CHANGELOG's newest section, and `zero --version` prints it.
+- **One default instruction fewer.** A new ZERO.md no longer starts with "A claim holds when it
+  was read, not recalled…": it sent ZERO to check on disk what its system message had just told
+  it. Your own ZERO.md is untouched; the line is yours to keep or remove.
+
+- **The server's rest is exact.** A turn that has just ended still says its last word (that the
+  session has settled, then the start of a message that came meanwhile); the server now counts it
+  as busy until then, so `zero server status` and the idle exit never see it at rest a moment early.
+- **Every instruction file is named.** SOUL.md, your ZERO.md and a project's ZERO.md files share
+  one room in ZERO's system message; a file found once that room is spent is now always named,
+  with the line where it starts. Before, it was named or left out depending on a few characters.
+- **A subagent's report reaches its parent once.** When a subagent ends its turn by repeating a
+  report it already sent, the answer isn't passed up again.
+- **No error at quitting the full screen.** Its redraw timer could fire while the screen was
+  being taken down, and print an error as `zero` closed.
+
 ## 0.6.8.1
 
 The balance between the means: what ZERO weighs a pick with.

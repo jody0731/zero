@@ -154,7 +154,7 @@ The mode decides who answers ZERO's questions: in `default` the calling agent do
 zero update
 ```
 
-It fetches the releases, checks out the newest, installs the requirements again when they changed and shows what the new release brought. The server picks up the new code once it is idle. It never touches `~/.zero`, and it refuses when the clone has changes of your own.
+It fetches the releases, checks out the newest, installs the requirements again when they changed and shows what the new release brought. `zero --version` says which release you have. The server picks up the new code once it is idle. It never touches `~/.zero`, and it refuses when the clone has changes of your own.
 
 <details>
 <summary><b>If an update goes wrong</b>: the same, by hand</summary>

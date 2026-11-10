@@ -7,8 +7,12 @@ from pathlib import Path
 
 from core import history, tools
 from core.hooks import Hook
+from paths import changelog_version
 from prompt.instructions import means_facts
 
+# The version of ZERO this process runs, read once when it starts, as the
+# server's build is (protocol/version.py)
+ZERO_VERSION = changelog_version()
 # A restart gives each session a new scratch folder (sandbox/sandbox.py's
 # LASTS), while its system message keeps the one it was written with
 NEW_SCRATCH = (
@@ -86,6 +90,7 @@ class Environment(Hook):
             f"- working directory (the workspace): {self.sandbox.workspace}\n"
             f"- {self.sandbox.environment_line()}{self._mode_line()}\n"
             f"- system: {os_name()}, kernel {platform.release()}\n"
+            f"{version_line()}"
             f"- date: {now:%A %d %B %Y, %H:%M %Z}"
         )
 
@@ -133,6 +138,11 @@ class Environment(Hook):
             f"\n- working directory (the workspace): {self.sandbox.workspace}"
             f"\n- {self.sandbox.environment_line()}{self._mode_line()}"
         )
+
+
+def version_line():
+    """ZERO's version, for the environment; nothing when it has none."""
+    return f"- ZERO's version: {ZERO_VERSION}\n" if ZERO_VERSION else ""
 
 
 def os_name():

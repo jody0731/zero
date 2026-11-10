@@ -13,6 +13,10 @@ from commands. Each home's server runs as a systemd unit of its own: zero-server
 for ~/.zero, zero-server-<hash> for any other, so two homes' servers run side by
 side.
 
+Also the version this copy of ZERO is: its CHANGELOG.md, in ZERO's own
+folder beside this file, has a section for each release, the newest at its
+top.
+
 Shared by the server and its clients, so neither imports the other. Read when
 called, so a test's ZERO_HOME counts; nothing here names a user or a
 machine.
@@ -20,6 +24,7 @@ machine.
 
 import hashlib
 import os
+import re
 from pathlib import Path
 
 NAME = "zero"
@@ -29,6 +34,21 @@ HOME_ENV = "ZERO_HOME"
 SOCKET_MAX = 107
 SOCKET = "zero.sock"
 UNIT = f"{NAME}-server"
+
+# A CHANGELOG section's heading: the version it is for
+CHANGELOG_SECTION = re.compile(r"(?m)^## (\S+)")
+
+
+def changelog_version(changelog=None):
+    """The version a CHANGELOG's newest section is for, by default ZERO's own;
+    None without one."""
+    if changelog is None:
+        changelog = Path(__file__).resolve().parent / "CHANGELOG.md"
+    try:
+        match = CHANGELOG_SECTION.search(changelog.read_text())
+    except OSError:
+        return None
+    return match.group(1) if match else None
 
 
 def usual_home():

@@ -43,6 +43,7 @@ import web.tool
 import context.tool
 import rounds.tool
 import subagents.tool
+import wait.tool
 import usage.tool
 import session_search.tool
 from core import history, tools
@@ -57,6 +58,7 @@ from context import SETTINGS as CONTEXT_SETTINGS
 from context import room
 from context.hooks import Context
 from context.results import folder_of
+from context.size_note import SizeNote
 from context.service import ContextService
 from limits.repeats import RepeatGuard
 from rounds.hooks import Rounds, running_round
@@ -90,6 +92,7 @@ from permissions.modes import (
     JUDGED, MODES, UNSANDBOXED, answers_line, canonical, raised,
 )
 from limits.stops import BrokenReplyLimit
+from prompt import SETTINGS as PROMPT_SETTINGS
 from prompt.hooks import Environment, Means
 from prompt.instructions import PROJECT_FILE, read, system_prompt, user_instructions
 from memory.hooks import ZeroFilesGuard
@@ -104,8 +107,8 @@ from sandbox.sandbox import (
 # The settings view's order: each service declares its own settings (SETTINGS),
 # and the view lists them as here
 SETTINGS_ORDER = (
-    "mode", "model", "fallback_model", "thinking_effort", "judge_model",
-    "judge_thinking_effort",
+    "mode", "model", "fallback_model", "thinking_effort", "time_or_tokens",
+    "judge_model", "judge_thinking_effort",
     # The limits, by what they bound: work started, commands, files, the
     # web, the context, session search, notes, the model, the judge, the
     # consent check
@@ -115,7 +118,7 @@ SETTINGS_ORDER = (
     "web_timeout", "web_fetch_max_megabytes", "web_fetch_max_redirects",
     "web_search_max_results",
     "compact_at_tokens", "result_share_percent", "reply_room_tokens",
-    "handoff_room_tokens",
+    "handoff_room_tokens", "context_note_every_tokens",
     "session_search_count", "session_search_each_side",
     "session_search_snippet_words", "rewind_note_line_chars",
     "model_silence_seconds", "model_retries", "model_retry_seconds",
@@ -129,7 +132,7 @@ settings.add(
     *JOB_SETTINGS, *SUBAGENT_SETTINGS,
     *SHELL_SETTINGS,
     *FILE_SETTINGS, *WEB_SETTINGS, *JUDGE_SETTINGS, *PERMISSION_SETTINGS,
-    *SESSION_SEARCH_SETTINGS,
+    *SESSION_SEARCH_SETTINGS, *PROMPT_SETTINGS,
     order=SETTINGS_ORDER,
 )
 
@@ -159,6 +162,9 @@ def code_mark(session):
     digest.update(json.dumps(history.NOTICES, sort_keys=True).encode())
     # What each means is for, which the system message lists
     digest.update(json.dumps(tools.means_lines(session.tool_context)).encode())
+    # The user's trade between waiting and weighted tokens, stated there too
+    limits = session.tool_context.get("limits") or settings.DEFAULTS
+    digest.update(limits["time_or_tokens"].encode())
     return digest.hexdigest()[:12]
 
 
@@ -188,7 +194,8 @@ def session_hooks(
     mode = canonical(mode)
     runs_as = canonical(runs_as or mode)
     spec = MODES[runs_as]
-    hooks = [Means(), Environment(sandbox, answers_line(mode, runs_as))]
+    hooks = [Means(limits, token_weights(server.price)),
+             Environment(sandbox, answers_line(mode, runs_as))]
     if own is not None:
         hooks.append(own)
     hooks += [
@@ -198,6 +205,8 @@ def session_hooks(
         Rounds(),
         # A subagent's use against the estimate it was started with
         PastEstimate(),
+        # After Context: the size a compaction left is what gets told
+        SizeNote(limits),
     ]
     # The permissions memory where someone answers asks; before the
     # repeat guard, which lets a granted call through
@@ -554,10 +563,14 @@ def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options)
     # Only when nothing else is given: the first use writes the user's files
     if "instructions" not in options:
         options["instructions"] = user_instructions()
-    return make_session(
+    session = make_session(
         info["model"], log=log, mode=info["mode"], ask=ask,
         limits=limits, unattended=info.get("started_by") == "zero", **options,
     )
+    # A server carries it: notices and messages reach its running turn
+    # (`wait` holds a turn for them)
+    session.tool_context["on_a_server"] = True
+    return session
 
 
 def server_session_maker(paths, config, limits=None):

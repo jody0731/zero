@@ -187,13 +187,17 @@ def start_summary(args):
 
 # What subagents are for, beside the other means in the system message
 # (prompt/instructions.py, MEANS_FACTS). Keeping a part of the work out of
-# this context comes first: it needs no second subagent
+# this context comes first: it needs no second subagent. Its cost stands
+# beside what it gives: six subagents moved a task's reading to their own
+# contexts and didn't cut it (1.8 times the weighted tokens, 0.6.8's runs)
 MEANS = (
     "subagents (`start_subagent`): a part of the work done outside this "
     "conversation. What a subagent reads and runs stays in its own context "
     "and only its report comes into this one, so this session's later steps "
     "read less; and several work side by side, so parts that don't need each "
-    "other take the time of the longest part, not the sum."
+    "other take the time of the longest part, not the sum. What a subagent "
+    "reads is new input in a context it builds itself, counted in this "
+    "session's use."
 )
 
 

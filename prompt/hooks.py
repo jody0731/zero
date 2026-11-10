@@ -50,12 +50,21 @@ FORK_WENT_ON = (
 
 
 class Means(Hook):
-    """Whose pick the means of carrying out a task are, and what each is
-    for (prompt/instructions.py, MEANS_FACTS): the first of the hooks'
-    parts, so it stands under how a turn runs."""
+    """Whose pick the means of carrying out a task are, the user's trade
+    between waiting and weighted tokens, and what each means is for
+    (prompt/instructions.py, MEANS_FACTS): the first of the hooks' parts, so
+    it stands under how a turn runs. `limits`: the session's settings, read
+    when the system message is written. `weights`: what a token read from
+    the cache and an output token count on the session's model, None for a
+    model with no price."""
+
+    def __init__(self, limits, weights=None):
+        self.limits = limits
+        self.weights = weights
 
     def system_prompt(self, session):
-        return means_facts(tools.means_lines(session.tool_context))
+        return means_facts(tools.means_lines(session.tool_context),
+                           self.limits["time_or_tokens"], self.weights)
 
 
 class Environment(Hook):

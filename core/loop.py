@@ -612,6 +612,9 @@ class Session:
             context["request"] = call.turn.question
             if call.turn.control is not None:
                 context["stop"] = call.turn.control.stop
+                # What has come for the turn and waits for its next step,
+                # for a call that holds the turn until something does
+                context["steers"] = call.turn.control.steers
             return tools.run(call.name, call.args, context)
         except KeyboardInterrupt as error:
             call.result = (

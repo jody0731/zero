@@ -3,6 +3,28 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.8.1
+
+The balance between the means: what ZERO weighs a pick with.
+
+- **Time or tokens, your call:** a new setting, `/settings` → Default → "Time or tokens"
+  (`time_or_tokens`): `fewest_tokens`, `balanced` (as shipped) or `least_waiting`. ZERO reads it as
+  a fact about you, in its system message, for a pick between two means that would reach the same
+  result, such as working alone or through subagents. An open session reads a change at its next
+  turn.
+- **A note when the context has grown:** each time a session's context passes another 100,000
+  tokens, ZERO is told its size, what every step now counts for reading it again, and what the turn
+  has used so far. Numbers only; what to do with them is ZERO's to weigh (a compaction, rounds,
+  fewer steps). `context_note_every_tokens` in Advanced → Limits; 0 turns it off.
+- **`wait`, a new tool:** ZERO can hold a turn until a notice or a message from you comes, or some
+  minutes pass, with no call to its model meanwhile. Where it used to `sleep` or end its turn and
+  answer twice, it now holds the turn and gives one reply.
+- **`usage` shows the context's size now** and what a step counts for reading it again.
+- **What ZERO is told of its means, reworded:** a turn's line says what a step of a long turn
+  counts, with a number at the model's own weights; rounds start at any step of a turn, which
+  becomes round 1, and a round's steps read that round's work alone; what a subagent reads is new
+  input, counted in the session's use.
+
 ## 0.6.8
 
 ZERO picks the means: what it reads of them, and the unit it counts in.

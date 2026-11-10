@@ -8,9 +8,13 @@ without one.
 """
 
 from core.tools import tool
-from usage.spend import describe, estimate_text, past_estimate
+from usage.spend import describe, estimate_text, past_estimate, tokens_text
 
 NOT_HERE = "Usage isn't available in this session."
+# The context's size as the last call's server counted it, and what a step
+# counts for reading it again: the numbers of the context's own note
+# (context/size_note.py), here to look at again
+CONTEXT = "The context now: {tokens:,} tokens; a step reads it again for {step}."
 
 
 def subagent_line(entry):
@@ -29,7 +33,9 @@ def subagent_line(entry):
     "cache, out) and their total in weighted tokens. The session's counts "
     "every subagent under it; "
     "each subagent this session started is listed with its use, its own "
-    "subagents' counted in, against the estimate it was started with.",
+    "subagents' counted in, against the estimate it was started with. Then "
+    "the context's size now, as the last call's server counted it, and what "
+    "a step counts for reading it again.",
     summary=lambda args: "usage: this session's",
     needs_permission=lambda args: False,
     changing=True,
@@ -41,16 +47,21 @@ def usage(session_use=None):
     own = session_use.own()
     lines = [f"This turn: {describe(session_use.turn())}."]
     found = session_use.subagents() if session_use.subagents else []
-    if not found:
-        lines.append(f"This session in all: {describe(own)}.")
-        return "\n".join(lines)
     total = own
     for entry in found:
         total = total + entry["use"]
-    lines.append(
-        f"This session in all, its subagents' included: {describe(total)} "
-        f"(its own: {describe(own)})."
-    )
-    lines.append("Its subagents:")
-    lines += [subagent_line(entry) for entry in found]
+    if found:
+        lines.append(
+            f"This session in all, its subagents' included: {describe(total)} "
+            f"(its own: {describe(own)})."
+        )
+    else:
+        lines.append(f"This session in all: {describe(own)}.")
+    context = session_use.context()
+    if context is not None:
+        tokens, step = context
+        lines.append(CONTEXT.format(tokens=tokens, step=tokens_text(step)))
+    if found:
+        lines.append("Its subagents:")
+        lines += [subagent_line(entry) for entry in found]
     return "\n".join(lines)

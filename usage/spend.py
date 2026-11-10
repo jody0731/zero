@@ -64,6 +64,39 @@ def turn_weighted_tokens(records, price, fallback_price=None):
                if r["type"] == "assistant")
 
 
+def context_tokens(records):
+    """The context's size as the model's server last counted it: the tokens
+    the latest model call read; None with no call since the context was
+    last written whole (a new session, a compaction, a model switch). New
+    code rewrites the system message around the same conversation, and the
+    count holds near enough. Counted, never estimated: what came since that
+    call isn't in it."""
+    found = None
+    for record in records:
+        if record["type"] in history.SYSTEM_RECORDS:
+            if not (record["type"] == "system" and record.get("why") == "code"):
+                found = None
+        elif record["type"] == "assistant" and record.get("prompt_tokens"):
+            found = record["prompt_tokens"]
+    return found
+
+
+def reread_weighted_tokens(tokens, price):
+    """What reading `tokens` again from the cache counts at `price`: a
+    step's cost for a context of that size, before anything new."""
+    cache, _ = token_weights(price) or (1.0, 1.0)
+    return tokens * cache
+
+
+def turn_reread_weighted_tokens(records, price, fallback_price=None):
+    """The part of a turn's weighted tokens that read the conversation
+    again: each call's tokens from the cache, at its own model's weight."""
+    return sum(
+        reread_weighted_tokens(
+            r.get("cached_tokens") or 0, own_price(r, price, fallback_price))
+        for r in records if r["type"] == "assistant")
+
+
 def dollars_of(weighted_tokens, price):
     """Weighted tokens as dollars at `price`, for the user's screens; nothing
     with no price."""
@@ -282,3 +315,14 @@ class SessionUse:
 
     def own(self):
         return log_use(self.session_of().log.path)
+
+    def context(self):
+        """The context's size now and what a step counts for reading it
+        again: (tokens, weighted tokens); None before a call has read the
+        context as it stands."""
+        session = self.session_of()
+        tokens = context_tokens(session.log.branch())
+        if tokens is None:
+            return None
+        return tokens, reread_weighted_tokens(
+            tokens, session.settings.get("price"))

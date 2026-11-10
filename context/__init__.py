@@ -7,7 +7,8 @@ compaction.py: making room, old outputs cleared to files and then, when
 that isn't enough, a handoff for the older steps. results.py: the session's
 folder of results saved whole. hooks.py: the check before every call, the
 refusal net, and each result and notice fitted to its share (Context).
-tool.py: `compact`, ZERO's own way to ask for a compaction.
+tool.py: `compact`, ZERO's own way to ask for a compaction. size_note.py:
+the context's size told to ZERO each time it has grown by a mark (SizeNote).
 """
 
 from settings import Setting
@@ -31,4 +32,11 @@ SETTINGS = (
     Setting("handoff_room_tokens", "Limits",
             "Tokens kept for a compaction's handoff", 8_000, "int",
             minimum=1_000),
+    # A note of the context's size and of what a step counts for reading
+    # it again, each time it has grown by this many tokens (size_note.py);
+    # 0: none. On a large window no compaction comes to mark that a turn
+    # has grown, and a number in `usage` waits to be asked for
+    Setting("context_note_every_tokens", "Limits",
+            "Tokens the context grows by between notes of its size", 100_000,
+            "int", minimum=0),
 )

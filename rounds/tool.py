@@ -53,11 +53,16 @@ def estimate_text(rounds, minutes, weighted_tokens):
 
 # What rounds are for, beside the other means in the system message
 # (prompt/instructions.py, MEANS_FACTS)
+# That it starts mid-turn is said here: the pick is made again when the
+# work turns out other than thought, and a turn grown long never weighed
+# rounds (0.6.8's runs)
 MEANS = (
-    "rounds (`start_rounds`): long work seen through from end to end. The "
-    "server carries it from round to round, each reading a small context, "
-    "until a check from outside says it is done; the user sees its estimate "
-    "and how far it is."
+    "rounds (`start_rounds`): long work seen through from end to end. Each "
+    "round is a turn whose context starts fresh from the last round's "
+    "handoff, so its steps read that round's work and not all that came "
+    "before; the server starts the next round itself until a check from "
+    "outside says the work is done; the user sees its estimate and how far "
+    "it is. It starts at any step of a turn, which becomes round 1."
 )
 DESCRIPTION = (
     "Work toward an objective in rounds. The server carries the work on "

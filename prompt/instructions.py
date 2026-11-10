@@ -101,11 +101,40 @@ NOTICE_FACT = (
 # so a session reads the ones it has
 MEANS_FACTS = (
     "How a task is carried out is yours to pick, at its start and again when "
-    "the work turns out other than you thought. What each means is for:\n"
+    "the work turns out other than you thought. {trade} What each means is "
+    "for:\n"
     "- this turn: work whose end is in sight. Each step reads the whole "
-    "conversation again, so the longer the turn, the more every step reads.\n"
+    "conversation again, from the cache where its server holds it, so the "
+    "longer the turn, the more every step reads: at {context:,} tokens of "
+    "context, {step:,} weighted tokens a step.\n"
     "{others}\n"
 )
+# The context size the turn's line counts a step at. The line carries the
+# number itself: told only "each step reads the whole conversation again",
+# a pick summed twenty steps of a 300,000-token context at 1 a token (six
+# million, where a token read from the cache counts 1/50) and took
+# subagents for the cheaper means under fewest_tokens
+EXAMPLE_CONTEXT_TOKENS = 100_000
+# The user's trade between waiting and weighted tokens (the setting
+# time_or_tokens), a fact about the user beside whose pick the means are:
+# without it a pick between working alone and subagents followed whichever
+# text was freshest (the same task alone, then through six subagents: a
+# third faster, 1.8 times the weighted tokens). "The same result": the
+# trade is between time and tokens, never the result's quality
+TRADES = {
+    "fewest_tokens": (
+        "Where two means would reach the same result, the user would rather "
+        "wait longer than have more weighted tokens used."
+    ),
+    "balanced": (
+        "Where two means would reach the same result, the user weighs the "
+        "waiting and the weighted tokens alike."
+    ),
+    "least_waiting": (
+        "Where two means would reach the same result, the user would rather "
+        "have more weighted tokens used than wait longer."
+    ),
+}
 # The longest piece of a line a cut quotes
 QUOTED_CHARS = 60
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
@@ -263,13 +292,22 @@ def notice_fact():
     return NOTICE_FACT.format(senders=senders)
 
 
-def means_facts(lines):
-    """Whose pick the means are and what each is for: this turn, then
-    `lines`, the other means a session has, each as its tool says it; ""
-    for a session with no other means, which has nothing to pick."""
+def means_facts(lines, time_or_tokens, weights=None):
+    """Whose pick the means are, the user's trade between waiting and
+    weighted tokens (`time_or_tokens`, the setting's value) and what each
+    means is for: this turn, with what a step counts for reading a context
+    of EXAMPLE_CONTEXT_TOKENS again (`weights`, the model's, as
+    weights_text takes them), then `lines`, the other means a session has,
+    each as its tool says it; "" for a session with no other means, which
+    has nothing to pick."""
     if not lines:
         return ""
-    return MEANS_FACTS.format(others="\n".join(f"- {line}" for line in lines))
+    cache = weights[0] if weights else 1
+    return MEANS_FACTS.format(
+        trade=TRADES[time_or_tokens],
+        context=EXAMPLE_CONTEXT_TOKENS,
+        step=round(EXAMPLE_CONTEXT_TOKENS * cache),
+        others="\n".join(f"- {line}" for line in lines))
 
 
 def weight_text(weight):

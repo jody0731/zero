@@ -318,7 +318,13 @@ WHEN_IT_APPLIES = {
 # A line more for a setting whose effect depends on the server
 SETTING_NOTES = {
     "max_subagent_depth": "0 is off.",
+    "context_note_every_tokens": "0 is off.",
     "fallback_model": "Applies at once, to every session, at a call that fails.",
+    "time_or_tokens": (
+        "What ZERO reads of you where two ways of doing a task would reach "
+        "the same result. Applies to every session, open ones too, from its "
+        "next turn."
+    ),
     "thinking_effort": "Sent to DeepSeek; other servers get none.",
     "judge_thinking_effort": "Sent to DeepSeek; other servers get none.",
 }

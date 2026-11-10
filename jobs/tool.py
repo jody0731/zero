@@ -33,10 +33,10 @@ def minutes(seconds):
 
 
 # The notice outlives the turn: without this fact the model slept in its turn
-# until the notice came
+# until the notice came. Both halves, in the words a subagent's start uses
 ENDS = (
-    "A message comes when it ends; if this turn has ended by then, the message "
-    "starts a new one."
+    "A notice comes when it ends: while a turn is running, at its next step; "
+    "once the turn has ended, the notice starts a new one."
 )
 
 
@@ -121,6 +121,14 @@ def job_summary(args):
     return text
 
 
+# What a background job is for, beside the other means in the system message
+# (prompt/instructions.py, MEANS_FACTS)
+MEANS = (
+    "a background job (bash's `background`): a command that takes long. It "
+    "runs with no call to your model while you go on."
+)
+
+
 @tool(
     "Background jobs started with bash's `background`, or moved there after its "
     "timeout. With no id: list this session's jobs. With an id: its state and its "
@@ -132,6 +140,8 @@ def job_summary(args):
     changing=True,
     # Only a stop changes anything; a new estimate is the job's own note
     needs_permission=lambda args: args.get("stop") is True,
+    # A means only where the session has a server for jobs
+    means=lambda context: MEANS if context.get("jobs") is not None else None,
     id=("string", "The job's id, e.g. job-3f9a2c"),
     stop=("boolean", "Stop the job"),
     expect_minutes=("number", "A new estimate, in minutes from now"),

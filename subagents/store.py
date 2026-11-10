@@ -20,8 +20,12 @@ CREATE TABLE IF NOT EXISTS subagents (
     -- The parent's record its start_subagent ran in: a report to a part a
     -- rewind left behind says so
     started_from_seq INTEGER,
-    -- The estimate it was started with: minutes of working time, dollars
+    -- The estimate it was started with: minutes of working time, weighted
+    -- tokens (NULL in a row from before 0.6.8, estimated in dollars)
     estimate_minutes REAL NOT NULL,
+    estimate_weighted_tokens REAL,
+    -- The estimate in the user's unit, at the session's price when it was
+    -- made (0 with no price)
     estimate_dollars REAL NOT NULL,
     -- When its parent was told its use passed the estimate; NULL until then
     past_estimate_at REAL,
@@ -29,6 +33,9 @@ CREATE TABLE IF NOT EXISTS subagents (
 );
 CREATE INDEX IF NOT EXISTS subagents_parent ON subagents (parent);
 """
+# Columns added since a database was made (0.6.8: the estimate in weighted
+# tokens, beside its dollars)
+ADDED_COLUMNS = {"subagents": {"estimate_weighted_tokens": "REAL"}}
 
 
 class SubagentStore:
@@ -43,11 +50,12 @@ class SubagentStore:
         with self.store.transaction() as db:
             db.execute(
                 "INSERT INTO subagents (session, parent, start_from, depth, "
-                "started_from_seq, estimate_minutes, estimate_dollars, "
-                "started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "started_from_seq, estimate_minutes, estimate_weighted_tokens, "
+                "estimate_dollars, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (row["session"], row["parent"], row["start_from"], row["depth"],
                  row["started_from_seq"], row["estimate_minutes"],
-                 row["estimate_dollars"], time.time()),
+                 row["estimate_weighted_tokens"], row["estimate_dollars"],
+                 time.time()),
             )
             self.store.queue_notice(db, *notice)
 

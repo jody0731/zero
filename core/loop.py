@@ -184,6 +184,11 @@ class Session:
         model)."""
         records = self.log.branch()
         if not records:
+            # The system message as things stand at the first turn, where
+            # its code mark is taken too: what was handed to the session's
+            # tools since it was built (a server's jobs, rounds and
+            # subagents) changes what it says
+            self.messages = [{"role": "system", "content": self.system_text()}]
             fields = self.session_record()
             self.messages = []
             self.write("session", **fields)

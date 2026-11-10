@@ -13,7 +13,9 @@ the work goes on; nothing stops at it.
 from core import history
 from core.hooks import Hook, Stop
 from rounds import tool as roundtools
-from usage.spend import call_dollars, turn_dollars
+from usage.spend import (
+    call_weighted_tokens, turn_dollars, turn_weighted_tokens,
+)
 
 # A turn's second compaction: the fact that long work can run in rounds
 OFFERED = (
@@ -85,9 +87,10 @@ class Rounds(Hook):
         if rounds is None:
             return
         records = history.unfinished_turn(session.log.branch())
-        # What this turn's calls cost so far, for the estimate
-        self._spent = turn_dollars(records, session.settings.get("price"),
-                                   session.settings.get("fallback_price"))
+        # What this turn's calls used so far, for the estimate
+        self._spent = turn_weighted_tokens(
+            records, session.settings.get("price"),
+            session.settings.get("fallback_price"))
         run = running_round(turn)
         if run is not None and run["round_count"] > run["estimate_rounds"]:
             self._past(turn, run, 0.0)
@@ -101,7 +104,7 @@ class Rounds(Hook):
         reply = step.reply
         model = step.turn.session.model
         price = getattr(getattr(model, "server", None), "price", None)
-        self._spent = getattr(self, "_spent", 0.0) + call_dollars(
+        self._spent = getattr(self, "_spent", 0.0) + call_weighted_tokens(
             reply.prompt_tokens, reply.cached_tokens, reply.completion_tokens,
             price)
 
@@ -109,12 +112,13 @@ class Rounds(Hook):
         """Tell ZERO once that the work passed its estimate."""
         if run["past_estimate_at"] is not None:
             return
+        estimate_tokens = run["estimate_weighted_tokens"]
         spent = roundtools.estimate_text(
             run["round_count"], run["spent_minutes"] + minutes,
-            run["spent_dollars"] + getattr(self, "_spent", 0.0))
+            None if estimate_tokens is None
+            else run["spent_weighted_tokens"] + getattr(self, "_spent", 0.0))
         estimate = roundtools.estimate_text(
-            run["estimate_rounds"], run["estimate_minutes"],
-            run["estimate_dollars"])
+            run["estimate_rounds"], run["estimate_minutes"], estimate_tokens)
         turn.session.write("note", kind="past_estimate", run=run["id"],
                            text=PAST_ESTIMATE.format(
                                id=run["id"], objective=run["objective"],
@@ -147,9 +151,11 @@ class Rounds(Hook):
         run = running_round(step.turn)
         if run is not None and run["past_estimate_at"] is None:
             minutes = step.turn.agent_seconds() / 60
-            money = getattr(self, "_spent", 0.0)
+            tokens = run["spent_weighted_tokens"] + getattr(self, "_spent", 0.0)
+            estimate_tokens = run["estimate_weighted_tokens"]
+            # A run from before 0.6.8 has no estimate in tokens
             if (run["spent_minutes"] + minutes > run["estimate_minutes"]
-                    or run["spent_dollars"] + money > run["estimate_dollars"] > 0):
+                    or (estimate_tokens is not None and tokens > estimate_tokens)):
                 self._past(step.turn, run, minutes)
         return None
 
@@ -169,8 +175,10 @@ class Rounds(Hook):
             return
         end = round_end(records, run["id"])
         minutes = turn.agent_seconds() / 60
-        money = turn_dollars(records, session.settings.get("price"),
-                             session.settings.get("fallback_price"))
+        price = session.settings.get("price")
+        fallback_price = session.settings.get("fallback_price")
+        weighted_tokens = turn_weighted_tokens(records, price, fallback_price)
+        money = turn_dollars(records, price, fallback_price)
         state = rounds.next_state(run, turn.outcome, end)
         fresh = False
         if state == "running" and turn.outcome not in FAILED:
@@ -182,5 +190,5 @@ class Rounds(Hook):
             if fresh and end is None:
                 # The handoff the model wrote, kept as the round's own
                 end = {"status": "going_on", "handoff": cut["summary"]}
-        rounds.finish_round(run["id"], state, turn.outcome, end, minutes, money,
-                            fresh)
+        rounds.finish_round(run["id"], state, turn.outcome, end, minutes,
+                            weighted_tokens, money, fresh)

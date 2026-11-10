@@ -69,8 +69,10 @@ def describe(limits, context=None):
     background=(
         "boolean",
         "Run it as a background job: the call returns at once with the job's id, "
-        "and a message comes when it ends; if this turn has ended by then, the "
-        "message starts a new one",
+        "and the job runs side by side with this turn and with other jobs, "
+        "with no call to your model while it runs. A notice comes when it "
+        "ends: while a turn is running, at its next step; once the turn has "
+        "ended, the notice starts a new one",
     ),
     expect_minutes=(
         "number", "With background: roughly how many minutes it should take",

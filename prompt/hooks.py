@@ -5,8 +5,9 @@ import platform
 from datetime import datetime
 from pathlib import Path
 
-from core import history
+from core import history, tools
 from core.hooks import Hook
+from prompt.instructions import means_facts
 
 # A restart gives each session a new scratch folder (sandbox/sandbox.py's
 # LASTS), while its system message keeps the one it was written with
@@ -46,6 +47,15 @@ FORK_WENT_ON = (
     "{first}–{last} of its log, which session_search reads there. What was "
     "done there stays done: files and memory are as it left them.{part}"
 )
+
+
+class Means(Hook):
+    """Whose pick the means of carrying out a task are, and what each is
+    for (prompt/instructions.py, MEANS_FACTS): the first of the hooks'
+    parts, so it stands under how a turn runs."""
+
+    def system_prompt(self, session):
+        return means_facts(tools.means_lines(session.tool_context))
 
 
 class Environment(Hook):

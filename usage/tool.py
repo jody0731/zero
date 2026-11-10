@@ -8,21 +8,9 @@ without one.
 """
 
 from core.tools import tool
-from usage.spend import describe
+from usage.spend import describe, estimate_text, past_estimate
 
 NOT_HERE = "Usage isn't available in this session."
-
-
-def estimate_text(estimate):
-    """An estimate a means was started with: "20 min and $0.15"."""
-    minutes, dollars = estimate
-    return f"{minutes:g} min and ${dollars:,.2f}"
-
-
-def past(use, estimate):
-    """Whether a use passes its estimate (minutes or dollars)."""
-    minutes, dollars = estimate
-    return use.minutes() > minutes or use.dollars > dollars
 
 
 def subagent_line(entry):
@@ -30,16 +18,16 @@ def subagent_line(entry):
     line = (f"- {entry['id']} \"{entry['title']}\" ({entry['state']}): "
             f"{describe(entry['use'])}")
     if entry.get("estimate"):
-        where = "past" if past(entry["use"], entry["estimate"]) else "of"
-        line += f", {where} your estimate of {estimate_text(entry['estimate'])}"
+        where = "past" if past_estimate(entry["use"], *entry["estimate"]) else "of"
+        line += f", {where} your estimate of {estimate_text(*entry['estimate'])}"
     return line
 
 
 @tool(
     "What this session has used so far: this turn's and the whole session's "
     "working time, the tokens of its model calls (in, the share from the "
-    "cache, out) and their dollars at the model's price, a model with no "
-    "price costing nothing. The session's counts every subagent under it; "
+    "cache, out) and their total in weighted tokens. The session's counts "
+    "every subagent under it; "
     "each subagent this session started is listed with its use, its own "
     "subagents' counted in, against the estimate it was started with.",
     summary=lambda args: "usage: this session's",

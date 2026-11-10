@@ -8,7 +8,9 @@ the same server). A model name picks its server by its prefix
 prefix goes to Ollama ("qwen3.5:9b"). A model's context window is its own
 line, else its server's; a model with neither can't start. A server's line `api`
 names the API its server speaks (apis/), the Chat Completions API when it
-names none.
+names none. A model's price is its own line, else its server's, else the
+one a release filled in from models.dev's list (prices.toml beside this
+file): no user types a price, and a model with none anywhere has none.
 
 An API key comes from the server's environment variable or from the keys
 file (paths.py), straight into the client; the harness never puts it in the
@@ -31,6 +33,8 @@ from model.apis import APIS, DEFAULT
 from settings import stamp
 
 CATALOG = Path(__file__).with_name("catalog.toml")
+# Prices a release filled in: {server: {model: [cache hit, miss, output]}}
+PRICES = Path(__file__).with_name("prices.toml")
 # Where a name without a known server's prefix goes
 UNPREFIXED_SERVER = "ollama"
 # A server's lines, and the ones a model may have of its own. context_stop
@@ -57,6 +61,11 @@ NONE = object()
 COUNTS_KEPT = 512
 
 
+# The catalog and the filled prices, read once; the user's file again
+# whenever it changes
+CACHE = {}
+
+
 class ModelServerError(Exception):
     """A model can't be reached as configured (no key, say): stop at startup."""
 
@@ -80,7 +89,21 @@ class ModelServer:
         self.key_env = entry.get("key_env")
         # USD per 1M tokens at peak price: (cache hit, cache miss, output)
         price = merged.get("price")
+        if not price and model:
+            price = filled_prices().get(name, {}).get(model)
         self.price = tuple(price) if price else None
+
+
+def filled_prices():
+    """The prices a release filled in, read once; none without the file."""
+    if "prices" not in CACHE:
+        try:
+            CACHE["prices"] = tomllib.loads(PRICES.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            CACHE["prices"] = {}
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            raise ModelServerError(f"can't read {PRICES}: {e}") from e
+    return CACHE["prices"]
 
 
 def load(path, where):
@@ -157,10 +180,6 @@ def merge(shipped, mine, where):
             models[model] = {**models.get(model, {}), **line}
         table[name] = {**table[name], **entry, "models": models}
     return table
-
-
-# The catalog, read once; the user's file again whenever it changes
-CACHE = {}
 
 
 def table():

@@ -3,6 +3,36 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.6.8
+
+ZERO picks the means: what it reads of them, and the unit it counts in.
+
+- **ZERO counts in weighted tokens, not dollars.** Its use and its estimates (work in rounds, a
+  subagent) are in tokens weighted by the model's price: a new input token counts 1, one read from the
+  cache and an output token what the price makes them against it (on DeepSeek Flash, 1/50 and 4). A
+  model with no price counts every token 1. `start_rounds` and `start_subagent` take `weighted_tokens`
+  in place of `dollars`, and `usage` shows the tokens by kind with their weighted total. The unit is
+  the same on every server, a local one included.
+- **Your screens keep dollars:** a run's line in the status line and in `zero rounds list` shows
+  dollars on a model with a price, and weighted tokens on one without.
+- **No price to type.** Each release fills in the prices of the catalog's servers' models from
+  models.dev's public list (`model/prices.toml`). A price in the catalog or in your `models.toml` comes
+  first; a model none of them knows has no price and works as before.
+- **What ZERO is told of its means, as facts:** each step of a turn reads the whole conversation again;
+  the calls of one step run one after another, in the order written; a background job runs side by
+  side with the turn with no call to the model, and its notice reaches a running turn at its next step
+  or starts a new one; what a compaction, a round and a subagent each cost. When a notice is read is
+  said once, in the system message.
+- **The means side by side, in the system message:** it now says that how a task is carried out is
+  ZERO's to pick, and what each means it has is for: this turn, a background job, rounds, subagents
+  (a part of the work done outside the conversation, so the session's own context stays small, and
+  several side by side). A session reads only the means it has. On a research task over six code
+  bases ZERO then started six subagents unasked, where before it worked alone.
+- **Fixed:** a new session's system message is written at its first turn, with what its server has
+  handed it by then.
+- **Older runs and subagents read as before:** one estimated in dollars keeps them on your screens, and
+  ZERO reads its minutes.
+
 ## 0.6.7.1
 
 Every limit live.

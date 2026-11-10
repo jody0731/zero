@@ -12,7 +12,7 @@ import time
 
 from core import history
 from core.tools import tool
-from usage.spend import dollars_text
+from usage.spend import tokens_text
 
 # A round's opening message to its session: a notice, not the user's
 # words; the system message names who sends them
@@ -41,25 +41,43 @@ def duration(minutes):
     return f"{hours} h {rest} min" if rest else f"{hours} h"
 
 
-def estimate_text(rounds, minutes, money):
-    return f"{rounds} rounds, {duration(minutes)}, {dollars_text(money)}"
+def estimate_text(rounds, minutes, weighted_tokens):
+    """An estimate, or what was used against one: "4 rounds, 45 min,
+    1,200,000 weighted tokens"; no tokens for a run from before 0.6.8, whose
+    estimate was in dollars."""
+    text = f"{rounds} rounds, {duration(minutes)}"
+    if weighted_tokens is None:
+        return text
+    return f"{text}, {tokens_text(weighted_tokens)}"
 
 
+# What rounds are for, beside the other means in the system message
+# (prompt/instructions.py, MEANS_FACTS)
+MEANS = (
+    "rounds (`start_rounds`): long work seen through from end to end. The "
+    "server carries it from round to round, each reading a small context, "
+    "until a check from outside says it is done; the user sees its estimate "
+    "and how far it is."
+)
 DESCRIPTION = (
     "Work toward an objective in rounds. The server carries the work on "
     "from round to round with no message from the user. Each round is a turn "
     "of this session whose context starts fresh from the handoff the round "
     "before left with end_round, so it holds that round's work and not every "
     "earlier one's; the handoffs are kept in the session's folder, and the "
-    "workspace stays as it is between rounds. Done is checked from outside: "
+    "workspace stays as it is between rounds. So a round's steps read a "
+    "small context however long the work gets; a round opens with only the "
+    "system message in the cache, and reads again from the files what its "
+    "handoff doesn't hold. Rounds run one after another, never side by "
+    "side. Done is checked from outside: "
     "`done_check` is a command the server runs where this session's commands "
     "run when you report done, and exit code 0 is done. The turn that calls "
     "it is round 1; the server starts each next one, until the work is done, "
     "stuck or stopped by the user. While rounds go on, what would ask the "
     "user in default mode goes to the judge instead, which reads the user's "
-    "words. The estimate (rounds, minutes of your own working time, dollars "
-    "at the model's price) is yours: the work starts at once, nothing stops "
-    "at the estimate, and one note comes if the work passes it."
+    "words. The estimate (rounds, minutes of your own working time, "
+    "weighted tokens) is yours: the work starts at once, nothing stops at "
+    "the estimate, and one note comes if the work passes it."
 )
 
 
@@ -68,22 +86,21 @@ def start_summary(args):
     text = f"start rounds toward: {args.get('objective', '')}"
     if args.get("done_check"):
         text += f"; done check: `{args['done_check']}`"
-    rounds, minutes, money = (args.get(k) for k in ("rounds", "minutes", "dollars"))
-    if all(isinstance(v, (int, float)) for v in (rounds, minutes, money)):
-        text += f"; estimate {estimate_text(int(rounds), minutes, money)}"
+    rounds, minutes, tokens = (
+        args.get(k) for k in ("rounds", "minutes", "weighted_tokens"))
+    if all(isinstance(v, (int, float)) for v in (rounds, minutes, tokens)):
+        text += f"; estimate {estimate_text(int(rounds), minutes, tokens)}"
     return text
 
 
-def check_estimate(rounds, minutes, money):
+def check_estimate(rounds, minutes, weighted_tokens):
     """An error for an estimate that isn't three positive numbers, else
     None."""
     for name, value in (("rounds", rounds), ("minutes", minutes),
-                        ("dollars", money)):
+                        ("weighted_tokens", weighted_tokens)):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return f"Error: {name} must be a number."
-        # Dollars may be 0: a model with no price
-        least_ok = value >= 0 if name == "dollars" else value > 0
-        if not least_ok:
+        if value <= 0:
             return f"Error: {name} must be more than 0."
     return None
 
@@ -92,6 +109,9 @@ def check_estimate(rounds, minutes, money):
     DESCRIPTION,
     optional=("done_check",),
     summary=start_summary,
+    # A means only where the session's server carries rounds on
+    means=lambda context: (
+        MEANS if context.get("session_rounds") is not None else None),
     # The done check is a command: in auto+ the judge sees it first, as it
     # sees bash's
     needs_permission=lambda args: bool(args.get("done_check")),
@@ -100,10 +120,9 @@ def check_estimate(rounds, minutes, money):
                           "e.g. a test suite"),
     rounds=("integer", "Rounds the work needs, in all from now"),
     minutes=("number", "Minutes of your working time it needs, in all from now"),
-    dollars=("number", "Dollars it costs at the model's price, in all from "
-                       "now; 0 for a model with no price"),
+    weighted_tokens=("number", "Weighted tokens it needs, in all from now"),
 )
-def start_rounds(objective, rounds, minutes, dollars, done_check=None,
+def start_rounds(objective, rounds, minutes, weighted_tokens, done_check=None,
                  session_rounds=None, notes=None):
     """`session_rounds`: the session's rounds, from its server; None means
     there are none. While a run is open, a new estimate is its estimate from
@@ -111,23 +130,24 @@ def start_rounds(objective, rounds, minutes, dollars, done_check=None,
     where the hooks find that this turn is one of the run's rounds."""
     if session_rounds is None:
         return NOT_HERE
-    error = check_estimate(rounds, minutes, dollars)
+    error = check_estimate(rounds, minutes, weighted_tokens)
     if error:
         return error
     if not str(objective).strip():
         return "Error: objective is empty."
     check = str(done_check).strip() if done_check else None
     run, extended = session_rounds.start(
-        str(objective).strip(), check, (int(rounds), float(minutes), float(dollars)),
+        str(objective).strip(), check,
+        (int(rounds), float(minutes), float(weighted_tokens)),
     )
     if notes is not None:
         notes["rounds_started"] = run["id"]
     estimate = estimate_text(run["estimate_rounds"], run["estimate_minutes"],
-                             run["estimate_dollars"])
+                             run["estimate_weighted_tokens"])
     if extended:
         return (
             f"The estimate of {run['id']} is now {estimate} in all, its "
-            "spending so far included. When end_round reports going_on, this "
+            "use so far included. When end_round reports going_on, this "
             "turn ends with its step and the next round starts."
         )
     tail = (f" The done check: `{check}`." if check
@@ -259,9 +279,12 @@ def round_text(run, folder, handoff_name, early=None):
     are. `early`: why the last round's context was kept (went_on), None when
     it wasn't."""
     number = run["round_count"]
-    spent = estimate_text(number - 1, run["spent_minutes"], run["spent_dollars"])
+    estimate_tokens = run["estimate_weighted_tokens"]
+    spent = estimate_text(
+        number - 1, run["spent_minutes"],
+        None if estimate_tokens is None else run["spent_weighted_tokens"])
     estimate = estimate_text(run["estimate_rounds"], run["estimate_minutes"],
-                             run["estimate_dollars"])
+                             estimate_tokens)
     lines = [
         f"Round {number} of an estimated {run['estimate_rounds']} of "
         f"{run['id']}, toward: \"{run['objective']}\".",

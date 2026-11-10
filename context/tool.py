@@ -7,8 +7,11 @@ DESCRIPTION = (
     "Compact this session's context before your next step: older outputs are "
     "saved to files and cleared from view, and when that isn't enough, the "
     "steps before the newest ones are replaced by a handoff you write. The "
-    "session's log keeps everything. A compaction also comes on its own when "
-    "the context nears its line."
+    "session's log keeps everything. It gives room, and every later step "
+    "reads a smaller context; the step after it reads the changed context "
+    "as new input, not from the cache, and what was cleared is read again "
+    "from its file. A compaction also comes on its own when the context "
+    "nears its line."
 )
 DONE = "A compaction comes before your next step."
 

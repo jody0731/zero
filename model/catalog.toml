@@ -6,8 +6,11 @@
 # "chat_completions" when left out),
 # context_window (its models' context window), price (USD per 1M tokens at
 # peak: cache hit, cache miss, output). Under [x.models], a model's own
-# context_window and price. The facts are from the servers' docs and
-# models.dev; DeepSeek's and Ollama's are tried.
+# context_window and price. A model with no price here takes the one a
+# release filled in from models.dev's list (prices.toml), so a price is
+# written here only where that list's differs from the server's own. The
+# facts are from the servers' docs and models.dev; DeepSeek's and Ollama's
+# are tried.
 
 [deepseek]
 title = "DeepSeek"

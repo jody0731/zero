@@ -21,11 +21,15 @@ CREATE TABLE IF NOT EXISTS rounds (
     -- The round under way, or the last one
     round_count INTEGER NOT NULL DEFAULT 1,
     -- ZERO's estimate of the whole: rounds, minutes of its working time,
-    -- dollars at the model's price
+    -- weighted tokens (NULL in a run from before 0.6.8, estimated in dollars)
     estimate_rounds INTEGER NOT NULL,
     estimate_minutes REAL NOT NULL,
-    estimate_dollars REAL NOT NULL,
+    estimate_weighted_tokens REAL,
     spent_minutes REAL NOT NULL DEFAULT 0,
+    spent_weighted_tokens REAL NOT NULL DEFAULT 0,
+    -- The user's unit, for the screens' line: the estimate at the session's
+    -- price when it was made (0 with no price), and what the calls cost
+    estimate_dollars REAL NOT NULL,
     spent_dollars REAL NOT NULL DEFAULT 0,
     -- Rounds in a row that ended failed (a model error, a crash)
     failed_count INTEGER NOT NULL DEFAULT 0,
@@ -51,8 +55,13 @@ RENAMED_COLUMNS = {"rounds": {
     "budget_rounds": "estimate_rounds", "budget_minutes": "estimate_minutes",
     "budget_dollars": "estimate_dollars",
 }}
-# Columns added since a database was made (0.6.7)
-ADDED_COLUMNS = {"rounds": {"past_estimate_at": "REAL"}}
+# Columns added since a database was made (0.6.7; 0.6.8: ZERO's estimate
+# and use in weighted tokens, beside the dollars the screens show)
+ADDED_COLUMNS = {"rounds": {
+    "past_estimate_at": "REAL",
+    "estimate_weighted_tokens": "REAL",
+    "spent_weighted_tokens": "REAL NOT NULL DEFAULT 0",
+}}
 
 
 class RoundStore:
@@ -61,15 +70,19 @@ class RoundStore:
     def __init__(self, store):
         self.store = store
 
-    def add(self, id, session, objective, done_check, estimate, inbox):
-        rounds, minutes, dollars = estimate
+    def add(self, id, session, objective, done_check, estimate, dollars,
+            inbox):
+        """`estimate`: (rounds, minutes, weighted tokens); `dollars`: the
+        estimate in the user's unit."""
+        rounds, minutes, weighted_tokens = estimate
         with self.store.transaction() as db:
             db.execute(
                 "INSERT INTO rounds (id, session, objective, done_check, state, "
-                "estimate_rounds, estimate_minutes, estimate_dollars, round_inbox, "
-                "started_at) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)",
-                (id, session, objective, done_check, rounds, minutes, dollars,
-                 inbox, time.time()),
+                "estimate_rounds, estimate_minutes, estimate_weighted_tokens, "
+                "estimate_dollars, round_inbox, started_at) "
+                "VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)",
+                (id, session, objective, done_check, rounds, minutes,
+                 weighted_tokens, dollars, inbox, time.time()),
             )
 
     def run(self, id):

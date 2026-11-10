@@ -37,8 +37,10 @@ import uuid
 from core import history
 from server.services import Refused, Service
 from subagents import tool as subtools
-from subagents.store import SCHEMA, SubagentStore
-from usage.spend import describe, log_use
+from subagents.store import ADDED_COLUMNS, SCHEMA, SubagentStore
+from usage.spend import (
+    describe, dollars_of, estimate_text, log_use, past_estimate,
+)
 
 # What send_message returns when a message went through
 SENT = "Sent to session"
@@ -74,7 +76,7 @@ class SessionSubagents:
         call from the last level is refused with the fact."""
         return self.max_depth() > 0
 
-    def start(self, task, start_from, title, minutes, dollars):
+    def start(self, task, start_from, title, minutes, weighted_tokens):
         """(the new subagent's id, None), or (None, why it wasn't
         started)."""
         deepest = self.max_depth()
@@ -87,7 +89,8 @@ class SessionSubagents:
                           f"{self.depth()}, and subagents go {deepest} "
                           f"{levels} below a session the user started.")
         return self.service.start(self.sid, self.session_of(), task, start_from,
-                                  title, minutes, dollars, self.depth() + 1)
+                                  title, minutes, weighted_tokens,
+                                  self.depth() + 1)
 
     def send(self, to, text):
         return self.service.send(self.sid, to, text)
@@ -108,6 +111,7 @@ class SessionSubagents:
 class SubagentsService(Service):
     name = "subagents"
     schema = SCHEMA
+    added_columns = ADDED_COLUMNS
     tables = ("subagents",)
 
     def __init__(self, clock=time.time):
@@ -196,7 +200,8 @@ class SubagentsService(Service):
                 "id": row["session"], "title": info["title"],
                 "state": self.state(row["session"])[0],
                 "use": self.subtree_use(row["session"]),
-                "estimate": (row["estimate_minutes"], row["estimate_dollars"]),
+                "estimate": (row["estimate_minutes"],
+                             row["estimate_weighted_tokens"]),
             })
         return found
 
@@ -230,8 +235,8 @@ class SubagentsService(Service):
             "started_by": "zero" if row else "user",
             "state": state, "outcome": outcome,
             "use": self.subtree_use(sid),
-            "estimate": ((row["estimate_minutes"], row["estimate_dollars"])
-                         if row else None),
+            "estimate": ((row["estimate_minutes"],
+                          row["estimate_weighted_tokens"]) if row else None),
         }
 
     def tree(self, sid):
@@ -266,10 +271,12 @@ class SubagentsService(Service):
 
     # What a subagent does
 
-    def start(self, sid, session, task, start_from, title, minutes, dollars,
-              depth):
+    def start(self, sid, session, task, start_from, title, minutes,
+              weighted_tokens, depth):
         """A subagent of session `sid`: its session, its row and its task's
-        notice; (its id, None), or (None, why it wasn't started)."""
+        notice; (its id, None), or (None, why it wasn't started). Its
+        estimate is kept in weighted tokens, ZERO's unit, and in dollars at
+        the session's price, the user's."""
         parent = self.runtime.store.session(sid)
         try:
             if start_from == "fork":
@@ -282,7 +289,10 @@ class SubagentsService(Service):
         self.store.add({
             "session": child, "parent": sid, "start_from": start_from,
             "depth": depth, "started_from_seq": session.log.last_seq,
-            "estimate_minutes": minutes, "estimate_dollars": dollars,
+            "estimate_minutes": minutes,
+            "estimate_weighted_tokens": weighted_tokens,
+            "estimate_dollars": dollars_of(
+                weighted_tokens, session.settings.get("price")),
         }, (f"subagent-task:{child}", child, subtools.ACROSS, {"text": text}))
         self.runtime.wake()
         return child, None
@@ -376,8 +386,9 @@ class SubagentsService(Service):
                     text = subtools.PAST_ESTIMATE.format(
                         id=sid, title=info["title"],
                         use=describe(use),
-                        estimate=subtools.estimate_text(
-                            row["estimate_minutes"], row["estimate_dollars"]),
+                        estimate=estimate_text(
+                            row["estimate_minutes"],
+                            row["estimate_weighted_tokens"]),
                     )
                     self.store.notice(
                         f"subagent:{sid}:past_estimate", row["parent"],
@@ -440,6 +451,6 @@ def copied_to(records):
 
 def past(use, row):
     """Whether a use passes a subagent's estimate."""
-    return (use.minutes() > row["estimate_minutes"]
-            or use.dollars > row["estimate_dollars"])
+    return past_estimate(use, row["estimate_minutes"],
+                         row["estimate_weighted_tokens"])
 

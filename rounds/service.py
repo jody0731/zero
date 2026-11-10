@@ -17,6 +17,7 @@ from server.services import Refused, Service
 from rounds import tool as roundtools
 from rounds.hooks import FAILED, STOPPED
 from rounds.store import ADDED_COLUMNS, RENAMED_COLUMNS, SCHEMA, RoundStore
+from usage.spend import dollars_of, dollars_text
 
 # Rounds in a row that end failed before the run counts as stuck
 FAILED_ROUNDS = 2
@@ -39,14 +40,19 @@ def save(folder, name, text):
 
 def summary(run):
     """A run in a line, as the status line and `zero rounds list` show it,
-    each against ZERO's estimate: `round 3/8 · 42 min of 2 h · $0.12 of
-    $1.00`."""
+    each against ZERO's estimate, the tokens in the user's unit: `round 3/8
+    · 42 min of 2 h · $0.12 of $1.00`. A model with no price has no dollars,
+    so its line counts weighted tokens: `· 310,000 of 2,000,000 tokens`."""
+    if run["estimate_dollars"] or run["estimate_weighted_tokens"] is None:
+        used = (f"{dollars_text(run['spent_dollars'])} of "
+                f"{dollars_text(run['estimate_dollars'])}")
+    else:
+        used = (f"{round(run['spent_weighted_tokens']):,} of "
+                f"{round(run['estimate_weighted_tokens']):,} tokens")
     return (
         f"round {run['round_count']}/{run['estimate_rounds']} · "
         f"{roundtools.duration(run['spent_minutes'])} of "
-        f"{roundtools.duration(run['estimate_minutes'])} · "
-        f"{roundtools.dollars_text(run['spent_dollars'])} of "
-        f"{roundtools.dollars_text(run['estimate_dollars'])}"
+        f"{roundtools.duration(run['estimate_minutes'])} · {used}"
     )
 
 
@@ -54,12 +60,15 @@ class SessionRounds:
     """What one session's tools and hooks get as `session_rounds`: the
     server's rounds, bound to the session and its results folder."""
 
-    def __init__(self, service, sid, folder):
+    def __init__(self, service, sid, folder, price=None):
         self.service = service
         self.sid = sid
         # The session's results folder, a callable (a new log is named when
         # its first turn starts)
         self.folder = folder
+        # The session's model's price, a callable: what an estimate in
+        # weighted tokens is in dollars, for the screens' line
+        self.price = price if price is not None else lambda: None
 
     def open(self):
         return self.service.store.open_run(self.sid)
@@ -77,16 +86,20 @@ class SessionRounds:
         """A new run, this turn its round 1; or, while one is open, its
         estimate from now: (its row, whether it was a new estimate)."""
         run = self.open()
-        rounds, minutes, money = estimate
+        rounds, minutes, weighted_tokens = estimate
+        dollars = dollars_of(weighted_tokens, self.price())
         if run is None:
             id = new_id()
-            self.service.store.add(id, self.sid, objective, check, estimate, None)
+            self.service.store.add(id, self.sid, objective, check, estimate,
+                                   dollars, None)
             return self.service.store.run(id), False
         fields = {
             "objective": objective, "state": "running",
             "estimate_rounds": run["round_count"] + rounds,
             "estimate_minutes": run["spent_minutes"] + minutes,
-            "estimate_dollars": run["spent_dollars"] + money,
+            "estimate_weighted_tokens": (
+                run["spent_weighted_tokens"] + weighted_tokens),
+            "estimate_dollars": run["spent_dollars"] + dollars,
             # A new estimate is told again when the work passes it
             "past_estimate_at": None,
         }
@@ -112,10 +125,11 @@ class SessionRounds:
         """The work passed its estimate, and ZERO was told."""
         self.service.store.update(id, past_estimate_at=self.service.clock())
 
-    def finish_round(self, id, state, outcome, end, minutes, money,
-                     fresh=True):
+    def finish_round(self, id, state, outcome, end, minutes, weighted_tokens,
+                     money, fresh=True):
         """The round's end written to its row, with the next round's message
-        in the same transaction. `fresh`: the next
+        in the same transaction. `weighted_tokens` and `money`: what its
+        calls used, in ZERO's unit and the user's. `fresh`: the next
         round's context starts from the handoff; else (a failed round, a
         handoff that failed) it goes on from the last round's."""
         run = self.service.store.run(id)
@@ -123,6 +137,8 @@ class SessionRounds:
         fields = {
             "state": state,
             "spent_minutes": run["spent_minutes"] + minutes,
+            "spent_weighted_tokens": (
+                run["spent_weighted_tokens"] + weighted_tokens),
             "spent_dollars": run["spent_dollars"] + money,
             "failed_count": run["failed_count"] + 1 if outcome in FAILED else 0,
         }
@@ -201,7 +217,8 @@ class RoundsService(Service):
     def session_built(self, sid, session):
         folder = session.tool_context.get("results")
         if folder is not None:
-            session.tool_context["session_rounds"] = SessionRounds(self, sid, folder)
+            session.tool_context["session_rounds"] = SessionRounds(
+                self, sid, folder, lambda: session.settings.get("price"))
 
     def annotate(self, rows):
         """Each session's open run, in a line."""

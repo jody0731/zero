@@ -45,7 +45,7 @@ import rounds.tool
 import subagents.tool
 import usage.tool
 import session_search.tool
-from core import history
+from core import history, tools
 from core.asking import PARK
 from core.loop import Session
 from model import SETTINGS as MODEL_SETTINGS
@@ -64,7 +64,7 @@ from rounds.service import RoundsService
 from subagents import SETTINGS as SUBAGENT_SETTINGS
 from subagents.hooks import PastEstimate
 from subagents.service import SubagentsService
-from usage.spend import SessionUse
+from usage.spend import SessionUse, token_weights
 from session_search import SETTINGS as SESSION_SEARCH_SETTINGS
 from session_search.service import SessionSearchService
 from jobs import SETTINGS as JOB_SETTINGS
@@ -90,7 +90,7 @@ from permissions.modes import (
     JUDGED, MODES, UNSANDBOXED, answers_line, canonical, raised,
 )
 from limits.stops import BrokenReplyLimit
-from prompt.hooks import Environment
+from prompt.hooks import Environment, Means
 from prompt.instructions import PROJECT_FILE, read, system_prompt, user_instructions
 from memory.hooks import ZeroFilesGuard
 from paths import permissions_file
@@ -157,6 +157,8 @@ def code_mark(session):
         digest.update((HERE / name).read_bytes())
     # Who sends notices, which the system message names
     digest.update(json.dumps(history.NOTICES, sort_keys=True).encode())
+    # What each means is for, which the system message lists
+    digest.update(json.dumps(tools.means_lines(session.tool_context)).encode())
     return digest.hexdigest()[:12]
 
 
@@ -186,7 +188,7 @@ def session_hooks(
     mode = canonical(mode)
     runs_as = canonical(runs_as or mode)
     spec = MODES[runs_as]
-    hooks = [Environment(sandbox, answers_line(mode, runs_as))]
+    hooks = [Means(), Environment(sandbox, answers_line(mode, runs_as))]
     if own is not None:
         hooks.append(own)
     hooks += [
@@ -467,13 +469,14 @@ def make_session(
                 return None
         return spares[name]
 
-    prompt = system_prompt(found, model, server.price)
+    weights = token_weights(server.price)
+    prompt = system_prompt(found, model, weights)
 
     def rebuild():
         # The user's files and the project's, read again as they stand now
         now = (read(instructions, sandbox.workspace, most_chars())
                if instructions else None)
-        return system_prompt(now, model, server.price)
+        return system_prompt(now, model, weights)
 
     session = Session(
         llm, hooks, prompt, session_log, settings,

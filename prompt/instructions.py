@@ -43,14 +43,21 @@ OTHER_AGENT_FILES = ("AGENTS.md", "CLAUDE.md")
 # before anything a file says
 HARNESS = (
     "You are Z.E.R.O. (a.k.a. Zealous Efferent Response Operator), an agent "
-    "running on this machine in its own harness, with the model {model}{price}."
+    "running on this machine in its own harness, with the model {model}."
+    "{weights}"
 )
-# The model's price, which an estimate in dollars rests on; a model with none
-# (a local one) costs nothing
-PRICE = (
-    ", at ${miss} per million tokens in (${hit} from the cache) and ${out} out"
+# The unit ZERO counts its use and makes its estimates in: tokens weighted by
+# what the model's price makes each kind against a new input token. No
+# dollars: the unit is the same on every server, and a model with no price
+# (a local one) counts every token alike
+WEIGHTS = (
+    " Its use is counted in weighted tokens: a new input token counts 1, one "
+    "read from the cache {cache}, an output token {output}."
 )
-NO_PRICE = ", which has no price"
+NO_WEIGHTS = (
+    " Its use is counted in weighted tokens, and every token counts 1: the "
+    "model has no price."
+)
 # When to act: sure of the user's wish, from their words, and of the world,
 # from looking; a gap is filled before acting, not guessed over
 INTENT = (
@@ -59,20 +66,45 @@ INTENT = (
     "you fill the gap before acting: the facts by looking, the user's wish by "
     "asking."
 )
-# How a turn ends: the loop stops at a reply with no tool call. The rest the
-# model learns from facts: the environment, the tools' descriptions, what
-# each call returns
-TURN_RULE = (
-    "\nWhen you have the answer, reply in plain text without calling a tool.\n"
+# How a turn runs and ends, as facts: what a step reads (a plain turn's
+# cost), that its calls run in order (told nothing, the model believed a
+# batch ran side by side), and that the loop stops at a reply with no tool
+# call. Said as a rule ("When you have the answer, reply…"), the last tied a
+# turn to the answer, and the model held turns open with `sleep` to give one
+# reply. The rest it learns from the environment, the tools' descriptions and
+# what each call returns
+TURN_FACTS = (
+    "\nA turn is a run of steps. Each step is one call to your model, which "
+    "reads this whole conversation again (the part its server already holds "
+    "is read from the cache); then the calls you made in that step run one "
+    "after another, in the order written, and the next step reads their "
+    "results. A turn ends at a reply in plain text with no tool call.\n"
 )
 # What a notice is, said once: each one carries only its tag
-# (core/history.py), and each part that sends them names itself. The reply's
-# fact: without it the model hesitated over ending a notice's turn, as if
-# that left the user without an answer
+# (core/history.py), and each part that sends them names itself. When one is
+# read: a call that waits (a `sleep`) holds back the notice it waits for.
+# The reply's fact: without it the model hesitated over ending a notice's
+# turn, as if that left the user without an answer
 NOTICE_FACT = (
     'A message in a <notice from="…"> tag is a notice from ZERO, not a message '
-    "from the user: {senders}. The reply to a notice reaches the user as any "
-    "reply does."
+    "from the user: {senders}. A notice that comes while a turn is running "
+    "is read at its next step, once the calls of the step under way have "
+    "returned; one that comes after a turn has ended starts a new turn in "
+    "this conversation. The reply to a notice reaches the user as any reply "
+    "does."
+)
+# Whose pick the means of carrying out a task are, and what each is for, side
+# by side: said only in each tool's own text, among every other tool's, they
+# went unweighed (three real tasks of four done in one turn, two with no
+# thought of another means). What a turn is for stands here, with how it
+# runs; each other means' line is its tool's own (core/tools.py, `means`),
+# so a session reads the ones it has
+MEANS_FACTS = (
+    "How a task is carried out is yours to pick, at its start and again when "
+    "the work turns out other than you thought. What each means is for:\n"
+    "- this turn: work whose end is in sight. Each step reads the whole "
+    "conversation again, so the longer the turn, the more every step reads.\n"
+    "{others}\n"
 )
 # The longest piece of a line a cut quotes
 QUOTED_CHARS = 60
@@ -231,28 +263,42 @@ def notice_fact():
     return NOTICE_FACT.format(senders=senders)
 
 
-def price_text(price):
-    """The model's price (USD per 1M tokens: cache hit, miss, output) as the
-    opening says it."""
-    if not price:
-        return NO_PRICE
-
-    def amount(dollars):
-        return f"{dollars:.2f}" if dollars >= 0.01 else f"{dollars:g}"
-
-    hit, miss, out = price
-    return PRICE.format(hit=amount(hit), miss=amount(miss), out=amount(out))
+def means_facts(lines):
+    """Whose pick the means are and what each is for: this turn, then
+    `lines`, the other means a session has, each as its tool says it; ""
+    for a session with no other means, which has nothing to pick."""
+    if not lines:
+        return ""
+    return MEANS_FACTS.format(others="\n".join(f"- {line}" for line in lines))
 
 
-def system_prompt(found, model, price=None):
+def weight_text(weight):
+    """A kind of token's weight as the opening says it: "1/50" for a whole
+    fraction, else two figures ("4", "3.5", "0.28")."""
+    if 0 < weight < 1 and abs(1 / weight - round(1 / weight)) < 0.01 / weight:
+        return f"1/{round(1 / weight)}"
+    return f"{weight:.2g}"
+
+
+def weights_text(weights):
+    """The model's weights as the opening says them: `weights`, what a token
+    read from the cache and an output token count against a new input
+    token's 1; None for a model with no price."""
+    if weights is None:
+        return NO_WEIGHTS
+    cache, output = weights
+    return WEIGHTS.format(cache=weight_text(cache), output=weight_text(output))
+
+
+def system_prompt(found, model, weights=None):
     """The system prompt's start: what ZERO is and runs on (`model`, the
-    session's, and its `price`) and when it acts, what the session read
-    (`found`, a Read; None for nothing), then how a turn ends and what a
-    notice is; the hooks' parts follow."""
-    opening = (f"{HARNESS.format(model=model, price=price_text(price))}\n"
+    session's, and its tokens' `weights`) and when it acts, what the session
+    read (`found`, a Read; None for nothing), then how a turn runs and what
+    a notice is; the hooks' parts follow."""
+    opening = (f"{HARNESS.format(model=model, weights=weights_text(weights))}\n"
                f"{INTENT}")
     read_in = found.text if found is not None else ""
-    ending = f"{TURN_RULE}{notice_fact()}\n"
+    ending = f"{TURN_FACTS}{notice_fact()}\n"
     if not read_in:
         return f"{opening}\n{ending}"
     return f"{opening}\n\n{read_in}\n{ending}"

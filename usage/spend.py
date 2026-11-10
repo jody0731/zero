@@ -1,9 +1,12 @@
-"""A session's use, from its log: working time, the tokens of its model calls,
-and their dollars at the model's price, which the log's settings carry
-(`price`, and for a call the fallback model made its own `fallback_price`,
-or the session's from before 0.6.7.1, when the fallback was fixed at the
-session's build; a model with no price spends nothing, as does a fallback's
-call in a log from before 0.6.7, which named no price for it).
+"""A session's use, from its log: working time and the tokens of its model
+calls, by kind and as weighted tokens, the unit ZERO counts and estimates in
+(0.6.8): a new input token counts 1, one read from the cache and an output
+token what the model's price makes them against it (`token_weights`), every
+token 1 for a model with no price. The price is the log's settings' (`price`,
+and for a call the fallback model made its own `fallback_price`, or the
+session's from before 0.6.7.1, when the fallback was fixed at the session's
+build). Dollars are the user's unit: a round's line on the screens shows
+them (rounds/service.py), and nothing the model reads does.
 
 A whole log counts, every branch: a part a rewind left behind cost what it
 cost. A fork's copied records are its parent's, so its use starts after
@@ -20,6 +23,55 @@ from datetime import datetime
 from core import history
 
 
+def token_weights(price):
+    """What a token read from the cache and an output token count, against a
+    new input token's 1: (cache, output), from `price` (USD per 1M tokens:
+    cache hit, miss, output). None with no price, or none for new input:
+    every token then counts 1."""
+    if not price or not price[1]:
+        return None
+    hit, miss, out = price
+    return hit / miss, out / miss
+
+
+def own_price(record, price, fallback_price=None):
+    """The price of the model that made an assistant record's call: when it
+    ran on the fallback model (core/loop.py names it), the price the record
+    carries, else `fallback_price` (an older log's); otherwise `price`."""
+    if record.get("fallback"):
+        return record.get("fallback_price", fallback_price)
+    return price
+
+
+def call_weighted_tokens(prompt, cached, completion, price):
+    """One model call's tokens, weighted by `price`."""
+    cache, output = token_weights(price) or (1.0, 1.0)
+    prompt, cached, completion = prompt or 0, cached or 0, completion or 0
+    return cached * cache + (prompt - cached) + completion * output
+
+
+def record_weighted_tokens(record, price, fallback_price=None):
+    """An assistant record's weighted tokens, at its own model's weights (the
+    fallback's for a call it made, as record_dollars prices it)."""
+    return call_weighted_tokens(
+        record.get("prompt_tokens"), record.get("cached_tokens"),
+        record.get("completion_tokens"), own_price(record, price, fallback_price))
+
+
+def turn_weighted_tokens(records, price, fallback_price=None):
+    """A turn's model calls in weighted tokens, each at its own model's."""
+    return sum(record_weighted_tokens(r, price, fallback_price) for r in records
+               if r["type"] == "assistant")
+
+
+def dollars_of(weighted_tokens, price):
+    """Weighted tokens as dollars at `price`, for the user's screens; nothing
+    with no price."""
+    if token_weights(price) is None:
+        return 0.0
+    return weighted_tokens * price[1] / 1e6
+
+
 def call_dollars(prompt, cached, completion, price):
     """One model call's cost at `price`; nothing without one."""
     if not price:
@@ -30,16 +82,11 @@ def call_dollars(prompt, cached, completion, price):
 
 
 def record_dollars(record, price, fallback_price=None):
-    """An assistant record's cost: when it ran on the fallback model
-    (core/loop.py names it), at the price the record carries, else at
-    `fallback_price` (an older log's); otherwise at `price` (USD per 1M
+    """An assistant record's cost at its own model's price (USD per 1M
     tokens: cache hit, miss, output)."""
-    if record.get("fallback"):
-        own = record.get("fallback_price", fallback_price)
-    else:
-        own = price
     return call_dollars(record.get("prompt_tokens"), record.get("cached_tokens"),
-                        record.get("completion_tokens"), own)
+                        record.get("completion_tokens"),
+                        own_price(record, price, fallback_price))
 
 
 def turn_dollars(records, price, fallback_price=None):
@@ -50,10 +97,11 @@ def turn_dollars(records, price, fallback_price=None):
 
 @dataclass
 class Use:
-    """Working seconds, dollars, and the tokens of the model calls."""
+    """Working seconds, and the tokens of the model calls: weighted, and by
+    kind."""
 
     seconds: float = 0.0
-    dollars: float = 0.0
+    weighted_tokens: float = 0.0
     prompt_tokens: int = 0
     cached_tokens: int = 0
     completion_tokens: int = 0
@@ -63,7 +111,8 @@ class Use:
                      for f in fields(self)))
 
     def add_call(self, record, price, fallback_price=None):
-        self.dollars += record_dollars(record, price, fallback_price)
+        self.weighted_tokens += record_weighted_tokens(
+            record, price, fallback_price)
         self.prompt_tokens += record.get("prompt_tokens") or 0
         self.cached_tokens += record.get("cached_tokens") or 0
         self.completion_tokens += record.get("completion_tokens") or 0
@@ -161,18 +210,41 @@ def log_use(path, now=None):
 
 
 def dollars_text(amount):
-    """Dollars as the model reads them: to the cent, and an amount under a
-    cent to its first two figures ($0.0017), so a small use isn't $0.00."""
+    """Dollars as the user's screens show them: to the cent, and an amount
+    under a cent to its first two figures ($0.0017), so a small use isn't
+    $0.00."""
     if amount <= 0 or amount >= 0.01:
         return f"${amount:,.2f}"
     places = 1 - math.floor(math.log10(amount))
     return f"${amount:.{places}f}"
 
 
+def tokens_text(weighted_tokens):
+    """Weighted tokens as the model reads them: "33,064 weighted tokens"."""
+    return f"{round(weighted_tokens):,} weighted tokens"
+
+
+def estimate_text(minutes, weighted_tokens):
+    """An estimate a means was started with: "20 min and 150,000 weighted
+    tokens"; minutes alone for one from before 0.6.8, made in dollars."""
+    if weighted_tokens is None:
+        return f"{minutes:g} min"
+    return f"{minutes:g} min and {tokens_text(weighted_tokens)}"
+
+
+def past_estimate(use, minutes, weighted_tokens):
+    """Whether a use passes its estimate, in minutes or weighted tokens (an
+    estimate from before 0.6.8 has minutes alone)."""
+    if use.minutes() > minutes:
+        return True
+    return weighted_tokens is not None and use.weighted_tokens > weighted_tokens
+
+
 def describe(use):
     """A use as the model reads it: "12 min, 210,000 tokens in (92% from the
-    cache) and 3,100 out, $0.08"; under a minute in seconds, under ten
-    minutes to a tenth, so a use just past its estimate reads past it."""
+    cache) and 3,100 out: 33,064 weighted tokens"; under a minute in seconds,
+    under ten minutes to a tenth, so a use just past its estimate reads past
+    it."""
     minutes = round(use.minutes())
     if use.seconds < 60:
         took = f"{max(round(use.seconds), 0)} s"
@@ -183,12 +255,12 @@ def describe(use):
     else:
         hours, rest = divmod(minutes, 60)
         took = f"{hours} h {rest} min" if rest else f"{hours} h"
-    tokens = ""
-    if use.prompt_tokens:
-        share = round(100 * use.cached_tokens / use.prompt_tokens)
-        tokens = (f", {use.prompt_tokens:,} tokens in ({share}% from the cache) "
-                  f"and {use.completion_tokens:,} out")
-    return f"{took}{tokens}, {dollars_text(use.dollars)}"
+    if not use.prompt_tokens:
+        return f"{took}, {tokens_text(use.weighted_tokens)}"
+    share = round(100 * use.cached_tokens / use.prompt_tokens)
+    return (f"{took}, {use.prompt_tokens:,} tokens in ({share}% from the cache) "
+            f"and {use.completion_tokens:,} out: "
+            f"{tokens_text(use.weighted_tokens)}")
 
 
 class SessionUse:

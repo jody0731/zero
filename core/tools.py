@@ -21,7 +21,8 @@ class Grant:
 
 def tool(description, optional=(), summary=None, ready=None,
          needs_permission=None, validate=None, changing=False, starts_job=None,
-         crossing=None, grant=None, written_files=None, **params):
+         crossing=None, grant=None, written_files=None, means=None,
+         **params):
     """Register a function as a tool the model can call.
 
     Each keyword is one argument: name=(json_type, description), where
@@ -58,6 +59,11 @@ def tool(description, optional=(), summary=None, ready=None,
     `written_files(args)`: the files a call writes, as the call names them (a
     write's or an edit's path), so files no tool may change can be refused by
     whoever keeps them; by default none.
+    `means`: for a tool that is a means of carrying out a task (a background
+    job, rounds, a subagent), what the means is for, in a line the system
+    message lists beside the others' (`means_lines`); or a function of the
+    session's context that returns the line, None where the session hasn't
+    the means. By default the tool is none.
     """
 
     def register(fn):
@@ -89,6 +95,7 @@ def tool(description, optional=(), summary=None, ready=None,
             "crossing": crossing,
             "grant": grant,
             "written_files": written_files,
+            "means": means,
             "schema": {
                 "type": "function",
                 "function": {
@@ -105,6 +112,23 @@ def tool(description, optional=(), summary=None, ready=None,
         return fn
 
     return register
+
+
+def means_lines(context=None):
+    """What each means of carrying out a task is for, a line a means, as the
+    tools a session offers say it (`means`), in the order registered: only
+    the means the session has, from what it hands its tools (`context`)."""
+    context = context or {}
+    lines = []
+    for t in TOOLS.values():
+        line = t["means"]
+        if line is None or (t["ready"] is not None and not t["ready"](context)):
+            continue
+        if callable(line):
+            line = line(context)
+        if line:
+            lines.append(line)
+    return lines
 
 
 def schemas(limits=None, context=None):

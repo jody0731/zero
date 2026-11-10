@@ -10,7 +10,7 @@ belongs to the server that hands a session its `session_subagents`
 from core import history
 from core.tools import tool
 from subagents import SETTINGS
-from usage.spend import describe, dollars_text
+from usage.spend import describe, estimate_text, past_estimate
 
 # Who a notice from or about another session comes from; the system message
 # names who sends notices. "subagent": the harness, of a subagent's turn;
@@ -69,10 +69,6 @@ PAST_ESTIMATE = (
 MESSAGE = "Session {id} (\"{title}\") sends:\n{text}"
 
 
-def estimate_text(minutes, dollars):
-    return f"{minutes:g} min and {dollars_text(dollars)}"
-
-
 def how_text(outcome, detail=None):
     """How a turn a subagent couldn't finish ended, as the notice says it."""
     if outcome == "interrupted":
@@ -84,9 +80,8 @@ def how_text(outcome, detail=None):
 def use_text(row, use):
     """What a subagent has used in all (its own subagents' included),
     against its estimate."""
-    estimate = (row["estimate_minutes"], row["estimate_dollars"])
-    where = ("past" if use.minutes() > estimate[0] or use.dollars > estimate[1]
-             else "of")
+    estimate = (row["estimate_minutes"], row["estimate_weighted_tokens"])
+    where = "past" if past_estimate(use, *estimate) else "of"
     return f"{describe(use)}, {where} your estimate of {estimate_text(*estimate)}"
 
 
@@ -124,10 +119,9 @@ def tree_line(entry, indent=True):
     line = (f"{indent}- {entry['id']}{this} \"{entry['title']}\": {who}; "
             f"{state_text(entry)}; used {describe(entry['use'])}")
     if entry.get("estimate"):
-        minutes, dollars = entry["estimate"]
-        past = entry["use"].minutes() > minutes or entry["use"].dollars > dollars
+        past = past_estimate(entry["use"], *entry["estimate"])
         line += (f", {'past' if past else 'of'} its estimate of "
-                 f"{estimate_text(minutes, dollars)}")
+                 f"{estimate_text(*entry['estimate'])}")
     return line
 
 
@@ -148,7 +142,9 @@ def describe_start(limits, context=None):
         "Start a subagent: a session of its own under this one, which works "
         "on `task` while you go on; several run side by side. Its calls and "
         "their outputs stay in its own context, and only its report comes "
-        "into this one. It runs in this session's workspace, on "
+        "into this one. It builds a context of its own, counted in this "
+        "session's use, and what it found and didn't send stays in its "
+        "session. It runs in this session's workspace, on "
         "its files, with this session's model; nobody watches it, so in "
         "default mode what would ask the user goes to the judge, which reads "
         "the user's words, and other modes run as here. It returns the "
@@ -161,11 +157,13 @@ def describe_start(limits, context=None):
         "which the notice carries, or ends without finishing (a crash, a "
         "failure, a stop). `start_from`: fork, it starts from "
         "a copy of this session's conversation up to its last finished turn "
-        "(this turn not included), so it knows what this session knew, a "
-        "prefix the model's server may already hold in its cache, then reads "
-        "`task`; or handoff, it starts with only `task`, which then holds "
-        "everything it needs (files, findings, constraints). `minutes` and "
-        "`dollars` are your estimate of what it needs, its own subagents "
+        "(this turn not included) and then reads `task`: it knows what this "
+        "session knew, and each of its steps reads that copy again, a prefix "
+        "the model's server may already hold in its cache; or handoff, it "
+        "starts with only `task`, which then holds everything it needs "
+        "(files, findings, constraints): its context starts small, and "
+        "everything it reads is new input. `minutes` and `weighted_tokens` "
+        "are your estimate of what it needs, its own subagents "
         "included: one notice comes if its use passes them, and nothing stops "
         f"at it. {deepest}"
     )
@@ -187,10 +185,23 @@ def start_summary(args):
             f"\"{args.get('title', '')}\": {task[0] if task else ''}")
 
 
+# What subagents are for, beside the other means in the system message
+# (prompt/instructions.py, MEANS_FACTS). Keeping a part of the work out of
+# this context comes first: it needs no second subagent
+MEANS = (
+    "subagents (`start_subagent`): a part of the work done outside this "
+    "conversation. What a subagent reads and runs stays in its own context "
+    "and only its report comes into this one, so this session's later steps "
+    "read less; and several work side by side, so parts that don't need each "
+    "other take the time of the longest part, not the sum."
+)
+
+
 @tool(
     describe_start,
     summary=start_summary,
     ready=can_start,
+    means=MEANS,
     # It changes nothing on the machine; the subagent's own calls are asked
     # about where they run
     needs_permission=lambda args: False,
@@ -199,20 +210,20 @@ def start_summary(args):
     start_from=("string", "fork or handoff"),
     title=("string", "A few words the session list shows it by"),
     minutes=("number", "Minutes of working time it needs, your estimate"),
-    dollars=("number", "Dollars it costs at the model's price, your "
-                       "estimate; 0 for a model with no price"),
+    weighted_tokens=("number", "Weighted tokens it needs, your estimate"),
 )
-def start_subagent(task, start_from, title, minutes, dollars,
+def start_subagent(task, start_from, title, minutes, weighted_tokens,
                    session_subagents=None):
     """`session_subagents`: the session's, from its server (service.py)."""
     if session_subagents is None:
         return "Subagents aren't available in this session."
     if start_from not in START_FROM:
         return "Error: start_from is fork or handoff."
-    for name, value in (("minutes", minutes), ("dollars", dollars)):
+    for name, value in (("minutes", minutes),
+                        ("weighted_tokens", weighted_tokens)):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return f"Error: {name} must be a number."
-        if value < 0 or (name == "minutes" and value == 0):
+        if value <= 0:
             return f"Error: {name} must be more than 0."
     if not str(task).strip():
         return "Error: task is empty."
@@ -220,7 +231,7 @@ def start_subagent(task, start_from, title, minutes, dollars,
         return "Error: title is empty."
     found, why = session_subagents.start(
         str(task).strip(), start_from, " ".join(str(title).split()),
-        float(minutes), float(dollars),
+        float(minutes), float(weighted_tokens),
     )
     if found is None:
         return why

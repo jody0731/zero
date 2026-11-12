@@ -16,7 +16,7 @@ from datetime import datetime
 
 from core import tools
 
-LOG_FORMAT = 2
+LOG_FORMAT = 3
 UNKNOWN = (
     "Tool call interrupted before a result was recorded; its outcome is unknown."
 )
@@ -49,9 +49,10 @@ COMPACTED = "[Compacted {when}: {what}{size}]"
 CLEARED_ONLY = ("older outputs were saved whole and cleared from view, each in "
                 "the file its line names.")
 HANDED_OFF = "the conversation before the kept steps became the handoff above."
-# A round's end (rounds/): nothing is kept but the handoff
-ROUND_ENDED = ("a round ended, and the conversation before this point became "
-               "the handoff above.")
+# A compaction that kept nothing but its handoff, on its asker's occasion
+# (rounds/'s "a round ended")
+FRESH = "the conversation before this point became the handoff above."
+ON_OCCASION = "{occasion}, and {fresh}"
 SIZE = " The context is now about {tokens:,} tokens of the {line:,} it is kept under."
 
 # Where the user rewound, as the model reads it: what was left behind and
@@ -61,10 +62,12 @@ REWOUND = (
     "[Rewound {when}: the user went back to before their message of "
     "{asked}. The conversation from there, records {first}–{last} of this "
     "session's log{session}, is left behind and is no longer in your "
-    "context; the log keeps it, and session_search reads it by those record "
-    "numbers. What was done there stays done: files and memory are as it "
-    "left them.{part}{extra}]"
+    "context; the log keeps it{reader}. What was done there stays done: "
+    "files and memory are as it left them.{part}{extra}]"
 )
+# The tool that reads a log by its record numbers, as it declares itself
+# (core/tools.py's record_reader)
+REWOUND_READER = ", and {tool} reads it by those record numbers"
 # The session's id in the rewind's note, where the server gives it
 REWOUND_SESSION = " (session {session})"
 # What a part of the conversation the context doesn't hold did, in the
@@ -276,15 +279,18 @@ def part_lines(part, line_chars):
     return text
 
 
-def rewind_note(when_iso, left, line_chars, extra="", session=None):
+def rewind_note(when_iso, left, line_chars, extra="", session=None,
+                reader=None):
     """The rewind's note, from the part it leaves: what was done there
     (`part_lines`, each message's line `line_chars` long at most), what the
     hooks add (`extra`: the files written there, the jobs started there that
-    still run), and `session`, its id, for session_search."""
+    still run), `session`, its id, and `reader`, the tool that reads the log
+    by its record numbers (None: none named)."""
     return REWOUND.format(
         when=when(when_iso), asked=when(left[0]["time"]),
         first=left[0]["seq"], last=left[-1]["seq"],
         session=REWOUND_SESSION.format(session=session) if session else "",
+        reader=REWOUND_READER.format(tool=reader) if reader else "",
         part=part_lines(left, line_chars), extra=extra,
     )
 
@@ -320,8 +326,10 @@ def sent(record):
 def compacted(record):
     """A compaction where it happened: what it did and the size it left."""
     what = CLEARED_ONLY if record.get("cleared_only") else HANDED_OFF
-    if record.get("reason") == "round":
-        what = ROUND_ENDED
+    if record.get("fresh"):
+        what = FRESH
+        if record.get("occasion"):
+            what = ON_OCCASION.format(occasion=record["occasion"], fresh=FRESH)
     size = ""
     if record.get("tokens_after") and record.get("line"):
         size = SIZE.format(tokens=record["tokens_after"], line=record["line"])
@@ -357,9 +365,20 @@ def message(record):
 
 # The sources whose messages are notices from ZERO, not the user's words, each
 # with what sends it, as the system message names it: each part that sends
-# them declares its own (jobs/tool.py), so a new one (a subagent's report) is
-# one more entry
+# them declares its own (jobs/tool.py's NOTICE_SENDERS), and the assembly adds
+# them (add_notice_senders), so a new one (a subagent's report) is one more
+# entry
 NOTICES = {}
+
+
+def add_notice_senders(senders):
+    """Know these notices' senders from now on: source → what sends it, as
+    the system message names it. The same again changes nothing; another
+    sender under a known source is an error."""
+    for source, what in senders.items():
+        if NOTICES.get(source, what) != what:
+            raise ValueError(f"notice source {source!r} declared twice")
+        NOTICES[source] = what
 
 
 def is_notice(message):
@@ -367,12 +386,19 @@ def is_notice(message):
     return message.get("source") in NOTICES
 
 
+# What a message to a session may carry beside its text, kept on its user
+# record: the record its sender started from (`started_from_seq`, for a
+# notice from a part a rewind left behind) and, for a notice that quotes
+# output, what it says without it (`summary`, which the judge reads)
+MESSAGE_FIELDS = ("started_from_seq", "summary")
+
+
 def steer_fields(steer):
     """A message a running turn takes in, as its record's fields. The user's
     own are `mid_turn`, so the model reads that they came while it
     worked; a notice says what it is itself."""
     fields = {"text": steer["text"], "steer": True}
-    for name in ("inbox", "source", "started_from_seq"):
+    for name in ("inbox", "source", *MESSAGE_FIELDS):
         if steer.get(name) is not None:
             fields[name] = steer[name]
     if not is_notice(steer):

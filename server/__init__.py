@@ -7,9 +7,10 @@ database (sessions, inbox, asks). server.py: the socket and its messages.
 services.py: what a component's server service may add (jobs/service.py,
 permissions/service.py): its table, its messages, its reply step. The kernel imports
 no component and no assembly: server/main.py builds ZERO and hands the services in.
+The kernel's own settings are declared here, and the assembly adds them with the
+components' (design rule 3).
 """
 
-import settings
 from settings import Setting
 
 SETTINGS = (
@@ -22,5 +23,3 @@ SETTINGS = (
             "Characters of each message a rewind's or fork's note shows", 200,
             "int", minimum=10),
 )
-# The kernel's own setting joins the components' (the assembly adds theirs)
-settings.add(*SETTINGS)

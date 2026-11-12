@@ -118,15 +118,17 @@ def probe(paths, seconds=START_SECONDS):
 
 def ensure_server(paths, unit=None, command=None, popen=subprocess.Popen,
                   run=subprocess.run, systemd=None, seconds=START_SECONDS,
-                  report=None):
+                  report=None, kept_older=None):
     """Make sure a server of this code answers. `unit`: the systemd unit's name,
     the home's own when None (tests pass a throwaway one). `command`: the
     server's argv (tests: a scripted server). `systemd`: True or False to choose,
-    None to ask the user's systemd."""
+    None to ask the user's systemd. `kept_older()`: called when a busy server
+    of older code stays until it is idle (the full screen says so)."""
     report = report or (lambda text: print(text, file=sys.stderr))
     unit = unit or paths.unit
     reply = probe(paths, seconds)
-    if reply is not None and server_is_current(paths, reply, report, seconds):
+    if reply is not None and server_is_current(paths, reply, report, seconds,
+                                               kept_older):
         return reply
     paths.make()
     with StartLock(paths, seconds):
@@ -140,21 +142,30 @@ def ensure_server(paths, unit=None, command=None, popen=subprocess.Popen,
         return start(paths, unit, argv, popen, run, systemd, seconds, report)
 
 
-def shutdown(paths, timeout=5, **fields):
+def shutdown(paths, timeout=5, protocol=None, **fields):
     """Ask the server to stop (`force`, `reason`: server/stop's fields): its
-    reply, stopping or what keeps it busy."""
-    reply = request(paths.socket, messages.request("server/stop", **fields), timeout)
-    if not reply.get("ok") and "unknown message" in reply.get("error", ""):
-        # A protocol 2 server stops on host/stop
-        reply = renamed(
+    reply, stopping or what keeps it busy. `protocol`: the server's, from
+    its hello, which is asked for when not given: a protocol 2 server stops
+    on host/stop."""
+    if protocol is None:
+        found = hello(paths, timeout)
+        protocol = found["protocol"] if found is not None else version.PROTOCOL
+    if protocol == 2:
+        return renamed(
             request(paths.socket, {"message": "host/stop", **fields}, timeout)
         )
-    return reply
+    return request(paths.socket, messages.request("server/stop", **fields), timeout)
 
 
-def server_is_current(paths, reply, report, seconds):
+# Said when a server of older code stays, busy, until it is idle
+KEPT_OLDER = "ZERO's server runs older code; it is replaced once it is idle."
+
+
+def server_is_current(paths, reply, report, seconds, kept_older=None):
     """True if the server runs this code, or is busy and stays for now; False
-    once an idle server of another build has gone, so a fresh one starts."""
+    once an idle server of another build has gone, so a fresh one starts.
+    `kept_older()`: called when an older one stays."""
+    kept_older = kept_older or (lambda: None)
     old = reply["protocol"] < version.PROTOCOL
     if reply["protocol"] != version.PROTOCOL and (not old or reply.get("busy_with")):
         raise ProtocolError(
@@ -167,17 +178,20 @@ def server_is_current(paths, reply, report, seconds):
     if reply["build"] == version.build_hash():
         return True
     if reply.get("busy_with"):
-        report("ZERO's server runs older code; it is replaced once it is idle.")
+        report(KEPT_OLDER)
+        kept_older()
         return True
     if reply["protocol"] == 1:
         stopping = request(paths.socket, OLD_RESTART, PROBE_SECONDS)
     elif reply["protocol"] == 2:
         stopping = renamed(request(paths.socket, HOST_RESTART, PROBE_SECONDS))
     else:
-        stopping = shutdown(paths, PROBE_SECONDS, reason="restart")
+        stopping = shutdown(paths, PROBE_SECONDS, protocol=reply["protocol"],
+                            reason="restart")
     if not stopping.get("stopping"):
         # It got busy in the meantime
-        report("ZERO's server runs older code; it is replaced once it is idle.")
+        report(KEPT_OLDER)
+        kept_older()
         return True
     report("ZERO's server runs older code: restarting it.")
     deadline = time.monotonic() + seconds

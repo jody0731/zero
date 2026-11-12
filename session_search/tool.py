@@ -188,6 +188,8 @@ def summary(args):
 
 @tool(
     DESCRIPTION,
+    # It reads a log by its record numbers: texts naming records say so
+    reads_records=True,
     optional=("query", "session", "around", "count"),
     summary=summary,
     # It reads ZERO's own records and changes nothing
@@ -221,3 +223,8 @@ def session_search(query=None, session=None, around=None, count=None,
     except Unreadable as error:
         return f"Not searched: FTS5 couldn't read the query ({error})."
     return found_text(reply)
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (session_search,)

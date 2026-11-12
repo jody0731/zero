@@ -388,7 +388,7 @@ class ZeroApp(SafeClicks, App):
         transcript = self.transcript
         transcript.clear()
         if gap:
-            transcript.line(earlier_line(gap))
+            transcript.line(earlier_line(gap), classes=EARLIER_CLASSES)
         for record in records:
             self.client.event({"record": record})
             transcript.add(record, self.connection.source, follow=False)
@@ -825,11 +825,11 @@ class ZeroApp(SafeClicks, App):
         for record in records:
             made += transcript.blocks(record, self.connection.source)
         head = earlier_line(gap) if gap else "── the start ──"
+        # The old line of earlier records goes; the new one leads
         for widget in list(transcript.children)[:1]:
-            # The old "earlier records" line goes; the new one leads
-            if "earlier records" in str(widget.render()):
+            if widget.has_class("earlier"):
                 widget.remove()
-        made.insert(0, Plain(head, classes="note"))
+        made.insert(0, Plain(head, classes=EARLIER_CLASSES if gap else "note"))
         below = transcript.max_scroll_y - transcript.scroll_y
         transcript.mount(*made, before=0)
         if records:
@@ -1115,6 +1115,11 @@ class ZeroApp(SafeClicks, App):
 
 def ignored(error):
     """A request whose failure isn't worth a word (a seen mark, say)."""
+
+
+# The line that says how many earlier records wait above, marked so a later
+# load finds it
+EARLIER_CLASSES = "note earlier"
 
 
 def earlier_line(count):

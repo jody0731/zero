@@ -21,7 +21,7 @@ from pathlib import Path
 from core.asking import TO_APPROVER
 from core.tools import Grant, tool
 from files import SETTINGS, sandboxed_io
-from sandbox.sandbox import NOT_OUTSIDE, WALL, outside_crossing
+from sandbox.sandbox import NOT_OUTSIDE, OUTSIDE_ARGUMENT, WALL, outside_crossing
 
 # The biggest file the file tools take where no session's limits say (a call
 # made without a session), as the setting declares it
@@ -181,6 +181,9 @@ READ_DESCRIPTION = (
 
 @tool(
     READ_DESCRIPTION,
+    # Where a part starts and how many lines: texts naming a saved file say
+    # how to read it in parts by these
+    reads_in_parts=("offset", "limit"),
     optional=("offset", "limit"),
     summary=read_summary,
     # It changes nothing on the machine
@@ -277,7 +280,7 @@ OUTSIDE_SANDBOX_TEXT = (
     f"Run this one call outside the sandbox, as the user. It goes first to "
     f"{TO_APPROVER}"
 )
-REASON_TEXT = "With outside_sandbox: why the task needs it"
+REASON_TEXT = f"With {OUTSIDE_ARGUMENT}: why the task needs it"
 
 
 def written_path(args):
@@ -298,14 +301,14 @@ PATHS = Grant(
     "Write a file whole: created, with any missing folders, or replaced. An "
     "existing file is replaced only when this session has read it and it hasn't "
     "changed since.",
-    optional=("outside_sandbox", "reason"),
+    optional=(OUTSIDE_ARGUMENT, "reason"),
     summary=write_summary,
     crossing=outside_crossing,
     grant=PATHS,
     written_files=written_path,
     path=("string", "The file: relative to the workspace, or absolute"),
     content=("string", "The file's whole new content"),
-    outside_sandbox=("boolean", OUTSIDE_SANDBOX_TEXT),
+    **{OUTSIDE_ARGUMENT: ("boolean", OUTSIDE_SANDBOX_TEXT)},
     reason=("string", REASON_TEXT),
 )
 def write(path, content, outside_sandbox=False, reason="", sandbox=None,
@@ -353,7 +356,7 @@ def write(path, content, outside_sandbox=False, reason="", sandbox=None,
     "occurs exactly once, or, with replace_all, at every occurrence. A file "
     "with CRLF line endings is matched with \\n and keeps its endings. A file "
     "that changed since this session last read or wrote it isn't changed.",
-    optional=("replace_all", "outside_sandbox", "reason"),
+    optional=("replace_all", OUTSIDE_ARGUMENT, "reason"),
     summary=edit_summary,
     crossing=outside_crossing,
     grant=PATHS,
@@ -362,7 +365,7 @@ def write(path, content, outside_sandbox=False, reason="", sandbox=None,
     old_string=("string", "The exact text to replace"),
     new_string=("string", "The text to put in its place"),
     replace_all=("boolean", "Replace every occurrence"),
-    outside_sandbox=("boolean", OUTSIDE_SANDBOX_TEXT),
+    **{OUTSIDE_ARGUMENT: ("boolean", OUTSIDE_SANDBOX_TEXT)},
     reason=("string", REASON_TEXT),
 )
 def edit(path, old_string, new_string, replace_all=False, outside_sandbox=False,
@@ -429,3 +432,8 @@ def replace(text, old, new, every):
     view = view.replace(old, new) if every else view.replace(old, new, 1)
     done = view.replace("\n", "\r\n") if crlf else view
     return done, count if every else 1, first, last
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (read, write, edit)

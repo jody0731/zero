@@ -140,8 +140,9 @@ def save_outputs(body, upto, folder, cleared):
 
 
 def path_in(line):
-    """The file a cleared output's line names."""
-    return line.rsplit(" saved whole in ", 1)[-1].rstrip(".]")
+    """The file a cleared output's line names (CLEARED: its path, then ".]",
+    cut once, so a path ending in a dot or a bracket keeps it)."""
+    return line.rsplit(" saved whole in ", 1)[-1].removesuffix(".]")
 
 
 def described(record):
@@ -249,16 +250,19 @@ ROUND = INSTRUCTIONS.replace(
 )
 
 
-def fresh(session, handoff, at, tokens=room.tokens, check=None, *, limits):
-    """A round's end: the context keeps nothing but the system message and
-    `handoff` (the round's own, from end_round); with none, the model writes
-    one from the whole conversation, as a compaction's, within the handoff's
-    room (`limits`, the session's). The log keeps everything. Raises
-    CompactionFailed when no handoff comes back."""
+def fresh(session, handoff, at, tokens=room.tokens, check=None, *, limits,
+          reason, occasion=None):
+    """A compaction that keeps nothing but the system message and `handoff`
+    (a round's end: the round's own, from end_round); with none, the model
+    writes one from the whole conversation, as a compaction's, within the
+    handoff's room (`limits`, the session's). `reason`: who asked;
+    `occasion`: what happened, in the asker's words. The log keeps
+    everything. Raises CompactionFailed when no handoff comes back."""
     records = session.log.branch()
     before = room.measure(records, session.messages, session.tool_schemas(),
                           tokens)
-    fields = {"reason": "round", "tokens_before": before.tokens, "line": at}
+    fields = {"reason": reason, "tokens_before": before.tokens, "line": at,
+              "fresh": True, "occasion": occasion}
     if not (handoff or "").strip():
         ask = ROUND.format(saved="")
         t0 = time.monotonic()

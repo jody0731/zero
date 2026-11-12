@@ -19,7 +19,6 @@ never as the user's words.
 """
 
 import json
-import re
 from types import SimpleNamespace
 
 from core import history as log_history
@@ -30,9 +29,6 @@ from core.hooks import Deny, Hook, Stop
 # Claude Code's auto mode, Codex and Hermes: this many refusals in a row end
 # the turn. None counted per turn: refusals spread over hours aren't a loop
 MAX_REFUSAL_STREAK = 3
-# A command's result when it became a job (jobs/tool.py's started_text and
-# moved_status), so the judge can tell which job a later `job` call means
-JOB = re.compile(r"(Started in|moved to) (the background as job-[0-9a-f]+)\.")
 DENIED = "Not run: the judge said no: {reason}."
 NO_VERDICT = "Not run: the judge gave no verdict ({error})."
 SIDE_EFFECTS = (
@@ -63,11 +59,12 @@ def command_text(call, whole=False):
     return command
 
 
-def notice_text(text):
-    """A notice as the judge reads it: what happened, never the job's output,
-    which is command output (a job's notices end with it)."""
-    head = text.split("Last output:", 1)[0].strip()
-    return head.removeprefix("[").removesuffix("]").strip()
+def notice_text(record):
+    """A notice as the judge reads it: what happened, never the output it
+    quotes, which is command output: its `summary` where its sender gives
+    one (a job's notices), else its text."""
+    text = record.get("summary") or record["text"]
+    return text.strip().removeprefix("[").removesuffix("]").strip()
 
 
 def clip(text, chars):
@@ -81,7 +78,8 @@ def clip(text, chars):
 
 def view(records, output_chars=None, most_bytes=None, goal=()):
     """The judge sees what users said, ZERO's notices, and the commands with
-    recorded execution, a job's id with the command that became it. `goal`:
+    recorded execution, each with what it came to as its tool says it from
+    its result's fields (a job's id with the command that became it). `goal`:
     the user's words in the session tree's other sessions, seen first. With
     `output_chars`, each command is followed by what it printed, cut to that
     many characters. With `most_bytes`, the oldest commands are left out
@@ -90,7 +88,7 @@ def view(records, output_chars=None, most_bytes=None, goal=()):
     entries = [{"user": text} for text in goal]
     for record in records:
         if record["type"] == "user" and log_history.is_notice(record):
-            entries.append({"notice": notice_text(record["text"])})
+            entries.append({"notice": notice_text(record)})
         elif record["type"] == "user":
             entries.append({"user": record["text"]})
         elif record["type"] == "tool" and record["ran"]:
@@ -99,9 +97,9 @@ def view(records, output_chars=None, most_bytes=None, goal=()):
                 args=json.loads(record["arguments"]),
             )
             text = command_text(call)
-            job = JOB.search(record.get("result") or "")
-            if job:
-                text += f" ({job.group(1).lower()} {job.group(2)})"
+            came_to = tools.result_summary(record["tool"], record.get("fields"))
+            if came_to:
+                text += f" ({came_to})"
             entries.append({"ran": text})
             if output_chars is not None:
                 output = clip(record.get("result") or "", output_chars)

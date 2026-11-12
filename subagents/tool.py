@@ -7,25 +7,27 @@ belongs to the server that hands a session its `session_subagents`
 (service.py); without one there are none, and the tools aren't offered.
 """
 
-from core import history
 from core.tools import tool
 from subagents import SETTINGS
 from usage.spend import against_estimate, describe
 
 # Who a notice from or about another session comes from; the system message
-# names who sends notices. "subagent": the harness, of a subagent's turn;
+# names who sends notices (the assembly adds them to core's
+# history.NOTICES). "subagent": the harness, of a subagent's turn;
 # "session": another session's own words
 UP = "subagent"
-history.NOTICES[UP] = (
-    "one of your subagents: an answer it ended a turn with and didn't send "
-    "you, a turn of its own it couldn't finish (a crash, a failure, a stop), "
-    "or its use past your estimate"
-)
 ACROSS = "session"
-history.NOTICES[ACROSS] = (
-    "another session of ZERO's: a message it sent, or the task it started you "
-    "with"
-)
+NOTICE_SENDERS = {
+    UP: (
+        "one of your subagents: an answer it ended a turn with and didn't "
+        "send you, a turn of its own it couldn't finish (a crash, a failure, "
+        "a stop), or its use past your estimate"
+    ),
+    ACROSS: (
+        "another session of ZERO's: a message it sent, or the task it "
+        "started you with"
+    ),
+}
 
 START_FROM = ("fork", "handoff")
 # How deep subagents go where no server says (the inventory's copy)
@@ -313,3 +315,8 @@ def subagents(id=None, stop=False, session_subagents=None):
     else:
         lines.append("No turn of its own has ended yet.")
     return "\n".join(lines)
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (start_subagent, send_message, subagents)

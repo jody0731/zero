@@ -424,9 +424,8 @@ class Server:
         elif name == "session/set":
             values = {name: request.get(name) for name in history.SWITCHABLE}
             if any(v is not None and not isinstance(v, str) for v in values.values()):
-                return error("session/set takes mode, model, workspace, "
-                             "thinking_effort, judge_model and "
-                             "judge_thinking_effort, each a string")
+                return error(f"session/set takes "
+                             f"{', '.join(history.SWITCHABLE)}, each a string")
             return {"ok": True, **self.runtime.set_session(sid, **values)}
         else:
             return {"ok": True, "trash": self.runtime.delete(sid)}
@@ -461,12 +460,22 @@ class Server:
         for name, value in fields.items():
             if value is not None and not isinstance(value, str):
                 return error(f"{name} must be a string")
-        rounds = request.get("rounds")
-        if rounds is not None and not isinstance(rounds, bool):
-            return error("rounds must be true or false")
-        extra = {"rounds": True} if rounds else None
+        # The fields the services read (rounds/'s `rounds`), each of the
+        # kind the protocol declares for it; a false one is left out
+        declared = messages.MESSAGES["session/send"]["fields"]
+        extra = {}
+        for name in self.runtime.message_fields():
+            value = request.get(name)
+            if name not in declared or value is None:
+                continue
+            kind = declared[name].get("type")
+            if kind == "boolean" and not isinstance(value, bool):
+                return error(f"{name} must be true or false")
+            if value is not False:
+                extra[name] = value
         try:
-            ack = self.runtime.admit(Message(msg_id, text, **fields), extra)
+            ack = self.runtime.admit(Message(msg_id, text, **fields),
+                                     extra or None)
         except Refused as e:
             return error(str(e))
         return {"ok": True, **ack}

@@ -72,23 +72,19 @@ def clipped(text):
     return lines[:5] + [f"[... {len(lines) - 10} lines cut ...]"] + lines[-5:]
 
 
-def outcome_of(result):
-    """A tool record's result as (ok, exit code or None, wall time, output
-    lines), for the CLI's command blocks. bash's results lead with `Exit
-    code: N` (or how it was stopped) and `Wall time: X s`, then `Output:`."""
-    head, marker, output = result.partition("\nOutput:\n")
-    if not marker:
-        refused = result.startswith("Not run")
-        return not refused, None, "", result.splitlines()
-    status = head.splitlines()
-    code = None
-    if status and status[0].startswith("Exit code: "):
-        word = status[0][len("Exit code: "):].split()[0]
-        code = int(word) if word.lstrip("-").isdigit() else None
-    seconds = next((line[len("Wall time: "):] for line in status
-                    if line.startswith("Wall time: ")), "")
-    lines = [] if output.strip() == "(no output)" else output.splitlines()
-    return code == 0, code, seconds, lines
+def outcome_of(record):
+    """A tool record's outcome as (ok, exit code or None, wall time, output
+    lines), for the command blocks: from the data the record carries beside
+    its text (whether the call ran and failed, its tool's fields, where its
+    output starts in the text), never from its words."""
+    result = record.get("result") or ""
+    fields = record.get("fields") or {}
+    output_at = record.get("output_at")
+    output = result[output_at:] if output_at is not None else result
+    seconds = fields.get("wall_seconds")
+    took = f"{seconds:.1f} s" if isinstance(seconds, (int, float)) else ""
+    ok = bool(record.get("ran")) and not record.get("failed")
+    return ok, fields.get("exit_code"), took, output.splitlines()
 
 
 def who(source, mine=None):

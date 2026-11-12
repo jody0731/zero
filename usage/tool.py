@@ -64,3 +64,8 @@ def usage(session_use=None):
         lines.append("Its subagents:")
         lines += [subagent_line(entry) for entry in found]
     return "\n".join(lines)
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (usage,)

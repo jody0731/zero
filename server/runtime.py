@@ -201,7 +201,7 @@ class Runtime(SessionActions):
         # The reply streaming in, per session: its latest draft event
         self.drafts = {}
         # Each session's context meter, as its watchers last got it, and the
-        # compact_at_tokens it was measured under
+        # line it was measured under (meter_line)
         self.meters = {}
         self.meter_lines = {}
         self.watch_lock = threading.Lock()
@@ -277,7 +277,7 @@ class Runtime(SessionActions):
         changes: from the whole log the first time this server sees the
         session or when the line's setting has changed since, then record by
         record (core/history.py)."""
-        compact_at = self.setting("compact_at_tokens")
+        compact_at = self.meter_line()
         before = self.meters.get(sid)
         if before is None or self.meter_lines.get(sid) != compact_at:
             now = None
@@ -310,6 +310,23 @@ class Runtime(SessionActions):
 
     def session_lock(self, sid):
         return SessionLock(self.paths.locks / f"{sid}.lock")
+
+    def meter_line(self):
+        """The line the user's context meter shows, as the services say it
+        (the context component's setting); None: the model's window."""
+        for service in self.services.values():
+            line = service.meter_line()
+            if line is not None:
+                return line
+        return None
+
+    def message_fields(self):
+        """What a message carries beside its text onto its user record:
+        core's (history.MESSAGE_FIELDS) and those the services read."""
+        names = list(history.MESSAGE_FIELDS)
+        for service in self.services.values():
+            names += [n for n in service.message_fields if n not in names]
+        return names
 
     def admit(self, message, extra=None):
         """Commit a message to the inbox, then return the ack: its session and
@@ -728,8 +745,8 @@ class Runtime(SessionActions):
             turn = session.open_turn(
                 text, inbox=row["id"], source=row["source"], control=control,
                 continued=bool(payload.get("continue")),
-                rounds=bool(payload.get("rounds")),
-                started_from_seq=payload.get("started_from_seq"),
+                carried={name: payload[name] for name in self.message_fields()
+                         if payload.get(name) is not None},
             )
         self.store.begin(row["arrival"], sid)
         self.finish_turn(sid, session, turn, row)
@@ -1012,7 +1029,7 @@ class Runtime(SessionActions):
                 if session is None:
                     raise Refused("its turn waits for an answer; a compaction "
                                   "can be asked for once it runs again")
-                session.compact_asked = "user"
+                session.want_compaction("user")
                 return {"compacting": "before_next_step"}
             if not any(r["type"] == "user" for r in self.log(sid).branch()):
                 raise Refused("the session has no conversation yet")

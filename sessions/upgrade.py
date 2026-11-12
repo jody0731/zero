@@ -4,12 +4,19 @@ Format 1 is a log with no harness header: a session whose harness never built
 writes one (its message and the crash), and its upgrade keeps the questions
 and answers under the current header.
 
+Format 2 carried in words what format 3 keeps as data beside them: a command's
+exit code, time and job, where its output starts and whether it failed; a
+job's notice without the output it quotes; a round's end. Its upgrade reads
+those words once, here, and leaves every text as it was, so the model reads
+the same.
+
 Only a runner upgrades files. Readers use migrate() in memory. A failed upgrade
 leaves the old bytes in place, apart from the runtime's appended crash record.
 """
 
 import json
 import os
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -83,7 +90,99 @@ def from_1(records, header, time):
     return [{**r, "seq": n} for n, r in enumerate(result, 1)]
 
 
-MIGRATIONS = {1: from_1}
+# Format 2's words for what format 3 keeps as data: bash's answers
+# (shell/output.py, jobs/tool.py), an error a tool raised (core/tools.py's
+# run) and a call the user interrupted (core/loop.py)
+EXIT_CODE = re.compile(r"Exit code: (-?\d+)\b")
+STARTED = re.compile(r"Started in the background as (job-[0-9a-f]+)\.")
+MOVED = re.compile(r"Still running after [\d.]+ s; moved to the background as "
+                   r"(job-[0-9a-f]+)\.")
+KILLED = "Timed out after "
+WALL_TIME = re.compile(r"^Wall time: ([\d.]+) s$", re.MULTILINE)
+OUTPUT = "\nOutput:\n"
+NO_OUTPUT = "(no output)"
+RAISED = re.compile(r"Error: [A-Z][A-Za-z]+: ")
+INTERRUPTED = "Interrupted by the user while running"
+# A job's notice (its source, jobs/tool.py) and where its output starts
+JOB_SOURCE = "job"
+LAST_OUTPUT = " Last output:"
+# A round's end (rounds/hooks.py): its compaction's reason, and the occasion
+# a fresh compaction now names
+ROUND_REASON = "round"
+ROUND_ENDED = "a round ended"
+
+
+def bash_data(result):
+    """What a format 2 bash answer said in its head, as format 3's data:
+    `fields`, `failed` and `output_at`, those it holds."""
+    started = STARTED.match(result)
+    if started:
+        return {"fields": {"job_id": started[1]}}
+    head, marker, _ = result.partition(OUTPUT)
+    exit_code, moved = EXIT_CODE.match(head), MOVED.match(head)
+    if not marker:
+        return {}
+    if exit_code:
+        fields = {"exit_code": int(exit_code[1])}
+    elif moved:
+        fields = {"job_id": moved[1], "timed_out": True}
+    elif head.startswith(KILLED):
+        fields = {"timed_out": True}
+    else:
+        return {}
+    wall = WALL_TIME.search(head)
+    if wall:
+        fields["wall_seconds"] = float(wall[1])
+    data = {"fields": fields}
+    # Moved to the background, it goes on: not a failure
+    if not moved and fields.get("exit_code") != 0:
+        data["failed"] = True
+    # With nothing printed, "(no output)" is the head's, and a note may follow
+    at = len(head) + len(marker)
+    rest = result[at + len(NO_OUTPUT):]
+    if result[at:].startswith(NO_OUTPUT) and (not rest or rest.startswith("\n\n")):
+        at += len(NO_OUTPUT)
+    data["output_at"] = at
+    return data
+
+
+def tool_data(record):
+    """A format 2 tool record's data, from its words."""
+    if not record.get("ran"):
+        return {}
+    result = record.get("result") or ""
+    if record.get("tool") == "bash":
+        data = bash_data(result)
+        if data:
+            return data
+    if RAISED.match(result) or result.startswith(INTERRUPTED):
+        return {"failed": True}
+    return {}
+
+
+def from_2(records, header, time):
+    """Give format 2's records the data their words held; every text stays."""
+    first = records[0]
+    result = [{**first, "format": 3,
+               "upgraded_from": first.get("upgraded_from", 2)}]
+    for record in records[1:]:
+        record = dict(record)
+        kind = record["type"]
+        # A record a newer ZERO wrote under format 2 has its data already
+        if kind == "tool" and not {"fields", "failed", "output_at"} & set(record):
+            record.update(tool_data(record))
+        elif (kind == "user" and record.get("source") == JOB_SOURCE
+                and "summary" not in record
+                and LAST_OUTPUT in (record.get("text") or "")):
+            record["summary"] = record["text"].split(LAST_OUTPUT, 1)[0]
+        elif (kind == "compaction" and record.get("reason") == ROUND_REASON
+                and "fresh" not in record):
+            record.update(fresh=True, occasion=ROUND_ENDED)
+        result.append(record)
+    return result
+
+
+MIGRATIONS = {1: from_1, 2: from_2}
 
 
 def migrate(records, header=None, *, time):

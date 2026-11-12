@@ -7,13 +7,14 @@ row, its notices, its check-ins) belongs to the server that hands a session its
 everything in the foreground.
 """
 
-from core import history
+from core import tools
 from core.tools import tool
 
 # A job's messages to its session: notices, not the user's words; the
-# system message names who sends them
+# system message names who sends them (the assembly adds them to core's
+# history.NOTICES)
 SOURCE = "job"
-history.NOTICES[SOURCE] = "a background job"
+NOTICE_SENDERS = {SOURCE: "a background job"}
 
 # A job with no estimate checks in first after this, then each time it has run
 # as long again
@@ -75,11 +76,16 @@ def tail(text):
     return text.strip("\n")
 
 
+def with_output(summary, last):
+    """A notice: its summary, then the output since the model last looked."""
+    return f"{summary} Last output:\n{tail(last) or '(none)'}"
+
+
 def ended_notice(row, last, now):
-    return (
-        f"Background job {row['id']} {state_text(row, now)}. Command: "
-        f"`{row['command']}`. Last output:\n{tail(last) or '(none)'}"
-    )
+    """A job's end: (the notice, its summary without the output)."""
+    summary = (f"Background job {row['id']} {state_text(row, now)}. Command: "
+               f"`{row['command']}`.")
+    return with_output(summary, last), summary
 
 
 def lost_notice(row, last, now, crashed):
@@ -88,12 +94,12 @@ def lost_notice(row, last, now, crashed):
         else "when ZERO was stopped"
     )
     ran = minutes(now - row["started_at"])
-    return (
+    summary = (
         f"Background job {row['id']} was cut off {how}, after running "
         f"{'at least ' if crashed else ''}{ran}. Its outcome is unknown. "
-        f"Command: `{row['command']}`. "
-        f"Last output:\n{tail(last) or '(none)'}"
+        f"Command: `{row['command']}`."
     )
+    return with_output(summary, last), summary
 
 
 def checkin_notice(row, last, now):
@@ -102,10 +108,11 @@ def checkin_notice(row, last, now):
         where = f"has run {ran} with no estimate"
     else:
         where = f"has run {ran} and is past its estimate"
-    return (
+    summary = (
         f"Check-in: background job {row['id']} {where}; it is still running. "
-        f"Command: `{row['command']}`. Last output:\n{tail(last) or '(none)'}"
+        f"Command: `{row['command']}`."
     )
+    return with_output(summary, last), summary
 
 
 def job_summary(args):
@@ -122,18 +129,46 @@ def job_summary(args):
 
 
 # What a background job is for, beside the other means in the system message
-# (prompt/instructions.py, MEANS_FACTS)
+# (prompt/instructions.py, MEANS_FACTS); how one starts, by the tool and
+# argument that start it, as that tool declares them (core/tools.py's
+# job_starter)
 MEANS = (
-    "a background job (bash's `background`): a command that takes long. It "
-    "runs with no call to your model while you go on."
+    "a background job{started}: a command that takes long. It runs with no "
+    "call to your model while you go on."
 )
+MEANS_STARTED = " ({tool}'s `{argument}`)"
+DESCRIPTION = (
+    "Background jobs{started}, or moved there after its timeout. With no id: "
+    "list this session's jobs. With an id: its state and its output since you "
+    "last looked. `stop`: stop it. `expect_minutes`: a new estimate of how long "
+    "it still needs, from now."
+)
+STARTED = " started with {tool}'s `{argument}`"
+
+
+def started_with(text, context=None):
+    """`text` ({started}) with the tool and argument that start a job, as
+    that tool declares them; nothing where no tool offered starts one."""
+    starter = tools.job_starter(context)
+    return "" if starter is None else text.format(tool=starter[0],
+                                                  argument=starter[1])
+
+
+def means(context):
+    """What a background job is for, where the session has a server for
+    jobs; None where it hasn't."""
+    if context.get("jobs") is None:
+        return None
+    return MEANS.format(started=started_with(MEANS_STARTED, context))
+
+
+def describe(limits, context=None):
+    """The job tool's description, naming what starts a job."""
+    return DESCRIPTION.format(started=started_with(STARTED, context))
 
 
 @tool(
-    "Background jobs started with bash's `background`, or moved there after its "
-    "timeout. With no id: list this session's jobs. With an id: its state and its "
-    "output since you last looked. `stop`: stop it. `expect_minutes`: a new "
-    "estimate of how long it still needs, from now.",
+    describe,
     optional=("id", "stop", "expect_minutes"),
     summary=job_summary,
     # A running job's output: the same call looks again
@@ -141,7 +176,7 @@ MEANS = (
     # Only a stop changes anything; a new estimate is the job's own note
     needs_permission=lambda args: args.get("stop") is True,
     # A means only where the session has a server for jobs
-    means=lambda context: MEANS if context.get("jobs") is not None else None,
+    means=means,
     id=("string", "The job's id, e.g. job-3f9a2c"),
     stop=("boolean", "Stop the job"),
     expect_minutes=("number", "A new estimate, in minutes from now"),
@@ -189,3 +224,8 @@ def job(id=None, stop=False, expect_minutes=None, jobs=None):
     lines.append("Output since your last look:")
     lines.append(text if text else "(no new output)")
     return "\n".join(lines)
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (job,)

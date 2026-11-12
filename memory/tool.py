@@ -209,3 +209,8 @@ def memory(target, action, text=None, old_text=None, heading=None, reason="",
         done = f"Removed from {path}."
     size = f"It holds {len(clean(after)):,} characters as sessions read it."
     return f"{done} {size} {NOW}\n\n{clean(after)}"
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (memory,)

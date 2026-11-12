@@ -10,14 +10,14 @@ import subprocess
 import tempfile
 import time
 
-from core import history
 from core.tools import tool
 from usage.spend import tokens_text
 
 # A round's opening message to its session: a notice, not the user's
-# words; the system message names who sends them
+# words; the system message names who sends them (the assembly adds them to
+# core's history.NOTICES)
 SOURCE = "rounds"
-history.NOTICES[SOURCE] = "work in rounds"
+NOTICE_SENDERS = {SOURCE: "work in rounds"}
 
 STATUSES = ("going_on", "done", "stuck")
 # A done check still running after this is stopped and counts as failed: a
@@ -324,3 +324,8 @@ def round_text(run, folder, handoff_name, early=None):
             f"handoff is in {folder}. A round ends with end_round."
         )
     return "\n".join(lines)
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (start_rounds, end_round)

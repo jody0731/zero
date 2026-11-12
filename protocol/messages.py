@@ -71,6 +71,42 @@ CONTEXT_METER = maybe({
                    "share of that call's prompt the cache served",
 })
 
+# What a command's call carries beside its text, as its tool declares it
+# (its output schema, MCP's structuredContent): the ones an app shows
+COMMAND_FIELDS = {
+    "exit_code": {**INTEGER, "description": "its exit code, once it ended"},
+    "wall_seconds": {**NUMBER, "description": "how long it ran here"},
+    "job_id": {**STRING, "description": "the background job it started, or "
+               "was moved to past its timeout"},
+    "timed_out": {**BOOLEAN, "description": "it ran past its timeout"},
+}
+# A tool call's record, as session/read's rows and session/watch's events
+# carry it (`type` "tool"): what an app reads of it. A record holds more,
+# which an app may skip; an older log's records have only what they had
+# then (a field below that is missing says nothing)
+TOOL_RECORD = {
+    "type": "object",
+    "description": "a tool call and its answer",
+    "properties": {
+        "type": {"const": "tool"},
+        "tool": {**STRING, "description": "the tool's name"},
+        "arguments": {**STRING, "description": "the call's arguments, as "
+                      "the model wrote them (JSON)"},
+        "result": {**STRING, "description": "the answer the model read"},
+        "ran": {**BOOLEAN, "description": "the tool ran"},
+        "denied": {**BOOLEAN, "description": "it was refused, so never ran"},
+        "bad_call": {**BOOLEAN, "description": "the call was malformed"},
+        "failed": {**BOOLEAN, "description": "it ran and failed (missing: "
+                   "it didn't)"},
+        "output_at": {**INTEGER, "description": "where the tool's own output "
+                      "starts in `result`, after its head (missing: no such "
+                      "split)"},
+        "fields": {"type": "object", "properties": COMMAND_FIELDS,
+                   "description": "what its tool declares beside its text; "
+                   "a command's are listed"},
+    },
+}
+
 
 SESSION = {**STRING, "description": "a session's id"}
 # A message id the sender picks; the server admits each id once, so a retry

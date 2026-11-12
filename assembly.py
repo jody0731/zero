@@ -1,9 +1,11 @@
 """The assembly: where ZERO is put together.
 
-Each component declares its own settings, tools and hooks; this collects
-them: every component's SETTINGS, in the settings view's order
-(`SETTINGS_ORDER`); the tools, by importing their modules in the order the
-model reads them; the hooks a session loads in its mode, and their order
+Each component declares its own settings, tools, notices and hooks; this
+collects them (design rule 3: importing a component registers nothing):
+every component's SETTINGS and the server kernel's, in the settings view's
+order (`SETTINGS_ORDER`); the tools each tool module declares (its TOOLS),
+added in the order the model reads them; who sends notices (each sender's
+NOTICE_SENDERS); the hooks a session loads in its mode, and their order
 (`session_hooks`); a session and its tool context (`make_session`); and what
 server/main.py hands the server kernel: how it makes a session
 (`server_session_maker`, `server_session`) and the components' services
@@ -34,8 +36,6 @@ from pathlib import Path
 
 import settings
 from settings import LiveSettings
-# Importing a tool module registers its tools, in the order the model reads
-# them (core/tools.py's registry keeps it)
 import jobs.tool
 import shell.tool
 import files.tool
@@ -51,6 +51,7 @@ import session_search.tool
 from core import history, tools
 from core.asking import PARK
 from core.loop import Session
+from server import SETTINGS as SERVER_SETTINGS
 from model import SETTINGS as MODEL_SETTINGS
 from model.service import ModelService
 from model.servers import Model, ModelServerError, resolve
@@ -133,6 +134,7 @@ SETTINGS_ORDER = (
     "server_idle_minutes",
 )
 settings.add(
+    *SERVER_SETTINGS,
     *MODEL_SETTINGS, *LIMIT_SETTINGS, *CONTEXT_SETTINGS,
     *JOB_SETTINGS, *SUBAGENT_SETTINGS,
     *SHELL_SETTINGS,
@@ -140,6 +142,18 @@ settings.add(
     *SESSION_SEARCH_SETTINGS, *PROMPT_SETTINGS,
     order=SETTINGS_ORDER,
 )
+# The tools, in the order the model reads them (the system message lists
+# them so)
+tools.add(
+    *jobs.tool.TOOLS, *shell.tool.TOOLS, *files.tool.TOOLS,
+    *memory.tool.TOOLS, *permissions.tool.TOOLS, *web.tool.TOOLS,
+    *context.tool.TOOLS, *rounds.tool.TOOLS, *subagents.tool.TOOLS,
+    *wait.tool.TOOLS, *usage.tool.TOOLS, *session_search.tool.TOOLS,
+)
+# Who sends notices, as the system message names them
+for senders in (jobs.tool.NOTICE_SENDERS, rounds.tool.NOTICE_SENDERS,
+                subagents.tool.NOTICE_SENDERS):
+    history.add_notice_senders(senders)
 
 # Every limit at its default, from the components' settings, their one home
 # (the server kernel's own join when it is imported); a session reads its

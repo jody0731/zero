@@ -96,3 +96,8 @@ def wait(minutes, steers=None, stop=None):
             time.sleep(pause)
         elif stop.wait(pause):
             raise Stopped()
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (wait,)

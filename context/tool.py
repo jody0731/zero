@@ -27,3 +27,8 @@ def compact(notes=None):
     if notes is not None:
         notes["compact"] = True
     return DONE
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (compact,)

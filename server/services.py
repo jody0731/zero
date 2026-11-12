@@ -31,6 +31,9 @@ class Service:
     # Its messages that only look, which ZERO's own commands may send too
     # (server/peers.py)
     looking_messages = ()
+    # Fields of session/send it reads (the protocol declares them), handed on
+    # to the user record of the turn the message opens
+    message_fields = ()
 
     def attach(self, runtime):
         """The runtime it is service of, once its store is open."""
@@ -69,6 +72,11 @@ class Service:
     def session_files(self, sid):
         """Its files of the session, to the trash with the session's log."""
         return []
+
+    def meter_line(self):
+        """The line the user's context meter shows a session's context kept
+        under (the context component's setting), or None to say nothing."""
+        return None
 
     def annotate(self, rows):
         """Add its fields to the session list's rows."""

@@ -67,8 +67,7 @@ class SessionActions:
     def context_meter(self, sid):
         """The session's context as the user's meter shows it (core/history.py's
         context_meter), or None before its first call."""
-        return history.context_meter(self.log(sid).branch(),
-                                     self.setting("compact_at_tokens"))
+        return history.context_meter(self.log(sid).branch(), self.meter_line())
 
     def set_session(self, sid, mode=None, model=None, workspace=None,
                     thinking_effort=None, judge_model=None, judge_thinking_effort=None):

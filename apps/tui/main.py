@@ -69,20 +69,21 @@ def interactive(connection, args, workspace, older):
 def main(argv=None):
     args = parser().parse_args(sys.argv[1:] if argv is None else argv)
     paths = Paths()
-    notes = []
+    # Whether a busy server of older code stays until it is idle, as the
+    # launcher said (the status line shows it)
+    older_kept = []
 
     def report(text):
-        notes.append(text)
         print(text, file=sys.stderr)
 
     try:
         # The full screen's own settings under [tui], once
         config.move()
-        connection = Connection(paths,
-                                ensure=lambda: ensure_server(paths, report=report))
+        connection = Connection(paths, ensure=lambda: ensure_server(
+            paths, report=report, kept_older=lambda: older_kept.append(True)))
         return interactive(
             connection, args, str(Path.cwd().resolve()),
-            older=lambda: any("replaced once it is idle" in n for n in notes),
+            older=lambda: bool(older_kept),
         )
     except (NotRunning, ProtocolError, LookupError, Hung,
             settings.SettingsError) as error:

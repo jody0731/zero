@@ -48,6 +48,13 @@ class OutputBuffer:
 def format_output(status, seconds, output, limit=None):
     """Codex-style result: status, wall time, size if cut, then the output.
     `limit`: the characters kept of a string; an OutputBuffer has its own."""
+    return "".join(output_parts(status, seconds, output, limit))
+
+
+def output_parts(status, seconds, output, limit=None):
+    """format_output's text as (its head, the output): the head ends with
+    "Output:" and its newline, or holds "(no output)" too, so the output
+    part is the command's own, empty when it printed nothing."""
     if isinstance(output, OutputBuffer):
         size = output.characters
         count = output.newlines + (not output.ends_with_newline)
@@ -64,5 +71,7 @@ def format_output(status, seconds, output, limit=None):
             "(the middle is cut below)"
         )
     lines.append("Output:")
-    lines.append(text or "(no output)")
-    return "\n".join(lines)
+    head = "\n".join(lines) + "\n"
+    if not text:
+        return head + "(no output)", ""
+    return head, text

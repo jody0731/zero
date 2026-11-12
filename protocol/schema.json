@@ -1750,6 +1750,69 @@
       "required": [
         "ok"
       ]
+    },
+    "record.tool": {
+      "type": "object",
+      "description": "a tool call and its answer",
+      "properties": {
+        "type": {
+          "const": "tool"
+        },
+        "tool": {
+          "type": "string",
+          "description": "the tool's name"
+        },
+        "arguments": {
+          "type": "string",
+          "description": "the call's arguments, as the model wrote them (JSON)"
+        },
+        "result": {
+          "type": "string",
+          "description": "the answer the model read"
+        },
+        "ran": {
+          "type": "boolean",
+          "description": "the tool ran"
+        },
+        "denied": {
+          "type": "boolean",
+          "description": "it was refused, so never ran"
+        },
+        "bad_call": {
+          "type": "boolean",
+          "description": "the call was malformed"
+        },
+        "failed": {
+          "type": "boolean",
+          "description": "it ran and failed (missing: it didn't)"
+        },
+        "output_at": {
+          "type": "integer",
+          "description": "where the tool's own output starts in `result`, after its head (missing: no such split)"
+        },
+        "fields": {
+          "type": "object",
+          "properties": {
+            "exit_code": {
+              "type": "integer",
+              "description": "its exit code, once it ended"
+            },
+            "wall_seconds": {
+              "type": "number",
+              "description": "how long it ran here"
+            },
+            "job_id": {
+              "type": "string",
+              "description": "the background job it started, or was moved to past its timeout"
+            },
+            "timed_out": {
+              "type": "boolean",
+              "description": "it ran past its timeout"
+            }
+          },
+          "description": "what its tool declares beside its text; a command's are listed"
+        }
+      }
     }
   }
 }

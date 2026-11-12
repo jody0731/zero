@@ -34,6 +34,10 @@ PAST_ESTIMATE = (
     "[Harness note: {id}, toward \"{objective}\", has used {spent}, past the "
     "{passed} of your estimate. The work goes on.]"
 )
+# A round's end compacts the context to its handoff: the reason its record
+# keeps, and what the model reads happened there
+COMPACTION_REASON = "round"
+ROUND_ENDED = "a round ended"
 # Turn outcomes that end a round as failed, not by the user's say
 FAILED = ("model_error", "crashed", "broken_replies", "judge_refusals",
           "hook_error", "failed", "cut_off")
@@ -189,10 +193,11 @@ class Rounds(Hook):
         state = rounds.next_state(run, turn.outcome, end)
         fresh = False
         if state == "running" and turn.outcome not in FAILED:
-            session.compact("round", end["handoff"] if end else None)
+            session.compact(COMPACTION_REASON, end["handoff"] if end else None,
+                            fresh=True, occasion=ROUND_ENDED)
             done = history.unfinished_turn(session.log.branch())
             cut = next((r for r in reversed(done) if r["type"] == "compaction"
-                        and r.get("reason") == "round"), None)
+                        and r.get("reason") == COMPACTION_REASON), None)
             fresh = cut is not None
             if fresh and end is None:
                 # The handoff the model wrote, kept as the round's own

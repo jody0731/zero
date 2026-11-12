@@ -3,6 +3,23 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.2
+
+Data, not words: ZERO's parts now hand each other data where they used to read each other's
+sentences, so a change of wording can't break a part that depends on it.
+
+- **A command's result carries its data.** Beside the text ZERO reads, a command's exit code,
+  its time and the background job it started or moved to travel as fields, as MCP tools do
+  with structured content. The full screen draws a command's block from them, the judge reads
+  them, and the protocol's schema publishes what an app reads of a tool call's record
+  (`record.tool` in `protocol/schema.json`).
+- **Your older sessions come along.** A session's log moves to format 3 the next time it runs,
+  its original kept beside it as `<id>.format-2.jsonl`; reading it changes nothing on disk.
+  What ZERO reads in it stays word for word the same.
+- **ZERO's texts name a tool only where the session has it**: a rewind's or a fork's note no
+  longer points at session search in a session without it.
+- **Smaller:** the use counters a long-running server keeps for its sessions' logs have a cap.
+
 ## 0.7.1
 
 The fixes: what a full read of ZERO's code found, and ZERO kept out of the way of slow work.

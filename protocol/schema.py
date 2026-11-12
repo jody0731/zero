@@ -3,7 +3,8 @@
 schema.json ships with ZERO, so an app in any language is built against it:
 each message's request and reply are in `$defs` (`session.send` and
 `session.send.reply`, the name's slashes as dots), the requests together
-under `oneOf`, and the error reply every message may get. A test holds the
+under `oneOf`, the error reply every message may get, and what an app reads
+of a tool call's record (`record.tool`). A test holds the
 file to messages.py; after a change to a message:
 
     python -m protocol.schema
@@ -13,7 +14,7 @@ import json
 from pathlib import Path
 
 from protocol import version
-from protocol.messages import MESSAGES
+from protocol.messages import MESSAGES, TOOL_RECORD
 
 PATH = Path(__file__).with_name("schema.json")
 
@@ -61,6 +62,7 @@ def build():
         defs[key(name) + ".reply"] = reply_schema(spec)
         if spec["stream"]:
             defs[key(name) + ".event"] = stream_schema(spec)
+    defs["record.tool"] = TOOL_RECORD
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": f"zero-protocol-{version.PROTOCOL}",

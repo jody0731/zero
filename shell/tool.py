@@ -10,12 +10,14 @@ import subprocess
 import time
 
 from core.asking import TO_APPROVER
-from core.tools import Grant, tool
+from core.tools import Grant, Result, tool
 from jobs import tool as jobtools
 from jobs.process import drain, read_output, stop_group
-from shell.output import OutputBuffer, format_output
+from shell.output import OutputBuffer, output_parts
 from sandbox import check as sandbox_check
-from sandbox.sandbox import NOT_OUTSIDE, WALL, WALL_MARKS, outside_crossing
+from sandbox.sandbox import (
+    NOT_OUTSIDE, OUTSIDE_ARGUMENT, WALL, WALL_MARKS, outside_crossing,
+)
 from shell.commands import prefix_words, prefixes
 
 CUT_OUTPUT = (
@@ -36,6 +38,27 @@ NOT_MOVED = (
 )
 
 
+# What a command's answer carries beside its text (core/tools.py's
+# Result), as the screens and the judge read it
+FIELDS = {
+    "exit_code": ("integer", "The command's exit code, where it exited on its "
+                  "own in the foreground"),
+    "wall_seconds": ("number", "How long it ran in the foreground, in seconds"),
+    "job_id": ("string", "The id of the background job it runs as: started "
+               "there, or moved there after the foreground timeout"),
+    "timed_out": ("boolean", "Still running at the foreground timeout: moved "
+                  "to the background as a job, or killed"),
+}
+
+
+def result_summary(fields):
+    """A command that became a job, as the judge's view says it."""
+    if not fields.get("job_id"):
+        return None
+    how = "moved to" if fields.get("timed_out") else "started in"
+    return f"{how} the background as {fields['job_id']}"
+
+
 def describe(limits, context=None):
     """bash's description, with the session's timeout; without a session's
     limits (the registry's own copy), the timeout isn't a number yet."""
@@ -52,22 +75,24 @@ def describe(limits, context=None):
 
 @tool(
     describe,
-    optional=("outside_sandbox", "reason", "background", "expect_minutes"),
+    optional=(OUTSIDE_ARGUMENT, "reason", "background", "expect_minutes"),
     summary=lambda args: args["command"],
     # A call with `background` starts a job (the jobs' cap)
-    starts_job=lambda args: args.get("background") is True,
+    starts_job="background",
+    fields=FIELDS,
+    result_summary=result_summary,
     crossing=outside_crossing,
     # "Don't ask again" grants each part's prefix (shell/commands.py)
     grant=Grant("prefixes", lambda args: prefixes(str(args.get("command", ""))),
                 prefix_words),
     command=("string", "The bash command to run"),
-    outside_sandbox=(
+    **{OUTSIDE_ARGUMENT: (
         "boolean",
         "Run this one command outside the sandbox, as the user with the "
         f"network. It goes first to {TO_APPROVER}",
-    ),
-    reason=("string", "With outside_sandbox, or for a job past the session's limit: "
-            "why the task needs it"),
+    )},
+    reason=("string", f"With {OUTSIDE_ARGUMENT}, or for a job past the session's "
+            "limit: why the task needs it"),
     background=(
         "boolean",
         "Run it as a background job: the call returns at once with the job's id, "
@@ -126,9 +151,11 @@ def bash(
             estimate = expect_minutes if valid and expect_minutes > 0 else None
             job_id = jobs.start(proc, command, estimate)
             result = jobtools.started_text(job_id)
-            return result + "\n\n" + note if note else result
+            return Result(result + "\n\n" + note if note else result,
+                          fields={"job_id": job_id})
         output = OutputBuffer(limits["bash_output_kept_chars"])
         moved = False
+        fields = {}
         try:
             try:
                 read_output(proc, output, timeout=timeout, stop=stop)
@@ -138,15 +165,18 @@ def bash(
                     moved = True
                     job_id = jobs.start(proc, command, None, time.monotonic() - t0)
                     status = jobtools.moved_status(job_id, timeout)
+                    fields = {"job_id": job_id, "timed_out": True}
                 else:
                     stop_group(proc)
                     status = f"Timed out after {timeout:g} s and was killed."
+                    fields = {"timed_out": True}
                     if drain(proc, output):
                         status += CUT_OUTPUT
                     if jobs is not None:
                         status += NOT_MOVED.format(count=jobs.limit)
             else:
                 status = f"Exit code: {proc.returncode}"
+                fields = {"exit_code": proc.returncode}
         except KeyboardInterrupt as error:
             # Ctrl+C doesn't reach our own process group, so end it here
             stop_group(proc)
@@ -160,7 +190,9 @@ def bash(
             break
     if moved:
         output.add(b"", final=True)
-    result = format_output(status, time.monotonic() - t0, output)
+    seconds = time.monotonic() - t0
+    head, result = output_parts(status, seconds, output)
+    fields["wall_seconds"] = round(seconds, 1)
     if (box.sandboxed and not moved
             and sandbox_check.failed_to_start(proc.returncode, output.head)):
         why = sandbox_check.why_it_cant_start()
@@ -170,4 +202,13 @@ def bash(
     if box.sandboxed and any(mark in result for mark in WALL_MARKS):
         wall = WALL.format(walls=box.walls())
         note = f"{note}\n{wall}" if note else wall
-    return result + "\n\n" + note if note else result
+    if note:
+        result = result + "\n\n" + note if result else "\n\n" + note
+    # Moved to the background, it goes on: not a failure
+    failed = not moved and fields.get("exit_code") != 0
+    return Result(result, head=head, fields=fields, failed=failed)
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (bash,)

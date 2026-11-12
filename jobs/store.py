@@ -85,7 +85,8 @@ class JobStore:
 
     def settle_job(self, id, notice=None, **fields):
         """A running job's change of state and its notice in one transaction, so
-        a crash can't leave one without the other. `notice`: (inbox id, text).
+        a crash can't leave one without the other. `notice`: (inbox id, text,
+        its summary without the output, which the judge reads).
         Returns False if the job had already settled."""
         names = ", ".join(f"{name} = ?" for name in fields)
         with self.store.transaction() as db:
@@ -96,11 +97,11 @@ class JobStore:
             if not changed:
                 return False
             if notice is not None:
-                msg_id, text = notice
+                msg_id, text, summary = notice
                 row = db.execute(
                     "SELECT session, started_from_seq FROM jobs WHERE id = ?", (id,)
                 ).fetchone()
-                payload = {"text": text, "job": id}
+                payload = {"text": text, "summary": summary, "job": id}
                 if row["started_from_seq"] is not None:
                     # Where it started, for a notice from a part left behind
                     payload["started_from_seq"] = row["started_from_seq"]

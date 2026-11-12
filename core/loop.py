@@ -81,6 +81,10 @@ class Session:
         self.code_mark = code_mark
         records = log.branch()
         self.prompt_tokens = 0
+        # Who asked for a compaction before the running turn's next step (the
+        # user, through a server: want_compaction), until the context
+        # component takes it (take_wanted_compaction)
+        self.compaction_wanted_by = None
         if records:
             self.restore(log)
         else:
@@ -102,22 +106,57 @@ class Session:
                    **self.marked())
         self.messages = history.replay(self.log.branch())
 
-    def compact(self, reason, handoff=None):
+    def compact(self, reason, handoff=None, fresh=False, occasion=None):
         """A compaction now, between turns: what the hooks' crashes say when
         it failed, else []. A turn's own come before its next model call.
-        "round": a round's end (rounds/), the context kept to `handoff`, or to
-        one the model writes when there is none."""
+        `reason`: who or what asks, as its record keeps it. `fresh`: the
+        context keeps nothing but `handoff`, or one the model writes when
+        there is none (a round's end, rounds/); `occasion`: what happened, in
+        the asker's words, which the model reads where the compaction
+        happened ("a round ended")."""
         errors = self.hooks.take_errors()
-        self.hooks.notify("compaction_asked", self, reason, handoff)
+        self.hooks.notify("compaction_asked", self, reason, handoff, fresh,
+                          occasion)
         found = self.hooks.take_errors()
         # A round's end comes inside a turn: its earlier errors stay its own
         self.hooks.errors = errors
         return found
 
-    def compacted(self, **fields):
-        """Write a compaction (the context component's fields: its reason,
-        handoff, the records kept and the outputs cleared), with the system
-        message as things stand now, and take the context it leaves."""
+    def want_compaction(self, by):
+        """A compaction before the running turn's next step, asked for by
+        `by` ("user"), which the context component makes then."""
+        self.compaction_wanted_by = by
+
+    def take_wanted_compaction(self):
+        """Who asked for a compaction before this step, once; else None."""
+        by, self.compaction_wanted_by = self.compaction_wanted_by, None
+        return by
+
+    def compacted(self, *, reason, summary, kept_from, tokens_before=None,
+                  line=None, cleared=None, tokens_after=None, handoff_at=None,
+                  handoff_call=None, saved=None, cleared_only=False,
+                  fresh=False, occasion=None):
+        """Write a compaction, with the system message as things stand now,
+        and take the context it leaves. Its fields, as history replays them:
+        who or what asked (`reason`), the tokens before and after and the
+        `line` the context is kept under, the handoff (`summary`, written at
+        `handoff_at`, by `handoff_call`), the first record kept
+        (`kept_from`), the outputs cleared ({seq: the line in their place})
+        and the files they were saved in (`saved`), whether it only cleared
+        outputs (`cleared_only`) or kept nothing but the handoff (`fresh`,
+        on an `occasion` the model reads)."""
+        fields = {
+            "reason": reason, "tokens_before": tokens_before, "line": line,
+            "summary": summary, "kept_from": kept_from, "cleared": cleared,
+            "tokens_after": tokens_after, "handoff_at": handoff_at,
+            "handoff_call": handoff_call, "saved": saved,
+            "cleared_only": cleared_only or None, "fresh": fresh or None,
+            "occasion": occasion,
+        }
+        # Only what it has, as before; its handoff always, None when it
+        # only cleared outputs and had none to carry
+        fields = {k: v for k, v in fields.items()
+                  if v is not None or k == "summary"}
         record = self.write("compaction", system_prompt=self.system_text(),
                             **self.marked(), **fields)
         self.messages = history.replay(self.log.branch())
@@ -138,7 +177,10 @@ class Session:
         record = self.write(
             "rewind", parent=parent["seq"], left_from=left[0]["seq"],
             left_to=left[-1]["seq"],
-            text=history.rewind_note(now, left, line_chars, extra, session_id),
+            text=history.rewind_note(
+                now, left, line_chars, extra, session_id,
+                reader=tools.record_reader(self.tool_context),
+            ),
         )
         self.messages = history.replay(self.log.branch())
         return record, left
@@ -185,10 +227,12 @@ class Session:
         return record
 
     def open_turn(self, text, inbox=None, source=None, control=None,
-                  continued=False, rounds=False, started_from_seq=None):
+                  continued=False, carried=None):
         """`continued`: the turn is a server's `continue`, its text a
-        harness note the user asked for, not words they typed. `rounds`: the
-        user sent it to be worked on in rounds (rounds/hooks.py tells the
+        harness note the user asked for, not words they typed. `carried`:
+        what the message carries beside its text, kept on its record
+        (history.MESSAGE_FIELDS, and the fields a server's parts hand on: a
+        message sent to be worked on in rounds, which rounds/ tells the
         model)."""
         records = self.log.branch()
         if not records:
@@ -210,13 +254,9 @@ class Session:
             fields["inbox"] = inbox
         if source is not None:
             fields["source"] = source
-        if started_from_seq is not None:
-            # The record a notice's sender started from
-            fields["started_from_seq"] = started_from_seq
         if continued:
             fields["continue"] = True
-        if rounds:
-            fields["rounds"] = True
+        fields.update(carried or {})
         self.write("user", **self.fitted(fields))
         self.back_to_main(records)
         return Turn(self, text, inbox, source, control=control)
@@ -494,9 +534,13 @@ class Session:
             else:
                 if call.turn.control is not None:
                     call.turn.control.check()
-                call.result = self.execute(call)
+                answer = self.execute(call)
+                call.fields, call.failed = answer.fields, answer.failed
                 # Before the log keeps it: one past its share goes to a file
-                call.result = self.hooks.pipe("tool_result", call.result, call)
+                call.result = self.hooks.pipe("tool_result", answer.text, call)
+                # Where its output starts, while the text is the tool's own
+                if answer.head and call.result == answer.text:
+                    call.output_at = len(answer.head)
                 if call.remarks:
                     call.result += "\n\n" + "\n".join(call.remarks)
         self.write("tool", **call.record())
@@ -611,6 +655,7 @@ class Session:
         self.write("user", **record)
 
     def execute(self, call):
+        """The call run: its tool's Result (core/tools.py)."""
         t0 = time.monotonic()
         call.ran = True
         try:
@@ -625,6 +670,7 @@ class Session:
                 context["steers"] = call.turn.control.steers
             return tools.run(call.name, call.args, context)
         except KeyboardInterrupt as error:
+            call.failed = True
             call.result = (
                 f"Interrupted by the user while running, after "
                 f"{time.monotonic() - t0:.1f} s. It may have partly run, so its "

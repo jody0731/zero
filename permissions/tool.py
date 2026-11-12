@@ -61,9 +61,10 @@ def problems(args):
             return f"call {n}'s arguments must be an object"
         if call["tool"] == NAME:
             return f"call {n} is a plan; a plan lists other tools' calls"
-        _, error = tools.check(call["tool"], json.dumps(call["arguments"]))
-        if error is not None:
-            return f"call {n}: {error.removeprefix('Error: ')}"
+        _, problem = tools.check_problem(call["tool"],
+                                         json.dumps(call["arguments"]))
+        if problem is not None:
+            return f"call {n}: {problem}"
     return None
 
 
@@ -82,3 +83,8 @@ def problems(args):
 )
 def propose_plan(plan, calls):
     return APPROVED.format(calls=listed(calls))
+
+
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (propose_plan,)

@@ -186,6 +186,10 @@ class RoundsService(Service):
         self.store = RoundStore(runtime.store)
         self.wake = runtime.wake
 
+    # session/send's `rounds`: the message is to be worked on in rounds,
+    # which its turn's record keeps for the hook (hooks.py)
+    message_fields = ("rounds",)
+
     def messages(self):
         return {"rounds/list": self.list_message, "rounds/stop": self.stop_message}
 

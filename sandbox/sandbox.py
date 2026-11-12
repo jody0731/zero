@@ -109,11 +109,15 @@ WALL_MARKS = (
     "Could not resolve host",
     "Temporary failure in name resolution",
 )
+# The argument a tool takes to run one call outside the sandbox, declared
+# here and offered by the shell and the file tools under this name
+OUTSIDE_ARGUMENT = "outside_sandbox"
 # What a call's result gets when it met a wall, and when it asked to leave
 # where nothing can (the shell's and the file tools')
 WALL = "(This ran in the sandbox: {walls}.)"
 NOT_OUTSIDE = (
-    "(outside_sandbox isn't available in this session, so it ran in the sandbox.)"
+    f"({OUTSIDE_ARGUMENT} isn't available in this session, so it ran in the "
+    "sandbox.)"
 )
 # What a call that asks to leave crosses, in the one sentence the user, the
 # consent check and the judge all read
@@ -124,9 +128,9 @@ def outside_crossing(args):
     """What a call that asks to run outside the sandbox crosses (the
     `outside_sandbox` the shell and the file tools offer), or None: the
     tools' `crossing` (core/tools.py)."""
-    if args.get("outside_sandbox") is not True:
+    if args.get(OUTSIDE_ARGUMENT) is not True:
         return None
-    return {"rule": "outside_sandbox", "fact": OUTSIDE, "why": args.get("reason")}
+    return {"rule": OUTSIDE_ARGUMENT, "fact": OUTSIDE, "why": args.get("reason")}
 
 
 def private_folders():

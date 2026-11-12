@@ -509,3 +509,6 @@ def to_text(kind, body, charset, url):
     return title, re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+# What this component offers the model, in the order it reads them; the
+# assembly adds them to core's registry (core/tools.py, add)
+TOOLS = (web_search, web_fetch)

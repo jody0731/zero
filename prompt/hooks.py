@@ -24,8 +24,8 @@ NEW_SCRATCH = (
 FORKED = (
     "[This session is a fork of session {session} (\"{title}\"), made {when} "
     "from that conversation up to here. The conversation above is a copy of "
-    "that session's, its record numbers kept, and session_search finds it "
-    "there. From here on the two go their own ways. The workspace, its "
+    "that session's, its record numbers kept{finds}. From here on the two go "
+    "their own ways. The workspace, its "
     "files and memory are shared with it; jobs and subagents started above "
     "belong to that session, and their notices go there.{scratch}{went_on}]"
 )
@@ -35,8 +35,8 @@ SUBAGENT_FORKED = (
     "[ZERO started this session as a subagent of session {session} "
     "(\"{title}\"), {when}, from a copy of that session's conversation up to "
     "its last finished turn: the conversation above, its record numbers "
-    "kept, which session_search finds there. From here on the two go their "
-    "own ways. The workspace, its files and memory are shared with it; jobs "
+    "kept{which_finds}. From here on the two go their own ways. The "
+    "workspace, its files and memory are shared with it; jobs "
     "and subagents started above belong to that session, and their notices "
     "go there.{mode}{scratch}]"
 )
@@ -48,9 +48,21 @@ FORK_SCRATCH = " This session's scratch folder, $TMPDIR, is {path}, new and empt
 # records from there (core/history.py's part_lines says what they did)
 FORK_WENT_ON = (
     " That session had gone on past here when this fork was made: records "
-    "{first}–{last} of its log, which session_search reads there. What was "
-    "done there stays done: files and memory are as it left them.{part}"
+    "{first}–{last} of its log{which_reads}. What was done there stays done: "
+    "files and memory are as it left them.{part}"
 )
+# The tool that reads a log by its record numbers, as it declares itself
+# (core/tools.py's record_reader), in the notes above
+FINDS = ", and {tool} finds it there"
+WHICH_FINDS = ", which {tool} finds there"
+WHICH_READS = ", which {tool} reads there"
+
+
+def reader_clause(text, context):
+    """`text` with the tool that reads a log by its record numbers, or
+    nothing where the session offers none."""
+    tool = tools.record_reader(context)
+    return text.format(tool=tool) if tool else ""
 
 
 class Means(Hook):
@@ -108,19 +120,23 @@ class Environment(Hook):
         if fork and not any(r.get("kind") == "forked" and r["seq"] > fork["seq"]
                             for r in session.log.branch()):
             scratch = FORK_SCRATCH.format(path=path) if path else ""
+            context = session.tool_context
             if fork.get("started_by") == "zero":
                 text = SUBAGENT_FORKED.format(
                     session=fork["session"], title=fork["title"],
                     when=history.when(fork["time"]), scratch=scratch,
                     mode=SUBAGENT_MODE.format(line=self.mode) if self.mode else "",
+                    which_finds=reader_clause(WHICH_FINDS, context),
                 )
             else:
                 went = fork.get("went_on")
-                went_on = FORK_WENT_ON.format(**went) if went else ""
+                went_on = FORK_WENT_ON.format(
+                    **went, which_reads=reader_clause(WHICH_READS, context),
+                ) if went else ""
                 text = FORKED.format(
                     session=fork["session"], title=fork["title"],
                     when=history.when(fork["time"]), scratch=scratch,
-                    went_on=went_on,
+                    went_on=went_on, finds=reader_clause(FINDS, context),
                 )
             session.write("note", kind="forked", text=text)
             return

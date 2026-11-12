@@ -242,9 +242,9 @@ class JobsService(Service):
         state = "stopped" if job.stopped_by else "ended"
         settled = {**row, "state": state, "exit_code": code, "ended_at": now,
                    "stopped_by": job.stopped_by}
-        text = jobtools.ended_notice(settled, self.last_output(row), now)
+        text, summary = jobtools.ended_notice(settled, self.last_output(row), now)
         self.store.settle_job(
-            job.id, notice=(f"job:{job.id}:end", text), state=state,
+            job.id, notice=(f"job:{job.id}:end", text, summary), state=state,
             exit_code=code, ended_at=now, stopped_by=job.stopped_by,
         )
         self.wake()
@@ -267,8 +267,9 @@ class JobsService(Service):
             if row["next_checkin_at"] > now:
                 continue
             count = row["checkin_count"] + 1
-            text = jobtools.checkin_notice(row, self.last_output(row), now)
-            notice = (f"job:{row['id']}:checkin:{count}", text)
+            text, summary = jobtools.checkin_notice(row, self.last_output(row),
+                                                    now)
+            notice = (f"job:{row['id']}:checkin:{count}", text, summary)
             following = now + (now - row["started_at"])
             woke |= self.store.settle_job(
                 row["id"], notice=notice, checkin_count=count,
@@ -292,9 +293,11 @@ class JobsService(Service):
             if row["id"] in self.live:
                 continue
             kill_leftover(row)
-            text = jobtools.lost_notice(row, self.last_output(row), now, crashed=True)
+            text, summary = jobtools.lost_notice(row, self.last_output(row), now,
+                                                 crashed=True)
             self.store.settle_job(
-                row["id"], notice=(f"job:{row['id']}:lost", text), state="lost",
+                row["id"], notice=(f"job:{row['id']}:lost", text, summary),
+                state="lost",
                 ended_at=now,
             )
         self.stopping.clear()
@@ -310,9 +313,11 @@ class JobsService(Service):
             live = list(self.live.values())
         for job in live:
             row = self.store.job(job.id)
-            text = jobtools.lost_notice(row, self.last_output(row), now, crashed=False)
+            text, summary = jobtools.lost_notice(row, self.last_output(row), now,
+                                                 crashed=False)
             self.store.settle_job(
-                job.id, notice=(f"job:{job.id}:lost", text), state="lost",
+                job.id, notice=(f"job:{job.id}:lost", text, summary),
+                state="lost",
                 ended_at=now,
             )
             job.stopped_by = "shutdown"

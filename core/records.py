@@ -94,6 +94,12 @@ class Call:
         self.args, self.error = tools.check(self.name, self.arguments)
         self.result = None
         self.denied = self.ran = False
+        # What its tool's answer carries beside its text (core/tools.py's
+        # Result): its fields, whether it failed, and where its output
+        # starts in `result` while that is the tool's own text
+        self.fields = {}
+        self.failed = False
+        self.output_at = None
         # What hooks found out about this call (a rule hit, say); logged as is
         self.notes = {}
         # Hook notes for the model, added below the result of a call that ran
@@ -110,6 +116,12 @@ class Call:
             "denied": self.denied,
             "ran": self.ran,
             "notes": self.notes,
+            # Only where there is something to say, as an older log's
+            # records have none of them
+            **({"fields": self.fields} if self.fields else {}),
+            **({"failed": True} if self.failed else {}),
+            **({"output_at": self.output_at}
+               if self.output_at is not None else {}),
         }
 
 

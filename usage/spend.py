@@ -230,15 +230,19 @@ class LogUse:
 
 
 # Each log's reader, by path, kept while ZERO runs: a later read takes only
-# what was added
+# what was added. The most read last stay, up to READERS_KEPT.
 READERS = {}
+READERS_KEPT = 64
 READERS_LOCK = threading.Lock()
 
 
 def log_use(path, now=None):
     """The use in all of the log at `path`."""
     with READERS_LOCK:
-        reader = READERS.setdefault(str(path), LogUse(path))
+        reader = READERS.pop(str(path), None) or LogUse(path)
+        READERS[str(path)] = reader
+        while len(READERS) > READERS_KEPT:
+            READERS.pop(next(iter(READERS)))
     return reader.read(now)
 
 

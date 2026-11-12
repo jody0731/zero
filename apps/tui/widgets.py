@@ -44,13 +44,17 @@ class Fold(Static):
     def on_resize(self):
         self.draw()
 
-    def finish(self, result):
-        ok, code, seconds, lines = outcome_of(result)
+    def finish(self, record):
+        """The call's tool record: its outcome, from the data beside its
+        text (client/render.py's outcome_of)."""
+        ok, code, seconds, lines = outcome_of(record)
         took = f" {seconds}" if seconds else ""
         if ok:
             mark = f"✓{took}"
+        elif not record.get("ran"):
+            mark = "✗ not run"
         elif code is None:
-            mark = "✗ not run" if result.startswith("Not run") else f"✗{took}"
+            mark = f"✗{took}"
         else:
             mark = f"✗ exit {code}{took}"
         self.mark = (mark, "$text-success" if ok else "$text-error")
@@ -254,7 +258,7 @@ class Transcript(VerticalScroll):
         if kind == "tool":
             block = self.calls.get(record.get("call"))
             if block is not None:
-                block.finish(record["result"])
+                block.finish(record)
                 return []
             return [Plain(record["result"][:200], classes="note")]
         if kind == "ask":

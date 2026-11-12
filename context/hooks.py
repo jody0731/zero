@@ -17,6 +17,7 @@ from context import compaction, results, room
 from context.compaction import (
     INSTRUCTION_TOKENS, CompactionFailed, NothingToCompact,
 )
+from core import tools
 from core.hooks import Hook, Retry
 from core.llm import MODEL_ERRORS
 
@@ -31,9 +32,12 @@ TOO_LONG = re.compile(
 SAVED = (
     "[This result is about {cost:,} tokens, more than its share of the room "
     "left before this session's context is compacted ({share}). The whole of "
-    "it is in {path} ({lines:,} lines): `read` with offset and limit reads any "
-    "part of it, or all of it at once.{preview}]"
+    "it is in {path} ({lines:,} lines){reading}.{preview}]"
 )
+# How to read a saved result, by the tool that reads a file in parts and its
+# two arguments, as that tool declares them (core/tools.py's part_reader)
+READING = (": `{tool}` with {start} and {count} reads any part of it, or all "
+           "of it at once")
 SHARE = "{share:,} tokens: {percent}% of the {left:,} left"
 NO_ROOM = "none: the context is compacted before the next step"
 PREVIEW = " Its start and end follow."
@@ -41,9 +45,9 @@ BETWEEN = "\n[… {count:,} lines not shown …]\n"
 # A sized result bigger than a fresh context can hold: the one wall left
 TOO_BIG = (
     "Not given whole: this result is about {cost:,} tokens, more than a fresh "
-    "context holds below this session's line ({most:,} tokens). It can be read "
-    "in parts with offset and limit."
+    "context holds below this session's line ({most:,} tokens).{parts}"
 )
+PARTS = " It can be read in parts with {start} and {count}."
 # Shorter than this, a preview isn't worth its room
 LEAST_PREVIEW_TOKENS = 40
 
@@ -142,26 +146,28 @@ class Context(Hook):
             return None
         return Retry(0)
 
-    def compaction_asked(self, session, reason, handoff=None):
-        """A compaction now, between turns (the user's request), or at a
-        round's end, keeping nothing but `handoff` (rounds/); one that fails
-        is written down as `compaction_failed`."""
-        if reason != "round":
+    def compaction_asked(self, session, reason, handoff=None, fresh=False,
+                         occasion=None):
+        """A compaction now, between turns (the user's request), or one that
+        keeps nothing but `handoff` (`fresh`: a round's end, rounds/, on its
+        `occasion`); one that fails is written down as `compaction_failed`."""
+        if not fresh:
             self._compact(session, reason)
             return
         try:
             compaction.fresh(session, handoff, self._line(session),
-                             counter(session), limits=self.limits)
+                             counter(session), limits=self.limits,
+                             reason=reason, occasion=occasion)
         except (CompactionFailed, *MODEL_ERRORS) as error:
             session.write("compaction_failed", reason=reason,
                           error=f"{type(error).__name__}: {error}")
 
     def _asked(self, session):
-        """"user" or "zero" when a compaction was asked for since the last
-        one, else None."""
-        if getattr(session, "compact_asked", None):
-            session.compact_asked = None
-            return "user"
+        """Who asked for a compaction since the last one ("user" through the
+        server, "zero" with its tool), else None."""
+        wanted = session.take_wanted_compaction()
+        if wanted:
+            return wanted
         for record in reversed(session.log.branch()):
             if record["type"] in ("compaction", "compaction_failed", "system",
                                   "session"):
@@ -202,7 +208,10 @@ class Context(Hook):
             fixed = count(session.messages[0]["content"])
             most = room.fresh_room(at, fixed, INSTRUCTION_TOKENS, self.limits)
             if cost > most:
-                return TOO_BIG.format(cost=cost, most=most)
+                reader = tools.part_reader(session.tool_context)
+                parts = PARTS.format(start=reader[1], count=reader[2]) if (
+                    reader) else ""
+                return TOO_BIG.format(cost=cost, most=most, parts=parts)
             return None
         name = f"{call.name}-{call.id}.txt"
         return self._fit(session, at, result, cost, name, call.notes.get("whole_at"))
@@ -224,7 +233,10 @@ class Context(Hook):
         percent = self.limits["result_share_percent"]
         told = (SHARE.format(share=allowed, percent=percent, left=left)
                 if left > 0 else NO_ROOM)
+        reader = tools.part_reader(session.tool_context)
+        reading = READING.format(tool=reader[0], start=reader[1],
+                                 count=reader[2]) if reader else ""
         return SAVED.format(
             cost=cost, share=told, path=path, lines=results.lines_of(text),
-            preview=PREVIEW if shown else "",
+            reading=reading, preview=PREVIEW if shown else "",
         ) + shown

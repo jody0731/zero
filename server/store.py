@@ -18,6 +18,8 @@ import traceback
 from contextlib import contextmanager
 from datetime import datetime
 
+from core import history
+
 # The database's format, its user_version: a newer ZERO's database is read for
 # what this one knows of it, and said
 FILE_FORMAT = 1
@@ -328,9 +330,11 @@ class Store:
             payload = json.loads(row["payload"])
             steer = {"text": payload["text"], "inbox": row["id"],
                      "source": row["source"]}
-            # A notice's sender started from this record (jobs/store.py)
-            if payload.get("started_from_seq") is not None:
-                steer["started_from_seq"] = payload["started_from_seq"]
+            # What it carries beside its text (a notice's sender's record,
+            # its summary: jobs/store.py)
+            for name in history.MESSAGE_FIELDS:
+                if payload.get(name) is not None:
+                    steer[name] = payload[name]
             found.append(steer)
         return found
 

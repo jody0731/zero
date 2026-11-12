@@ -645,7 +645,7 @@ class ZeroApp(SafeClicks, App):
                     self.ask_line("New title", title, lambda text: self.request(
                         lambda: self.connection.rename(sid, text)))
             elif name == "/compact":
-                self.request(lambda: self.connection.compact(sid),
+                self.request(lambda: self.connection.compact(sid, rest or None),
                              then=lambda reply: self.note(
                                  render.COMPACTING[reply["compacting"]]))
             elif name == "/rewind":

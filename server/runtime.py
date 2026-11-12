@@ -1044,12 +1044,15 @@ class Runtime(SessionActions):
             finally:
                 lock.release()
 
-    def compact(self, sid):
+    def compact(self, sid, instructions=None):
         """The user's compaction of a session's context: at once for one at
         rest, on a thread of its own held as its runner, so no turn starts
         meanwhile and the client needn't wait for the handoff; before the
-        next step for one whose turn runs or waits for an answer. Its record
-        (or `compaction_failed`) reaches the watchers as any record does."""
+        next step for one whose turn runs or waits for an answer.
+        `instructions`: the user's words on what the handoff keeps, or None.
+        Its record (or `compaction_failed`) reaches the watchers as any
+        record does."""
+        instructions = (instructions or "").strip() or None
         with self.lock:
             if not self.accepting:
                 raise Refused("the server is shutting down")
@@ -1063,22 +1066,24 @@ class Runtime(SessionActions):
                 if session is None:
                     raise Refused("its turn waits for an answer; a compaction "
                                   "can be asked for once it runs again")
-                session.want_compaction("user")
+                session.want_compaction("user", instructions)
                 return {"compacting": "before_next_step"}
             if not any(r["type"] == "user" for r in self.log(sid).branch()):
                 raise Refused("the session has no conversation yet")
-            thread = threading.Thread(target=self._compact, args=(sid,),
+            thread = threading.Thread(target=self._compact,
+                                      args=(sid, instructions),
                                       name=f"compact-{sid}", daemon=True)
             self.hold_runner(sid, thread)
         thread.start()
         return {"compacting": "now"}
 
-    def _compact(self, sid):
+    def _compact(self, sid, instructions):
         lock = self.session_lock(sid)
         try:
             lock.acquire()
             try:
-                self.harness(sid, self.log(sid, lock)).compact("user")
+                self.harness(sid, self.log(sid, lock)).compact(
+                    "user", instructions=instructions)
             finally:
                 lock.release()
         except Exception:

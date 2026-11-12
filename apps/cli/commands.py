@@ -402,6 +402,9 @@ def parser(prog="zero"):
     compact = actions.add_parser("compact", help="compact a session's context: "
                                                  "now, or before its next step")
     session_arg(compact)
+    compact.add_argument("instructions", metavar="INSTRUCTIONS", nargs="*",
+                         help="what the handoff keeps, in your words, beside "
+                              "its fixed form")
     json_flag(compact)
     compact.set_defaults(handler=compact_command)
     rewind = actions.add_parser(
@@ -734,7 +737,8 @@ def fork_command(connection, args, out):
 
 
 def compact_command(connection, args, out):
-    reply = connection.compact(session_id(connection, args.id))
+    words = " ".join(args.instructions).strip() or None
+    reply = connection.compact(session_id(connection, args.id), words)
     return print_reply(args, out, reply, render.COMPACTING[reply["compacting"]])
 
 

@@ -6,8 +6,11 @@ doesn't fit; ZERO's `compact` call and the user's request do the same at the
 next call, or at once when the session is idle (`compact`). A server that
 still refuses a request as too long gets one compaction and the call again:
 a net, never the plan. Each result and notice ZERO didn't size itself gets a
-share of the room left; past it, the whole goes to the session's results
-folder, and ZERO reads why, how big, where, and its start and end.
+share of the room left, never less than its share of the room a compaction
+leaves (near the line one comes before the next step anyway, and keeps the
+step whole); past it, the whole goes to the session's results folder, and
+ZERO reads why, how big, where, and its start and end. A compaction ZERO or
+the user asks for may carry their words on what its handoff keeps.
 """
 
 import re
@@ -17,7 +20,7 @@ from context import compaction, results, room
 from context.compaction import (
     INSTRUCTION_TOKENS, CompactionFailed, NothingToCompact,
 )
-from core import tools
+from core import history, tools
 from core.hooks import Hook, Retry
 from core.llm import MODEL_ERRORS
 
@@ -30,15 +33,19 @@ TOO_LONG = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 SAVED = (
-    "[This result is about {cost:,} tokens, more than its share of the room "
-    "left before this session's context is compacted ({share}). The whole of "
-    "it is in {path} ({lines:,} lines){reading}.{preview}]"
+    "[This result is about {cost:,} tokens, more than its share of this "
+    "session's context ({share}). The whole of it is in {path} ({lines:,} "
+    "lines){reading}.{preview}]"
 )
 # How to read a saved result, by the tool that reads a file in parts and its
 # two arguments, as that tool declares them (core/tools.py's part_reader)
 READING = (": `{tool}` with {start} and {count} reads any part of it, or all "
            "of it at once")
-SHARE = "{share:,} tokens: {percent}% of the {left:,} left"
+SHARE = "{share:,} tokens: {percent}% of the {left:,} left before it is compacted"
+# Near the line: a share of the room a compaction leaves, never less (it
+# comes before the next step there, and keeps that step whole)
+SHARE_AFTER = "{share:,} tokens: {percent}% of the {room:,} left after a compaction"
+COMES_NEXT = ", which comes before the next step"
 NO_ROOM = "none: the context is compacted before the next step"
 PREVIEW = " Its start and end follow."
 BETWEEN = "\n[… {count:,} lines not shown …]\n"
@@ -62,6 +69,22 @@ def counter(session):
         return room.tokens(text) if found is None else found
 
     return tokens
+
+
+def counted(session):
+    """Whether a model call has been made since the context's latest
+    compaction, and counted it where its server reports a count. Until one
+    has, the line isn't checked: a compaction leaves a context estimated
+    whole, a token a byte where the server counts nothing (four times high
+    for English), so the next check read it past the line and compacted
+    again at once (7.3's first eval). The next call goes ahead, its count
+    decides, and a refusal still meets the net."""
+    for record in reversed(session.log.branch()):
+        if record["type"] == "assistant":
+            return True
+        if record["type"] == "compaction":
+            return False
+    return True
 
 
 def too_long(error):
@@ -116,6 +139,26 @@ class Context(Hook):
         return room.measure(session.log.branch(), session.messages,
                             session.tool_schemas(), counter(session))
 
+    def _fixed(self, session):
+        """The tokens every context holds: the system message and the tools
+        (room.fixed_tokens)."""
+        return room.fixed_tokens(session.log.branch(), session.messages,
+                                 session.tool_schemas(), counter(session))
+
+    def _room_after(self, session, at):
+        """The room a handoff leaves below the line `at`: a fresh context's,
+        less the steps it keeps (a share of the line, never less than the
+        newest step, which holds the result being fitted)."""
+        count = counter(session)
+        body = history.in_context(session.log.branch())
+        points = compaction.cut_points(body)
+        newest = body[points[-1]:] if points else body
+        step = sum(room.message_tokens(m, count) for r in newest
+                   if (m := history.message(r)) is not None)
+        kept = max(int(at * compaction.TAIL_SHARE), step)
+        return room.fresh_room(at, self._fixed(session), INSTRUCTION_TOKENS,
+                               self.limits) - kept
+
     def turn_start(self, turn):
         self._failed = False
         self._refused = set()
@@ -124,15 +167,15 @@ class Context(Hook):
         """A compaction first when the context and its headroom pass the line,
         or when ZERO or the user asked for one."""
         session = step.turn.session
-        reason = self._asked(session)
-        if reason is None and not self._failed:
+        reason, instructions = self._asked(session)
+        if reason is None and not self._failed and counted(session):
             left = room.room_left(self._line(session), self._size(session),
                                   INSTRUCTION_TOKENS, self.limits)
             if left < 0:
                 reason = "line"
         if reason is None:
             return None
-        self._compact(session, reason, step.turn.control)
+        self._compact(session, reason, step.turn.control, instructions)
         return None
 
     def model_error(self, failure):
@@ -147,12 +190,14 @@ class Context(Hook):
         return Retry(0)
 
     def compaction_asked(self, session, reason, handoff=None, fresh=False,
-                         occasion=None):
-        """A compaction now, between turns (the user's request), or one that
-        keeps nothing but `handoff` (`fresh`: a round's end, rounds/, on its
+                         occasion=None, instructions=None):
+        """A compaction now, between turns (the user's request, with their
+        words on what its handoff keeps: `instructions`), or one that keeps
+        nothing but `handoff` (`fresh`: a round's end, rounds/, on its
         `occasion`); one that fails is written down as `compaction_failed`."""
         if not fresh:
-            self._compact(session, reason)
+            words = {reason: instructions} if instructions else None
+            self._compact(session, reason, instructions=words)
             return
         try:
             compaction.fresh(session, handoff, self._line(session),
@@ -163,20 +208,29 @@ class Context(Hook):
                           error=f"{type(error).__name__}: {error}")
 
     def _asked(self, session):
-        """Who asked for a compaction since the last one ("user" through the
-        server, "zero" with its tool), else None."""
+        """(who asked for a compaction since the last one: "user" through the
+        server, "zero" with its tool, else None; the askers' words on what
+        its handoff keeps, {"user" or "zero": their words}). The user's
+        request names the compaction where both asked; ZERO's words stay."""
+        reason, words = None, {}
         wanted = session.take_wanted_compaction()
         if wanted:
-            return wanted
+            reason, text = wanted
+            if text:
+                words["user"] = text
         for record in reversed(session.log.branch()):
             if record["type"] in ("compaction", "compaction_failed", "system",
                                   "session"):
-                return None
-            if record["type"] == "tool" and record.get("notes", {}).get("compact"):
-                return "zero"
-        return None
+                break
+            notes = record.get("notes") or {}
+            if record["type"] == "tool" and notes.get("compact"):
+                reason = reason or "zero"
+                if notes.get("compact_instructions"):
+                    words["zero"] = notes["compact_instructions"]
+                break
+        return reason, words
 
-    def _compact(self, session, reason, control=None):
+    def _compact(self, session, reason, control=None, instructions=None):
         """The compaction record, or None when it failed (written down in the
         log as `compaction_failed`). At the line, one that can't make room
         isn't a failure: right after a compaction the whole context is
@@ -187,7 +241,8 @@ class Context(Hook):
         try:
             return compaction.compact(session, reason, self._line(session),
                                       self.folder(), check, counter(session),
-                                      limits=self.limits)
+                                      limits=self.limits,
+                                      instructions=instructions)
         except (CompactionFailed, *MODEL_ERRORS) as error:
             if reason == "line" and isinstance(error, NothingToCompact):
                 return None
@@ -205,8 +260,8 @@ class Context(Hook):
         count = counter(session)
         cost = count(result)
         if call.notes.get("sized"):
-            fixed = count(session.messages[0]["content"])
-            most = room.fresh_room(at, fixed, INSTRUCTION_TOKENS, self.limits)
+            most = room.fresh_room(at, self._fixed(session), INSTRUCTION_TOKENS,
+                                   self.limits)
             if cost > most:
                 reader = tools.part_reader(session.tool_context)
                 parts = PARTS.format(start=reader[1], count=reader[2]) if (
@@ -223,16 +278,28 @@ class Context(Hook):
                          counter(session)(text), name)
 
     def _fit(self, session, at, text, cost, name, whole_at=None):
+        """`text` as the context takes it: None when it fits its share, the
+        share of the room left or, near the line, of the room a compaction
+        leaves, whichever is more (the share shrank to none before: 6.3);
+        past it, saved whole and ZERO told so."""
         left = room.room_left(at, self._size(session), INSTRUCTION_TOKENS,
                               self.limits)
-        allowed = room.share(left, self.limits)
+        after = self._room_after(session, at)
+        allowed = room.share(max(left, after), self.limits)
         if cost <= allowed:
             return None
         path = whole_at or results.save(self.folder(), name, text)
         shown = preview(text, allowed)
         percent = self.limits["result_share_percent"]
-        told = (SHARE.format(share=allowed, percent=percent, left=left)
-                if left > 0 else NO_ROOM)
+        if after > left and allowed > 0:
+            told = SHARE_AFTER.format(share=allowed, percent=percent, room=after)
+            # What it shows of the result fills the room left, so the
+            # context passes its line
+            told += COMES_NEXT if left < allowed else ""
+        elif left > 0:
+            told = SHARE.format(share=allowed, percent=percent, left=left)
+        else:
+            told = NO_ROOM
         reader = tools.part_reader(session.tool_context)
         reading = READING.format(tool=reader[0], start=reader[1],
                                  count=reader[2]) if reader else ""

@@ -19,7 +19,10 @@ SETTINGS = (
     Setting("compact_at_tokens", "Limits", "Compact at (tokens)", None, "int",
             minimum=16_000, unset_means="the model's context window"),
     # A result ZERO didn't size gets this share of the room left below the
-    # line; past it, the whole goes to a file (hooks.py)
+    # line, or near it of the room a compaction leaves; past it, the whole
+    # goes to a file (hooks.py). 15% measured at 7.3 (evals/
+    # compaction_replay.py, 83 real sessions at lines of 32k to 262k): the
+    # knee, past which each compaction more keeps few more results whole
     Setting("result_share_percent", "Limits",
             "Percent of the room left a result may take", 15, "int",
             maximum=100),

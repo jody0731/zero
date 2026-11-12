@@ -319,8 +319,11 @@ class Server:
             sid = request.get("session")
             if not isinstance(sid, str):
                 return error("session/compact needs a session string")
+            words = request.get("instructions")
+            if words is not None and not isinstance(words, str):
+                return error("session/compact's instructions must be a string")
             try:
-                return {"ok": True, **self.runtime.compact(sid)}
+                return {"ok": True, **self.runtime.compact(sid, words)}
             except Refused as exc:
                 return error(str(exc))
         if name in ("session/user_messages", "session/rewind", "session/fork"):

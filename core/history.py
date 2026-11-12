@@ -45,7 +45,11 @@ HANDOFF = (
 # Where a compaction happened, as the model reads it: what it did, and how
 # big the context is after it, so a notice from before it ("compacted before
 # the next step") isn't read as still standing
-COMPACTED = "[Compacted {when}: {what}{size}]"
+COMPACTED = "[Compacted {when}: {what}{size}{asked}]"
+# Who asked for a compaction with words on what its handoff keeps (its
+# record's `instructions`), as the model reads it; the words follow quoted
+ASKERS = {"user": "The user", "zero": "You"}
+ASKED = "\n{whose} asked for it, with these words on what the handoff keeps:\n{words}"
 CLEARED_ONLY = ("older outputs were saved whole and cleared from view, each in "
                 "the file its line names.")
 HANDED_OFF = "the conversation before the kept steps became the handoff above."
@@ -333,7 +337,17 @@ def compacted(record):
     size = ""
     if record.get("tokens_after") and record.get("line"):
         size = SIZE.format(tokens=record["tokens_after"], line=record["line"])
-    return COMPACTED.format(when=when(record["time"]), what=what, size=size)
+    asked = "".join(
+        ASKED.format(whose=ASKERS.get(whose, whose), words=quoted(words))
+        for whose, words in (record.get("instructions") or {}).items()
+    )
+    return COMPACTED.format(when=when(record["time"]), what=what, size=size,
+                            asked=asked)
+
+
+def quoted(text):
+    """`text` as a quote, each line marked."""
+    return "\n".join(f"> {line}" for line in text.strip().splitlines())
 
 
 def message(record):

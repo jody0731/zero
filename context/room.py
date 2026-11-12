@@ -14,7 +14,8 @@ never past the window. The headroom is what must fit beside the context: the
 next reply (`reply_room_tokens`), and a compaction's instructions and handoff
 (`handoff_room_tokens`). A result ZERO didn't size gets a share
 (`result_share_percent`) of the room left below the line minus the
-headroom; past it, the whole goes to a file (hooks.py). Each is read from a
+headroom, or, near the line, of the room a compaction leaves, whichever is
+more; past it, the whole goes to a file (hooks.py). Each is read from a
 session's limits as they stand (settings.LiveSettings).
 """
 
@@ -75,6 +76,24 @@ def measure(records, messages, schemas, tokens=tokens):
     guessed = sum(message_tokens(m, tokens) for m in messages)
     guessed += tokens(json.dumps(schemas, ensure_ascii=False))
     return Size(guessed, guessed)
+
+
+def fixed_tokens(records, messages, schemas, tokens=tokens):
+    """The tokens every context holds, its system message and tools: their
+    count (`tokens`, a token a byte where the server counts nothing), but
+    never more than the smallest prompt a call on this model has sent, which
+    held them and more. A token a byte counted a start of 6.4k tokens as
+    25k, and a fresh context's room as below zero (7.3's eval)."""
+    found = tokens(messages[0]["content"]) + tokens(
+        json.dumps(schemas, ensure_ascii=False))
+    for record in records:
+        if record["type"] == "system" and record.get("why") == "model":
+            # Another model's tokenizer: its own calls from here on
+            found = tokens(messages[0]["content"]) + tokens(
+                json.dumps(schemas, ensure_ascii=False))
+        elif record["type"] == "assistant" and record.get("prompt_tokens"):
+            found = min(found, record["prompt_tokens"])
+    return found
 
 
 def line(limits, window):

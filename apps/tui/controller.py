@@ -34,7 +34,7 @@ COMMANDS = {
     "/sessions": "the session list (also Ctrl+O)",
     "/rename": "rename this session: /rename TITLE",
     "/compact": "compact this session's context: now, or before the next step "
-                "while a turn runs",
+                "while a turn runs; /compact INSTRUCTIONS says what its handoff keeps",
     "/rewind": "go back to before one of your messages, its text back in the "
                "input; what came after is left behind, files stay as they are",
     "/fork": "a new session from this conversation, up to one of your messages "

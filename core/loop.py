@@ -82,9 +82,11 @@ class Session:
         records = log.branch()
         self.prompt_tokens = 0
         # Who asked for a compaction before the running turn's next step (the
-        # user, through a server: want_compaction), until the context
-        # component takes it (take_wanted_compaction)
+        # user, through a server: want_compaction), and their words on what
+        # its handoff keeps, until the context component takes them
+        # (take_wanted_compaction)
         self.compaction_wanted_by = None
+        self.compaction_instructions = None
         if records:
             self.restore(log)
         else:
@@ -106,36 +108,42 @@ class Session:
                    **self.marked())
         self.messages = history.replay(self.log.branch())
 
-    def compact(self, reason, handoff=None, fresh=False, occasion=None):
+    def compact(self, reason, handoff=None, fresh=False, occasion=None,
+                instructions=None):
         """A compaction now, between turns: what the hooks' crashes say when
         it failed, else []. A turn's own come before its next model call.
         `reason`: who or what asks, as its record keeps it. `fresh`: the
         context keeps nothing but `handoff`, or one the model writes when
         there is none (a round's end, rounds/); `occasion`: what happened, in
         the asker's words, which the model reads where the compaction
-        happened ("a round ended")."""
+        happened ("a round ended"); `instructions`: the asker's words on what
+        the handoff keeps, or None."""
         errors = self.hooks.take_errors()
         self.hooks.notify("compaction_asked", self, reason, handoff, fresh,
-                          occasion)
+                          occasion, instructions)
         found = self.hooks.take_errors()
         # A round's end comes inside a turn: its earlier errors stay its own
         self.hooks.errors = errors
         return found
 
-    def want_compaction(self, by):
+    def want_compaction(self, by, instructions=None):
         """A compaction before the running turn's next step, asked for by
-        `by` ("user"), which the context component makes then."""
+        `by` ("user"), with their words on what its handoff keeps
+        (`instructions`, or None), which the context component makes then."""
         self.compaction_wanted_by = by
+        self.compaction_instructions = instructions
 
     def take_wanted_compaction(self):
-        """Who asked for a compaction before this step, once; else None."""
+        """(who asked for a compaction before this step, their words or
+        None), once; else None."""
         by, self.compaction_wanted_by = self.compaction_wanted_by, None
-        return by
+        words, self.compaction_instructions = self.compaction_instructions, None
+        return None if by is None else (by, words)
 
     def compacted(self, *, reason, summary, kept_from, tokens_before=None,
                   line=None, cleared=None, tokens_after=None, handoff_at=None,
                   handoff_call=None, saved=None, cleared_only=False,
-                  fresh=False, occasion=None):
+                  fresh=False, occasion=None, instructions=None):
         """Write a compaction, with the system message as things stand now,
         and take the context it leaves. Its fields, as history replays them:
         who or what asked (`reason`), the tokens before and after and the
@@ -144,14 +152,15 @@ class Session:
         (`kept_from`), the outputs cleared ({seq: the line in their place})
         and the files they were saved in (`saved`), whether it only cleared
         outputs (`cleared_only`) or kept nothing but the handoff (`fresh`,
-        on an `occasion` the model reads)."""
+        on an `occasion` the model reads), and the askers' words on what the
+        handoff keeps (`instructions`, {"user" or "zero": their words})."""
         fields = {
             "reason": reason, "tokens_before": tokens_before, "line": line,
             "summary": summary, "kept_from": kept_from, "cleared": cleared,
             "tokens_after": tokens_after, "handoff_at": handoff_at,
             "handoff_call": handoff_call, "saved": saved,
             "cleared_only": cleared_only or None, "fresh": fresh or None,
-            "occasion": occasion,
+            "occasion": occasion, "instructions": instructions or None,
         }
         # Only what it has, as before; its handoff always, None when it
         # only cleared outputs and had none to carry

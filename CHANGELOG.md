@@ -3,6 +3,27 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.4
+
+A compaction told what to keep: you, or ZERO itself, can say what a handoff must hold when
+a long session's context is compacted.
+
+- **`/compact` takes words.** `/compact keep the failing test names and the plan` in the full
+  screen, `zero session compact ID keep …` on the command line, or `instructions` on the
+  protocol's `session/compact`: the handoff ZERO writes keeps what you named, beside its
+  usual parts (your requests, constraints, what was done, the state, the next step), never
+  in their place. Words always get a handoff, and ZERO reads them again where the compaction
+  happened.
+- **ZERO can say it too.** Its `compact` tool takes the same words, so before a compaction
+  it can name what the work ahead needs.
+- **A result near the line is no longer shown with nothing.** A command's output that comes
+  as the context nears its line now gets its share of the room a compaction leaves (one
+  comes before the next step there), so ZERO sees it whole, or its start and end, where it
+  used to see only where it was saved.
+- **Fixes.** A compaction between turns is no longer followed by a second one at once on a
+  model server that doesn't count tokens; a file read is no longer refused as too big for a
+  fresh context when it fits.
+
 ## 0.7.3
 
 The log is the truth: what ZERO keeps of a session's state is rebuilt from the session's own

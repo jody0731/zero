@@ -51,7 +51,17 @@ def compaction_text(record):
     before = short_tokens(record.get("tokens_before") or 0)
     after = short_tokens(record.get("tokens_after") or 0)
     how = "handed off" if record.get("summary") else "old outputs cleared"
-    return f"context compacted {why}, {how}: {before} → {after} tokens"
+    text = f"context compacted {why}, {how}: {before} → {after} tokens"
+    # What its askers said the handoff keeps, in a line
+    words = " ".join(" ".join((record.get("instructions") or {}).values()).split())
+    if words:
+        text += f', keeping "{clipped_line(words)}"'
+    return text
+
+
+def clipped_line(text, chars=80):
+    """`text` cut to `chars` characters, an ellipsis where it was cut."""
+    return text if len(text) <= chars else text[:chars - 1].rstrip() + "…"
 
 
 def rewind_text(record):

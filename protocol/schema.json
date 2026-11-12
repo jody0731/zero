@@ -924,6 +924,17 @@
         "session": {
           "type": "string",
           "description": "a session's id"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the user's words on what the handoff keeps, beside its fixed form; with them a handoff is written"
         }
       },
       "required": [

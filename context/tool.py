@@ -13,19 +13,40 @@ DESCRIPTION = (
     "from its file. A compaction also comes on its own when the context "
     "nears its line."
 )
+# The words ZERO may give: what the handoff keeps, beside its fixed parts
+# (compaction.py's INSTRUCTIONS)
+INSTRUCTIONS = (
+    "What the handoff keeps, in your words, beside its usual parts (the "
+    "user's requests, their constraints, what was done, the state, the next "
+    "step): what the work ahead needs from the steps it replaces. With them, "
+    "a handoff is written even where clearing outputs would make room."
+)
 DONE = "A compaction comes before your next step."
+
+
+def summary(args):
+    """The call in a line: what it keeps, where ZERO said."""
+    words = (args.get("instructions") or "").strip()
+    if not words:
+        return "compact this session's context"
+    return f"compact this session's context, keeping: {words}"
 
 
 @tool(
     DESCRIPTION,
-    summary=lambda args: "compact this session's context",
+    optional=("instructions",),
+    summary=summary,
     # It changes nothing on the machine
     needs_permission=lambda args: False,
+    instructions=("string", INSTRUCTIONS),
 )
-def compact(notes=None):
-    """`notes`: the call's own, where the hook finds the request."""
+def compact(instructions=None, notes=None):
+    """`notes`: the call's own, where the hook finds the request and its
+    words."""
     if notes is not None:
         notes["compact"] = True
+        if (instructions or "").strip():
+            notes["compact_instructions"] = instructions.strip()
     return DONE
 
 

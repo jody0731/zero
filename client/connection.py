@@ -260,10 +260,12 @@ class Connection:
     def rename(self, session, title):
         return self.call(build("session/rename", session=session, title=title))
 
-    def compact(self, session):
+    def compact(self, session, instructions=None):
         """`session/compact`'s reply: whether it compacts "now" or
-        "before_next_step"."""
-        return self.call(build("session/compact", session=session))
+        "before_next_step". `instructions`: the user's words on what the
+        handoff keeps."""
+        words = {"instructions": instructions} if instructions else {}
+        return self.call(build("session/compact", session=session, **words))
 
     def user_messages(self, session):
         """The user's own messages on the session's current branch that start

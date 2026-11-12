@@ -10,11 +10,14 @@ never fewer than the newest step), and a tool call never loses its result.
 Clearing: each older output is saved whole in the session's results folder
 and left in the context as a line naming the file. If the context is then
 under half the line, that is the compaction (never after a server refused
-the request: its count was higher than the estimate); otherwise the steps before
+the request: its count was higher than the estimate, nor when its asker gave
+words on what the handoff keeps); otherwise the steps before
 the kept ones get a handoff, written by the model from the conversation as
 it stands: the call is a prefix of the last request with the instructions
 after it, so the server's cache serves it (DSH's way), and its older
-outputs are saved first so the handoff can name their files.
+outputs are saved first so the handoff can name their files. The user's or
+ZERO's words on what it keeps follow the fixed form, marked with whose they
+are, and never take its place.
 """
 
 import json
@@ -53,12 +56,23 @@ and why]
 
 ## Next
 - [what was under way when this was written; the next step]
-{saved}
+{saved}{asked}
 Paths, commands, error text, numbers and names in the handoff are copied \
 exactly. Write only the handoff.]"""
 SAVED = (
     "\n## Saved outputs\n- [a saved output that matters]: [its path]\n\n"
     "These outputs are saved whole:\n{lines}\n"
+)
+# Who asked for a compaction with words of their own on what the handoff
+# keeps (a compaction record's `instructions`; who, as history.ASKERS names
+# them), as the handoff call reads it; the words follow, each line quoted,
+# after the fixed form (OpenClaw's and Pi's "Additional focus", after
+# theirs), so they add to it, never replace it
+ASKED = (
+    "\n{whose} asked for this compaction, with these words on what the "
+    "handoff keeps:\n{words}\n"
+    "What they name is kept in the handoff in full detail, in the part of "
+    "the form it belongs to.\n"
 )
 CLEARED = "[Output cleared from view: {tokens:,} tokens, saved whole in {path}.]"
 # The newest steps kept as they are: this share of the line
@@ -66,9 +80,23 @@ TAIL_SHARE = 0.2
 # An older output this many tokens or fewer stays as it is
 CLEAR_FROM_TOKENS = 100
 # Clearing alone is the compaction when it leaves the context under this
-# share of the line
+# share of the line. Measured at 7.3 (evals/compaction_replay.py: 83 real
+# sessions replayed at lines of 32k to 262k): a lower target hands off more
+# often, a higher one compacts more often and reads more anew after each;
+# half the line cost least at 64k and was within 3% at the others
 CLEARED_ENOUGH = 0.5
-INSTRUCTION_TOKENS = room.tokens(INSTRUCTIONS.format(saved=SAVED))
+INSTRUCTION_TOKENS = room.tokens(INSTRUCTIONS.format(saved=SAVED, asked=""))
+
+
+def asked(instructions):
+    """The askers' words for the handoff's instructions, each marked with
+    whose they are (`instructions`: {"user" or "zero": their words}); "" for
+    none. They take room the headroom keeps for a reply (room.py), which
+    the handoff call doesn't write: its own reply is the handoff."""
+    return "".join(
+        ASKED.format(whose=history.ASKERS[whose], words=history.quoted(words))
+        for whose, words in (instructions or {}).items() if (words or "").strip()
+    )
 
 
 class CompactionFailed(Exception):
@@ -157,11 +185,13 @@ def described(record):
 
 
 def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
-            limits):
+            limits, instructions=None):
     """Make room in `session`'s context under the line `at`; the compaction
     record. `reason`: "line", "zero", "user" or "refused"; `tokens`: text's
     tokens (the server's count where there is one); `limits`: the session's,
-    for the handoff's room. Raises
+    for the handoff's room; `instructions`: the askers' words on what the
+    handoff keeps ({"user" or "zero": their words}), which always get a
+    handoff, as the asker wants one written with them. Raises
     CompactionFailed when no handoff comes back, NothingToCompact when there
     is nothing to hand off."""
     records = session.log.branch()
@@ -173,7 +203,11 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     start = kept_from(body, int(at * TAIL_SHARE))
     if start is None:
         raise NothingToCompact("nothing older than the newest step to hand off")
+    instructions = {whose: words.strip() for whose, words in
+                    (instructions or {}).items() if (words or "").strip()}
     fields = {"reason": reason, "tokens_before": before.tokens, "line": at}
+    if instructions:
+        fields["instructions"] = instructions
     # Clearing first: the older outputs saved whole, lines in their place
     lines = save_outputs(body, start, folder, cleared)
     kept = previous["kept_from"] if previous else body[0]["seq"]
@@ -191,7 +225,8 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     # of nothing that looks enough means the estimate is off from the
     # server's count, which the handoff trusts
     cleared_some = len(lines) > len(cleared)
-    if cleared_some and after <= at * CLEARED_ENOUGH and reason != "refused":
+    if (cleared_some and after <= at * CLEARED_ENOUGH and reason != "refused"
+            and not instructions):
         summary = previous.get("summary") if previous else None
         if summary:
             # The handoff stays, with the time it was written
@@ -207,7 +242,8 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
         f"- {described(r)}: {path_in(lines[str(r['seq'])])}"
         for r in body[:start] if str(r.get("seq")) in lines
     )
-    ask = INSTRUCTIONS.format(saved=SAVED.format(lines=saved) if saved else "")
+    ask = INSTRUCTIONS.format(saved=SAVED.format(lines=saved) if saved else "",
+                              asked=asked(instructions))
     messages = session.messages[:upto] + [{"role": "user", "content": ask}]
     t0 = time.monotonic()
     reply = handoff_call(session, messages, room.handoff_room(at, limits), check)
@@ -264,7 +300,7 @@ def fresh(session, handoff, at, tokens=room.tokens, check=None, *, limits,
     fields = {"reason": reason, "tokens_before": before.tokens, "line": at,
               "fresh": True, "occasion": occasion}
     if not (handoff or "").strip():
-        ask = ROUND.format(saved="")
+        ask = ROUND.format(saved="", asked="")
         t0 = time.monotonic()
         reply = handoff_call(session, session.messages + [
             {"role": "user", "content": ask}], room.handoff_room(at, limits),

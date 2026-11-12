@@ -244,7 +244,11 @@ MESSAGES = {
     "session/compact": message(
         "Compact a session's context: at once when it rests, before the next "
         "step when its turn runs.",
-        {"session": SESSION}, required=("session",),
+        {"session": SESSION,
+         "instructions": {**maybe(STRING), "description": "the user's words "
+                          "on what the handoff keeps, beside its fixed form; "
+                          "with them a handoff is written"}},
+        required=("session",),
         reply={"compacting": {"type": "string",
                               "enum": ["now", "before_next_step"]}},
     ),

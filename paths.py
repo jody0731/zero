@@ -34,6 +34,9 @@ import fcntl
 import hashlib
 import os
 import re
+import shlex
+import shutil
+import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -44,6 +47,9 @@ HOME_ENV = "ZERO_HOME"
 # The longest path a Unix socket can bind to (sun_path, less its end)
 SOCKET_MAX = 107
 SOCKET = "zero.sock"
+# How much of the zero on the PATH is read to see whether it runs this copy:
+# a launcher is two lines
+LAUNCHER_READ_BYTES = 4096
 UNIT = f"{NAME}-server"
 
 # A CHANGELOG section's heading: the version it is for
@@ -160,6 +166,24 @@ def changelog_version(changelog=None):
     except OSError:
         return None
     return match.group(1) if match else None
+
+
+def zero_command(which=shutil.which):
+    """How a command runs this copy of ZERO, for a shell: `zero` where the
+    zero on the PATH runs it (its launcher names this copy's main.py), else
+    this Python and this copy's main.py, quoted. A command inherits the
+    server's ZERO_HOME, so either reaches this server."""
+    main = Path(__file__).resolve().parent / "apps" / "cli" / "main.py"
+    found = which(NAME)
+    if found:
+        try:
+            with open(found, errors="replace") as launcher:
+                text = launcher.read(LAUNCHER_READ_BYTES)
+        except OSError:
+            text = ""
+        if str(main) in text:
+            return NAME
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(main))}"
 
 
 def usual_home():

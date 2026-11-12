@@ -395,8 +395,9 @@ def make_session(
     )]
     # ZERO's own skills sit in its home, which every sandbox hides: their
     # folder is shown again, read-only, so their scripts run as any command
-    if skills is not None and skills.own is not None:
-        shown.append(skills.own)
+    own_skills = skills.own if skills is not None else None
+    if own_skills is not None:
+        shown.append(own_skills)
     # A sandbox of its own per session: its scratch folder starts empty, and a
     # session made later can't swap it out
     if box is not None:
@@ -404,6 +405,7 @@ def make_session(
             raise ValueError("a box of its own has no read-only workspace")
         sandbox = box(workspace, private=private_folders())
         sandbox.shown.extend(shown)
+        sandbox.own_skills = own_skills
     elif spec.sandbox is not None:
         read_only = spec.sandbox == "read-only" or not workspace_writes
         # A project's ZERO.md, read by later sessions, stays read-only
@@ -411,7 +413,7 @@ def make_session(
         protected = (PROJECT_FILE,) if instructions and instructions.project else ()
         sandbox = Sandbox(workspace, read_only=read_only,
                           private=private_folders(), protected=protected,
-                          scratch=scratch, shown=shown)
+                          scratch=scratch, shown=shown, own_skills=own_skills)
     else:
         sandbox = Unsandboxed(workspace)
     # Where one call runs once its ask to leave the sandbox is approved: only

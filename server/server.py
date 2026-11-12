@@ -9,7 +9,9 @@ are protocol/messages.py's.
 
 ZERO's own commands (a child of the server, or in its unit: server/peers.py) get
 the looking messages only, never a send, a stop or a change: who may answer an ask
-is the user's own client.
+is the user's own client. A workflow, a command that calls ZERO, may also send a
+service's workflow messages for its own session (subagent/send: a subagent of
+that session, whose asks go where its other subagents' go).
 
 The server leaves after `server_idle_minutes` with no turn, no message that could start
 one, no job and no client connected; a parked ask waits on disk. A shutdown or
@@ -248,11 +250,13 @@ class Server:
         try:
             request = json.loads(read_line(conn))
             name = request.get("message") if isinstance(request, dict) else None
-            # ZERO's own commands may look, never act
+            # ZERO's own commands may look, never act; a workflow sends for
+            # its own session alone
             looking = (*LOOKING_MESSAGES, *self.runtime.looking_messages)
-            if (name not in looking
-                    and self.peers.is_zero_command(peers.peer_pid(conn))):
-                raise Refused(peers.refused(looking))
+            if name not in looking:
+                pid = peers.peer_pid(conn)
+                if self.peers.is_zero_command(pid):
+                    self.check_workflow(name, request, pid, looking)
             if name == "session/watch":
                 self.watch(conn, request)
                 return
@@ -271,6 +275,17 @@ class Server:
             conn.sendall((json.dumps(reply, ensure_ascii=False) + "\n").encode())
         except OSError:
             pass
+
+    def check_workflow(self, name, request, pid, looking):
+        """Refused unless one of ZERO's own commands sends a workflow's
+        message naming, in `for_session`, the session whose command it is."""
+        workflow = self.runtime.workflow_messages
+        if name not in workflow:
+            raise Refused(peers.refused(looking, workflow))
+        named = request.get("for_session")
+        owner = self.runtime.command_session(peers.unix_session(pid))
+        if owner is None or named != owner:
+            raise Refused(peers.not_its_session(named, owner))
 
     def tree_message(self, name, request):
         """The conversation's tree: the user's messages to begin from, a

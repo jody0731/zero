@@ -51,7 +51,7 @@ from datetime import datetime
 from pathlib import Path
 
 from client import render, session_list
-from client.connection import NotRunning, ProtocolError
+from client.connection import NotRunning, ProtocolError, command_session
 from client.render import duration, jobs_text
 from client.result import CHOICES, Result, still_running_line
 
@@ -64,6 +64,9 @@ NO_COMMAND = {
                     "it has shown; a caller reads a session with session read",
     "session/user_messages": "session rewind ID, with no SEQ, lists them, the "
                              "numbers session rewind and session fork take",
+    "subagent/send": "a workflow's: session send and zero -p send it in one of "
+                     "a session's commands (--for-session, by default "
+                     "$ZERO_SESSION_ID)",
 }
 THINKING_EFFORT_HELP = "the model's thinking effort from the next turn"
 MODES_HELP = "the mode (/mode in zero lists them)"
@@ -202,6 +205,18 @@ def ending(record, started=None, restarts=0):
 # ------------------------------------------------------- send and follow
 
 
+# What a workflow's follow says of a question its subagent waits on
+WORKFLOW_ASK = ("It waits for the user's answer, which ZERO shows them; a "
+                "workflow answers no question.")
+# The flags a workflow's send refuses, and their names in the arguments
+WORKFLOW_REFUSES = (
+    ("--mode", "mode"), ("--model", "model"),
+    ("--thinking-effort", "thinking_effort"), ("--cd", "cd"),
+    ("--when-busy", "when_busy"), ("--choice", "choice"),
+    ("--rounds", "rounds"),
+)
+
+
 def text_of(value, stdin=None):
     """A long text: the argument, or stdin for `-`."""
     if value == "-":
@@ -209,10 +224,11 @@ def text_of(value, stdin=None):
     return value
 
 
-def follow(connection, sid, after, args, out):
+def follow(connection, sid, after, args, out, user_answers=True):
     """Follow a session from `after` until it settles: the answer, the
     result object (`--json`) or every event (`--events`). Exits 0 answered,
-    1 not, 2 when a question waits (printed, with how to answer it)."""
+    1 not, 2 when a question waits (printed, with how to answer it, or, for
+    a workflow, `user_answers` False, who does)."""
     as_json = getattr(args, "json", False)
     events = getattr(args, "events", False)
     result = Result(sid)
@@ -227,8 +243,11 @@ def follow(connection, sid, after, args, out):
             elif not events:
                 if result.ask is not None:
                     out(render.ask_line(result.ask))
-                    out(f"Answer with: zero -p [TEXT] --session {sid}, or "
-                        f"--choice {'|'.join(CHOICES)}")
+                    if user_answers:
+                        out(f"Answer with: zero -p [TEXT] --session {sid}, "
+                            f"or --choice {'|'.join(CHOICES)}")
+                    else:
+                        out(WORKFLOW_ASK)
                 elif result.last is None:
                     out("(nothing ran)")
                 else:
@@ -240,9 +259,39 @@ def follow(connection, sid, after, args, out):
     raise NotRunning("ZERO's watch ended before the session settled")
 
 
+def print_workflow_turn(connection, args, for_session, out=print):
+    """`zero -p` in one of a session's commands, a workflow: `subagent/send`
+    for that session (a new subagent, or more to one with --session), then
+    follow the subagent until it settles. The flags that set a new session's
+    mode, model, folder or thinking, or answer a question, are refused: a
+    subagent takes its session's, and a workflow answers no question."""
+    given = [flag for flag, name in WORKFLOW_REFUSES
+             if getattr(args, name, None) not in (None, False)]
+    if given:
+        print(f"zero: {', '.join(given)} can't go with --for-session: a "
+              "subagent runs in its session's workspace, mode and model, and "
+              "a workflow answers no question.", file=sys.stderr)
+        return 2
+    sid, after = None, 0
+    if args.session is not None:
+        sid = match_session(connection.sessions(), args.session)["id"]
+        records, _ = connection.history(sid, limit=1)
+        after = records[-1]["seq"] if records else 0
+    reply = connection.send_for(text_of(args.p), for_session, session=sid)
+    sid = reply["session"]
+    if getattr(args, "no_wait", False):
+        out(json.dumps(reply) if getattr(args, "json", False) else sid)
+        return 0
+    return follow(connection, sid, after, args, out, user_answers=False)
+
+
 def print_turn(connection, args, workspace, out=print):
     """`zero session send` (and `zero -p`): send, then follow the session
-    until it settles."""
+    until it settles. In one of a session's commands (--for-session, by
+    default $ZERO_SESSION_ID), a workflow's: print_workflow_turn."""
+    for_session = getattr(args, "for_session", None)
+    if for_session:
+        return print_workflow_turn(connection, args, for_session, out)
     sid, after, reply_to = None, 0, None
     if args.session is not None:
         info = match_session(connection.sessions(), args.session)
@@ -301,7 +350,9 @@ def follow_flags(parser):
 
 
 def send_flags(parser):
-    """`session send`'s flags; `zero -p` takes the same."""
+    """`session send`'s flags; `zero -p` takes the same. `--for-session`
+    defaults to the session this process is a command of, as ZERO's
+    environment for its commands names it."""
     parser.add_argument("--session", metavar="ID",
                         help="this session (its id or the start of it), not "
                              "a new one")
@@ -320,6 +371,10 @@ def send_flags(parser):
                              "choices")
     parser.add_argument("--rounds", action="store_true",
                         help="work on it in rounds")
+    parser.add_argument("--for-session", metavar="ID", default=command_session(),
+                        help="a workflow's: a subagent of this session (by "
+                             "default the session this command runs for), "
+                             "or more to one of them with --session")
     follow_flags(parser)
 
 

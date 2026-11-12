@@ -219,11 +219,13 @@ class Runtime(SessionActions):
         self.services = {}
         self.messages = {}
         self.looking_messages = ()
+        self.workflow_messages = ()
         for service in services:
             service.attach(self)
             self.services[service.name] = service
             self.messages.update(service.messages())
             self.looking_messages += tuple(service.looking_messages)
+            self.workflow_messages += tuple(service.workflow_messages)
 
     @property
     def model(self):
@@ -1011,6 +1013,17 @@ class Runtime(SessionActions):
             watchers = [w for ws in self.watchers.values() for w in ws.values()]
         for watcher in watchers:
             watcher.close(reason)
+
+    def command_session(self, unix_session):
+        """The session whose command leads the Unix session `unix_session`,
+        as the service that started the command knows it; None for none."""
+        if unix_session is None:
+            return None
+        for service in self.services.values():
+            found = service.command_session(unix_session)
+            if found is not None:
+                return found
+        return None
 
     def settled(self, sid):
         """None while a turn runs or a queued message would start one; else

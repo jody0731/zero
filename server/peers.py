@@ -15,26 +15,65 @@ in by systemd but stays in the unit. What this leaves:
 a command that starts `zero` in a unit of its own (`systemd-run --user
 --scope zero …`), which the judge sees as it is. Sandboxed commands can't
 reach the socket at all (sandbox/sandbox.py hides /run/user).
+
+A workflow, one of ZERO's own commands that calls ZERO, may also send the
+messages a service names in `workflow_messages`, for the session whose
+command it is: each command leads a Unix session of its own (jobs/ starts it
+so), which every process it starts keeps, so a peer's Unix session names the
+command, and the service that started it names the session.
 """
 
 import os
 import socket
 import struct
 
+from protocol.messages import SESSION_ID_ENV
+
 # Where client/launcher.py names the server's unit to it
 UNIT_ENV = "ZERO_SERVER_UNIT"
 UNSET = object()
 
 
-def refused(looking_messages=()):
+def refused(looking_messages=(), workflow_messages=()):
     """The no one of ZERO's own commands gets; `looking_messages`: the messages that
-    only look, the kernel's and the services'."""
+    only look, the kernel's and the services'; `workflow_messages`: those a
+    command may send for its own session."""
     named = ", ".join(looking_messages)
-    return (
+    text = (
         f"ZERO's own commands can look at sessions over this socket ({named}) "
         "but not send, answer, stop or change anything: that comes from the "
         "user's own client."
     )
+    if workflow_messages:
+        text += (
+            f" A command may send {', '.join(workflow_messages)} for the "
+            "session whose command it is, named in for_session (zero does so "
+            f"where ${SESSION_ID_ENV} is set)."
+        )
+    return text
+
+
+def not_its_session(named, owner):
+    """The no a command gets that names a session it isn't a command of."""
+    if owner is None:
+        return (
+            "this process isn't one of a session's commands that ZERO can "
+            "tell (a command keeps its session's mark while it runs in the "
+            "Unix session ZERO started it in), so it sends nothing for "
+            f"session {named!r}."
+        )
+    return (f"this process is a command of session {owner}, so it sends for "
+            f"that session, not {named!r}.")
+
+
+def unix_session(pid):
+    """The Unix session a process is in (/proc's field 6), or None."""
+    try:
+        text = open(f"/proc/{pid}/stat").read()
+    except (OSError, TypeError):
+        return None
+    fields = text.rpartition(")")[2].split()
+    return int(fields[3]) if len(fields) > 3 else None
 
 
 def peer_pid(conn):

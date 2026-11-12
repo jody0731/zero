@@ -13,7 +13,13 @@ import os
 import socket
 import uuid
 
-from protocol.messages import request as build
+from protocol.messages import SESSION_ID_ENV, request as build
+
+
+def command_session():
+    """The session this process is a command of, as ZERO set it in the
+    environment of every command it runs; None outside one."""
+    return os.environ.get(SESSION_ID_ENV) or None
 
 
 class NotRunning(Exception):
@@ -170,6 +176,16 @@ class Connection:
             request["choice"] = choice
         if rounds:
             request["rounds"] = True
+        return {**self.call(request), "id": msg_id}
+
+    def send_for(self, text, for_session, session=None, title=None):
+        """`subagent/send`, a workflow's message: a new subagent of
+        `for_session` with `text` as its task, or `text` to `session`, one
+        of its subagents."""
+        msg_id = str(uuid.uuid4())
+        request = build("subagent/send", id=msg_id, text=text,
+                        for_session=for_session, session=session, title=title,
+                        source=self.source)
         return {**self.call(request), "id": msg_id}
 
     def continue_session(self, session):

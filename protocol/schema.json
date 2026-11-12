@@ -63,6 +63,9 @@
       "$ref": "#/$defs/session.search"
     },
     {
+      "$ref": "#/$defs/subagent.send"
+    },
+    {
       "$ref": "#/$defs/job.list"
     },
     {
@@ -1234,6 +1237,81 @@
         },
         "later_count": {
           "type": "integer"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "subagent.send": {
+      "type": "object",
+      "description": "A workflow's message: a new subagent of for_session, text its task, or text to one of its subagents (session). A subagent runs in its session's workspace, mode and model; its asks go where that session's other subagents' go, and its answer to whoever follows it. The one message besides those that only look that one of ZERO's own commands may send, and only for the session whose command it is.",
+      "properties": {
+        "message": {
+          "const": "subagent/send"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "text": {
+          "type": "string"
+        },
+        "for_session": {
+          "type": "string",
+          "description": "the session the workflow works for: its commands find its id in $ZERO_SESSION_ID"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "a session's id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "one of for_session's subagents, at any level; none: a new subagent"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new subagent's title; none: its task's first words"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "text",
+        "for_session",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "subagent.send.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "started": {
+          "type": "boolean",
+          "description": "a new subagent was started"
         }
       },
       "required": [

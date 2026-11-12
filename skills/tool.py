@@ -11,7 +11,9 @@ pruning, as a session goes on following them.
 
 from html import escape
 
+from core.asking import TO_APPROVER
 from core.tools import ERROR, Result, tool
+from skills import writer
 from skills.found import SkillProblem, files_of, instructions_of
 
 DESCRIPTION = (
@@ -83,4 +85,125 @@ def read_skill(name, skills=None):
                   fields={"name": skill.name, "folder": str(skill.folder)})
 
 
-TOOLS = (read_skill,)
+# write_skill: what a call crosses, which asks in every mode, as a change to
+# ZERO's own files does (memory/): a skill written reaches every later
+# session, so a planted one would too, and someone answers for each
+WRITE_CROSSING = (
+    "It changes what every later session reads: your own skills are listed "
+    "in each one's system message."
+)
+# How much of a skill an ask shows; the judge reads it whole
+SHOWN_CHARS = 2000
+WRITTEN = (
+    "Wrote the skill {name} in {folder}{over}. Every session started from now "
+    "lists it in its system message, under your own skills folder, with this "
+    "description; read_skill reads it now. This session's system message "
+    "stays as it was written. {files}"
+)
+OVER = ", over the one there"
+NOT_WRITTEN = "Not written: {why}."
+TAKEN = ("a skill named {name} is in {whose}, {folder}; a name another skills "
+         "folder uses is taken")
+
+
+def describe_write(limits, context=None):
+    """write_skill's description, naming ZERO's own skills folder where the
+    session has one."""
+    found = (context or {}).get("skills")
+    own = found.own if found is not None and found.own is not None else None
+    where = f"your own skills folder, {own}" if own else "your own skills folder"
+    return (
+        f"Write a skill into {where}: a folder named `name` holding its "
+        "SKILL.md, made from `description` (what the skill does and when it "
+        "fits; the line the skills list shows) and `instructions` (its body), "
+        "by the Agent Skills standard, and the files beside it (`files`: a "
+        "path inside the folder for each, its text the value; null removes "
+        "one; files a write doesn't name are kept, so a script, a template "
+        "or a reference goes with the instructions that name it). A skill of "
+        "that name there is written over; a name another skills folder uses "
+        "is taken. Every session that starts from now lists it, and "
+        "read_skill reads it at once; this session's system message stays as "
+        f"it was written. Each write goes first to {TO_APPROVER}."
+    )
+
+
+def clipped(text, whole=False):
+    text = str(text or "")
+    if whole or len(text) <= SHOWN_CHARS:
+        return text
+    return f"{text[:SHOWN_CHARS]}… [{len(text) - SHOWN_CHARS:,} more characters]"
+
+
+def write_summary(args, whole=False):
+    """A write as an ask shows it and the judge reads it (`whole`)."""
+    files = args.get("files") if isinstance(args.get("files"), dict) else {}
+    lines = [f"write_skill {args.get('name', '')}: "
+             f"{' '.join(str(args.get('description', '')).split())}",
+             clipped(args.get("instructions"), whole)]
+    for path, text in files.items():
+        if text is None:
+            lines.append(f"remove {path}")
+        else:
+            lines.append(f"{path}:\n{clipped(text, whole)}")
+    return "\n".join(lines)
+
+
+def write_crossing(args):
+    return {"rule": "skill", "fact": WRITE_CROSSING, "why": args.get("reason"),
+            "every_mode": True}
+
+
+def can_write(context):
+    found = context.get("skills")
+    return found is not None and found.own is not None
+
+
+@tool(
+    describe_write,
+    optional=("files", "compatibility", "reason"),
+    summary=write_summary,
+    ready=can_write,
+    crossing=write_crossing,
+    fields={"name": ("string", "The skill's name"),
+            "folder": ("string", "The skill's folder")},
+    name=("string", "The skill's name and its folder's: lowercase letters, "
+                    "digits and single hyphens, 64 at most"),
+    description=("string", "What the skill does and when it fits, 1,024 "
+                           "characters at most"),
+    instructions=("string", "The skill's instructions, its SKILL.md's body"),
+    files=({"type": "object",
+            "additionalProperties": {"type": ["string", "null"]}},
+           "Files beside SKILL.md: a path inside the skill's folder for each, "
+           "its text the value; null removes one"),
+    compatibility=("string", "What the skill needs (a program, a network), "
+                             "as the standard's compatibility field says it"),
+    reason=("string", "Why the skill"),
+)
+def write_skill(name, description, instructions, files=None, compatibility=None,
+                reason="", skills=None):
+    """`skills`: the session's SkillFolders; ZERO's own folder is where a
+    skill is written (writer.py)."""
+    if skills is None or skills.own is None:
+        return Result(ERROR + "this session has no skills folder of its own.",
+                      failed=True)
+    wanted = str(name or "").strip()
+    other = next((s for s in skills.found().skills
+                  if s.name == wanted and s.found_in != "zero"), None)
+    if other is not None:
+        why = TAKEN.format(name=wanted, whose=FROM[other.found_in],
+                           folder=other.folder)
+        return Result(NOT_WRITTEN.format(why=why), failed=True)
+    try:
+        folder, replaced = writer.write(skills.own, wanted, description,
+                                        instructions, files, compatibility)
+    except writer.NotWritten as why:
+        return Result(NOT_WRITTEN.format(why=why), failed=True)
+    except OSError as error:
+        return Result(NOT_WRITTEN.format(why=error), failed=True)
+    text = WRITTEN.format(name=wanted, folder=folder,
+                          over=OVER if replaced else "",
+                          files=files_line(folder))
+    return Result(text, fields={"name": wanted, "folder": str(folder)})
+
+
+TOOLS = (read_skill, write_skill)

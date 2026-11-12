@@ -102,6 +102,11 @@ HIDDEN_HOME = (
     "is hidden, so its files read as missing there; this system message "
     "holds what they held"
 )
+# Beside HIDDEN_HOME, where ZERO's own skills folder is shown again
+SKILLS_SHOWN = (
+    "; its skills folder ({skills}) is shown again, read-only, so a skill "
+    "there is read and its scripts run as anywhere else"
+)
 # What the sandbox's walls look like in a command's output
 WALL_MARKS = (
     "Read-only file system",
@@ -180,7 +185,7 @@ class Sandbox:
     sandboxed = True
 
     def __init__(self, workspace, home=None, read_only=False, private=(),
-                 protected=(), scratch=None, shown=()):
+                 protected=(), scratch=None, shown=(), own_skills=None):
         self.workspace = Path(workspace).resolve()
         # The harness owner's own folders (ZERO's home with its keys and
         # history; private_folders): hidden from every command
@@ -189,6 +194,9 @@ class Sandbox:
         # path: the session's results folder (a callable each, as a new
         # session's log is named late)
         self.shown = list(shown)
+        # ZERO's own skills folder, among those shown, which the environment
+        # line names: its skills' scripts run in here (None: none shown)
+        self.own_skills = own_skills
         # readOnly, or a workspace of /: mounted read-only like the rest
         self.read_only = read_only or self.workspace == Path("/")
         self.home = Path(home or Path.home())
@@ -324,8 +332,11 @@ class Sandbox:
     def environment_line(self):
         """What the session's environment says of this box (the prompt)."""
         tmp = self.private_tmp()
-        hidden = ([HIDDEN_HOME.format(home=self.private[0])] if self.private
-                  else [])
+        hidden = []
+        if self.private:
+            shown = (SKILLS_SHOWN.format(skills=self.own_skills)
+                     if self.own_skills is not None else "")
+            hidden = [HIDDEN_HOME.format(home=self.private[0]) + shown]
         seen = "; ".join([OWN_PROCESSES, *hidden])
         if self.read_only:
             return (

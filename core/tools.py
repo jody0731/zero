@@ -53,7 +53,7 @@ class Result(str):
         return str(self)
 
 
-def tool(description, optional=(), summary=None, ready=None,
+def tool(description, /, optional=(), summary=None, ready=None,
          needs_permission=None, validate=None, changing=False, starts_job=None,
          crossing=None, grant=None, written_files=None, means=None,
          fields=None, result_summary=None, reads_records=False,

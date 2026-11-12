@@ -29,13 +29,19 @@ CREATE TABLE IF NOT EXISTS subagents (
     estimate_dollars REAL NOT NULL,
     -- When its parent was told its use passed the estimate; NULL until then
     past_estimate_at REAL,
-    started_at REAL NOT NULL
+    started_at REAL NOT NULL,
+    -- workflow: started by one of its parent's commands (subagent/send),
+    -- which reads its answers, with no estimate; NULL: by start_subagent
+    started_through TEXT
 );
 CREATE INDEX IF NOT EXISTS subagents_parent ON subagents (parent);
 """
 # Columns added since a database was made (0.6.8: the estimate in weighted
-# tokens, beside its dollars)
-ADDED_COLUMNS = {"subagents": {"estimate_weighted_tokens": "REAL"}}
+# tokens, beside its dollars; 0.7.4.4: who started it)
+ADDED_COLUMNS = {"subagents": {"estimate_weighted_tokens": "REAL",
+                               "started_through": "TEXT"}}
+# A subagent a workflow started (subagent/send)
+WORKFLOW = "workflow"
 
 
 class SubagentStore:
@@ -51,11 +57,12 @@ class SubagentStore:
         db.execute(
             "INSERT INTO subagents (session, parent, start_from, depth, "
             "started_from_seq, estimate_minutes, estimate_weighted_tokens, "
-            "estimate_dollars, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "estimate_dollars, started_at, started_through) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (row["session"], row["parent"], row["start_from"], row["depth"],
              row["started_from_seq"], row["estimate_minutes"],
              row["estimate_weighted_tokens"], row["estimate_dollars"],
-             time.time()),
+             time.time(), row.get("started_through")),
         )
         self.store.queue_notice(db, *notice)
 

@@ -39,6 +39,10 @@ component. Which messages only look, so that ZERO's own commands may send
 them, is said by whoever serves them (server/server.py, a part's `looking`).
 """
 
+# The variable every command ZERO runs finds its session's id in: a
+# workflow's zero names that session in `for_session` (subagent/send)
+SESSION_ID_ENV = "ZERO_SESSION_ID"
+
 STRING = {"type": "string"}
 INTEGER = {"type": "integer"}
 NUMBER = {"type": "number"}
@@ -332,6 +336,29 @@ MESSAGES = {
                            "or, when no record does, any of them"},
             "around": INTEGER, "earlier_count": INTEGER, "later_count": INTEGER,
         },
+    ),
+    "subagent/send": message(
+        "A workflow's message: a new subagent of for_session, text its task, "
+        "or text to one of its subagents (session). A subagent runs in its "
+        "session's workspace, mode and model; its asks go where that "
+        "session's other subagents' go, and its answer to whoever follows "
+        "it. The one message besides those that only look that one of "
+        "ZERO's own commands may send, and only for the session whose "
+        "command it is.",
+        {
+            "id": MESSAGE_ID, "text": STRING,
+            "for_session": {**SESSION, "description": "the session the "
+                            "workflow works for: its commands find its id in "
+                            f"${SESSION_ID_ENV}"},
+            "session": {**maybe(SESSION), "description": "one of for_session's "
+                        "subagents, at any level; none: a new subagent"},
+            "title": {**maybe(STRING), "description": "a new subagent's title; "
+                      "none: its task's first words"},
+            "source": SOURCE,
+        },
+        required=("id", "text", "for_session", "source"),
+        reply={"session": SESSION, "started": {**BOOLEAN, "description":
+                                               "a new subagent was started"}},
     ),
     "job/list": message(
         "A session's background jobs, ended ones too; with none, every "

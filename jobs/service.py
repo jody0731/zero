@@ -22,6 +22,11 @@ from server.services import Service, Refused
 from jobs import process
 from jobs import tool as jobtools
 from jobs.store import ADDED_COLUMNS, RENAMED_COLUMNS, SCHEMA, JobStore
+from protocol.messages import SESSION_ID_ENV
+
+# The sessions' commands kept for command_session before those whose leader
+# has gone are let go (design rule 12: nothing grows without a cap)
+KEPT_COMMANDS = 1000
 
 
 def pid_start(pid):
@@ -60,7 +65,18 @@ class SessionJobs:
         self.log_of = log_of
 
     def spawn(self, argv, **options):
-        return process.SPAWNER.popen(argv, **options)
+        """Start one of the session's commands, foreground or a job: its
+        environment carries the session's id (SESSION_ID_ENV), which a
+        workflow's zero names; one that leads a Unix session of its own is
+        kept as the session's command, so the server can tell whose a peer is
+        (command_session)."""
+        env = dict(options.get("env") or os.environ)
+        env[SESSION_ID_ENV] = self.sid
+        options["env"] = env
+        proc = process.SPAWNER.popen(argv, **options)
+        if options.get("start_new_session"):
+            self.service.command_started(proc.pid, self.sid)
+        return proc
 
     @property
     def limit(self):
@@ -125,6 +141,11 @@ class JobsService(Service):
         # Jobs running in this process: id → process.Job
         self.live = {}
         self.lock = threading.Lock()
+        # Every command a session started that leads a Unix session of its
+        # own (each command does, jobs or not): its pid → (its start, the
+        # session), for command_session
+        self.commands = {}
+        self.commands_lock = threading.Lock()
         self.stopping = threading.Event()
         self.ticker = None
 
@@ -138,6 +159,33 @@ class JobsService(Service):
 
     def messages(self):
         return {"job/list": self.list_message, "job/stop": self.stop_message}
+
+    def command_started(self, pid, sid):
+        """Keep a session's command, which leads Unix session `pid`; past
+        KEPT_COMMANDS, those whose leader has gone are let go."""
+        started = pid_start(pid)
+        with self.commands_lock:
+            kept = list(self.commands) if len(self.commands) >= KEPT_COMMANDS else []
+        gone = [old for old in kept if pid_start(old) is None]
+        with self.commands_lock:
+            for old in gone:
+                self.commands.pop(old, None)
+            self.commands[pid] = (started, sid)
+
+    def command_session(self, unix_session):
+        """The session whose command leads `unix_session`, or None. A leader
+        gone still names it: its pid stays taken while a process of its Unix
+        session lives, and the asking peer is one. A leader whose pid now
+        has another start is another process."""
+        with self.commands_lock:
+            found = self.commands.get(unix_session)
+        if found is None:
+            return None
+        started, sid = found
+        now = pid_start(unix_session)
+        if now is not None and now != started:
+            return None
+        return sid
 
     def list_message(self, request):
         """A session's jobs, ended ones too; or every running

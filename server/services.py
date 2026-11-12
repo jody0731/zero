@@ -31,6 +31,10 @@ class Service:
     # Its messages that only look, which ZERO's own commands may send too
     # (server/peers.py)
     looking_messages = ()
+    # Its messages a workflow may send: one of ZERO's own commands, for the
+    # session whose command it is, named in the message's `for_session`
+    # (server/server.py checks the name against command_session)
+    workflow_messages = ()
     # Fields of session/send it reads (the protocol declares them), handed on
     # to the user record of the turn the message opens
     message_fields = ()
@@ -60,6 +64,12 @@ class Service:
     def turn_ended(self, sid, outcome):
         """A turn of the session ended (its turn_end written) or parked on
         an ask (outcome "waiting"), its row settled."""
+
+    def command_session(self, unix_session):
+        """The session whose command leads the Unix session `unix_session`
+        (a process's session id, as /proc gives it), if this service started
+        that command; else None."""
+        return None
 
     def refuse_delete(self, sid):
         """Why the session can't be deleted now, or None."""

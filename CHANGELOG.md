@@ -3,6 +3,23 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.4.4
+
+ZERO writes skills of its own, and a script it writes can call ZERO.
+
+- **Skills ZERO writes.** `write_skill` keeps a skill (its `SKILL.md`, by the Agent Skills
+  standard, and the scripts and files beside it) in `~/.zero/skills`, whole or not at all; every
+  session that starts after lists it, and the session that wrote it reads it at once. Each write
+  asks first, in every mode, as a change to ZERO's own files does. A name another skills folder
+  uses is left to that folder.
+- **Workflows.** `zero -p TEXT` run by one of a session's commands starts a subagent of that
+  session and prints its answer: a script can run many at once. Each command carries its
+  session's id in `ZERO_SESSION_ID`, and ZERO checks the command is that session's before it
+  starts anything. The subagent runs in its session's workspace, mode and model; its asks go
+  where that session's other subagents' go, and its answers to the script.
+- **The sandbox's line** says ZERO's own skills folder is shown inside it, read-only, so a skill's
+  scripts there run in the sandbox.
+
 ## 0.7.4.3
 
 ZERO keeps working when its MCP servers bring more tools than fit.

@@ -69,6 +69,19 @@ PAST_ESTIMATE = (
 )
 # A message one session sends another
 MESSAGE = "Session {id} (\"{title}\") sends:\n{text}"
+# A subagent's first message when a workflow started it (subagent/send): the
+# task its parent's command sent, as the parent's words; the workflow reads
+# the answer, so nothing asks it to report back
+WORKFLOW_TASK = (
+    "You are a subagent of session {parent} (\"{title}\"), started by a "
+    "workflow: one of that session's commands, running zero.\n\nYour task:\n"
+    "{task}\n\nThe workflow reads the answer your turn ends with; it doesn't "
+    "see your calls, their output or your reasoning."
+)
+# A workflow's later message to one of its session's subagents
+WORKFLOW_MESSAGE = "The workflow of session {parent} (\"{title}\") sends:\n{text}"
+# How a command runs ZERO where the session's server says nothing
+ZERO_COMMAND = "zero"
 
 
 def how_text(outcome, detail=None):
@@ -114,8 +127,12 @@ def tree_line(entry, indent=True):
     """One session of the tree, as `subagents` lists it, indented by its
     level."""
     indent = "  " * entry["depth"] if indent else ""
-    who = ("the user's" if entry["started_by"] == "user"
-           else f"a subagent, level {entry['depth']}")
+    if entry["started_by"] == "user":
+        who = "the user's"
+    elif entry.get("by_workflow"):
+        who = f"a subagent a workflow started, level {entry['depth']}"
+    else:
+        who = f"a subagent, level {entry['depth']}"
     this = " (this session)" if entry["this"] else ""
     line = (f"{indent}- {entry['id']}{this} \"{entry['title']}\": {who}; "
             f"{state_text(entry)}; used {describe(entry['use'])}")
@@ -131,6 +148,7 @@ def describe_start(limits, context=None):
     offered only while above 0."""
     found = (context or {}).get("session_subagents")
     depth = found.max_depth() if found is not None else DEFAULT_DEPTH
+    zero = found.zero_command() if found is not None else ZERO_COMMAND
     if depth <= 1:
         deepest = "A subagent can't start its own."
     elif depth == 2:
@@ -165,7 +183,12 @@ def describe_start(limits, context=None):
         "everything it reads is new input. `minutes` and `weighted_tokens` "
         "are your estimate of what it needs, its own subagents "
         "included: one notice comes if its use passes them, and nothing stops "
-        f"at it. {deepest}"
+        "at it. A command this session runs can start one too, a workflow: "
+        f"`{zero} -p TEXT` there starts one with TEXT as its task alone and "
+        "no estimate, and prints its answer (`--json`: with its session's id; "
+        "`--session ID`: more to that one); its answers go to the command, "
+        "its asks where these subagents' go. ZERO's socket is hidden in the "
+        f"sandbox, so that command runs outside it. {deepest}"
     )
 
 

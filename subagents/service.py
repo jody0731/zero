@@ -36,10 +36,11 @@ import re
 import time
 import uuid
 
+import paths
 from core import history
 from server.services import Refused, Service
 from subagents import tool as subtools
-from subagents.store import ADDED_COLUMNS, SCHEMA, SubagentStore
+from subagents.store import ADDED_COLUMNS, SCHEMA, WORKFLOW, SubagentStore
 from usage.spend import (
     describe, dollars_of, log_use, passed_text, past_estimate,
 )
@@ -48,6 +49,9 @@ from usage.spend import (
 SENT = "Sent to session"
 # Markdown's marks, which a report sent again as an answer may change
 MARKS = re.compile(r"[`*_#>]")
+# A workflow's subagent's title when its message names none: its task's
+# first words, as many characters at most
+TITLE_CHARS = 60
 
 
 class SessionSubagents:
@@ -108,6 +112,9 @@ class SessionSubagents:
     def stop(self, id):
         return self.service.stop(self.sid, id)
 
+    def zero_command(self):
+        return self.service.zero_command()
+
     def check_estimates(self):
         self.service.check_estimates(self.sid)
 
@@ -117,9 +124,21 @@ class SubagentsService(Service):
     schema = SCHEMA
     added_columns = ADDED_COLUMNS
     tables = ("subagents",)
+    # A workflow, one of a session's commands calling ZERO, starts and
+    # messages that session's subagents (server/server.py checks whose
+    # command it is)
+    workflow_messages = ("subagent/send",)
 
-    def __init__(self, clock=time.time):
+    def __init__(self, clock=time.time, zero_command=None):
+        """`zero_command`: how a command runs this ZERO, as start_subagent
+        tells it; None: found at first use (paths.zero_command)."""
         self.clock = clock
+        self._zero_command = zero_command
+
+    def zero_command(self):
+        if self._zero_command is None:
+            self._zero_command = paths.zero_command()
+        return self._zero_command
 
     def attach(self, runtime):
         super().attach(runtime)
@@ -136,6 +155,9 @@ class SubagentsService(Service):
             use.subagents = lambda: self.children_use(sid)
         session.tool_context["tree_user_messages"] = (
             lambda: self.tree_user_messages(sid))
+
+    def messages(self):
+        return {"subagent/send": self.workflow_send}
 
     def max_depth(self):
         """How deep subagents go, from the server's settings as they stand
@@ -204,8 +226,7 @@ class SubagentsService(Service):
                 "id": row["session"], "title": info["title"],
                 "state": self.state(row["session"])[0],
                 "use": self.subtree_use(row["session"]),
-                "estimate": (row["estimate_minutes"],
-                             row["estimate_weighted_tokens"]),
+                "estimate": estimate_of(row),
             })
         return found
 
@@ -237,10 +258,10 @@ class SubagentsService(Service):
             "id": sid, "title": info["title"], "this": sid == this,
             "depth": row["depth"] if row else 0,
             "started_by": "zero" if row else "user",
+            "by_workflow": by_workflow(row),
             "state": state, "outcome": outcome,
             "use": self.subtree_use(sid),
-            "estimate": ((row["estimate_minutes"],
-                          row["estimate_weighted_tokens"]) if row else None),
+            "estimate": estimate_of(row),
         }
 
     def tree(self, sid):
@@ -283,28 +304,89 @@ class SubagentsService(Service):
         the session's price, the user's."""
         parent = self.runtime.store.session(sid)
         text = subtools.TASK.format(parent=sid, title=parent["title"], task=task)
-        started_from_seq = session.log.last_seq
+        row = {
+            "parent": sid, "start_from": start_from, "depth": depth,
+            "started_from_seq": session.log.last_seq,
+            "estimate_minutes": minutes,
+            "estimate_weighted_tokens": weighted_tokens,
+            "estimate_dollars": dollars_of(
+                weighted_tokens, session.settings.get("price")),
+        }
+        return self.made(sid, title, start_from, row, text, "zero")
+
+    def made(self, sid, title, start_from, row, text, source):
+        """A subagent's session made under `sid` with `row` (its subagents
+        row, less the session) and its task's notice `text`, in one
+        transaction; (its id, None), or (None, why it wasn't started)."""
 
         def rows_beside(db, child):
-            # Its row and task in the transaction that makes its session
-            self.store.add(db, {
-                "session": child, "parent": sid, "start_from": start_from,
-                "depth": depth, "started_from_seq": started_from_seq,
-                "estimate_minutes": minutes,
-                "estimate_weighted_tokens": weighted_tokens,
-                "estimate_dollars": dollars_of(
-                    weighted_tokens, session.settings.get("price")),
-            }, (f"subagent-task:{child}", child, subtools.ACROSS, {"text": text}))
+            self.store.add(db, {**row, "session": child},
+                           (f"subagent-task:{child}", child, subtools.ACROSS,
+                            {"text": text}))
 
         try:
             if start_from == "fork":
-                child = self.runtime.fork_finished(sid, title, "zero", rows_beside)
+                child = self.runtime.fork_finished(sid, title, source,
+                                                   rows_beside)
             else:
-                child = self.runtime.new_child(sid, title, "zero", rows_beside)
+                child = self.runtime.new_child(sid, title, source, rows_beside)
         except Refused as error:
             return None, f"Not started: {error}."
         self.runtime.wake()
         return child, None
+
+    def workflow_send(self, request):
+        """subagent/send: a workflow's message for the session it works for
+        (`for_session`): a new subagent of it, `text` its task (a handoff,
+        no estimate: the workflow reads its answers), or `text` to one of
+        its subagents (`session`), as a notice. The kernel has checked that
+        a command sending it is that session's."""
+        names = ("id", "text", "for_session", "source")
+        for name in names:
+            if not isinstance(request.get(name), str) or not request[name]:
+                raise Refused(f"subagent/send needs {name}, a string")
+        for name in ("session", "title"):
+            value = request.get(name)
+            if value is not None and not isinstance(value, str):
+                raise Refused(f"subagent/send's {name} must be a string")
+        sid, text = request["for_session"], request["text"].strip()
+        info = self.runtime.store.session(sid)
+        if info is None:
+            raise Refused(f"no session {sid!r}")
+        if not text:
+            raise Refused("subagent/send's text is empty")
+        to = request.get("session")
+        if to is not None:
+            if to not in [row["session"] for row in self.below(sid)]:
+                raise Refused(f"{to} isn't a subagent below session {sid}")
+            payload = {"text": subtools.WORKFLOW_MESSAGE.format(
+                parent=sid, title=info["title"], text=text)}
+            self.store.notice(f"workflow:{request['id']}", to, subtools.ACROSS,
+                              payload)
+            self.runtime.wake()
+            return {"ok": True, "session": to, "started": False}
+        deepest, depth = self.max_depth(), self.depth(sid) + 1
+        if deepest <= 0:
+            raise Refused("subagents are off (Subagents depth is 0 in ZERO's "
+                          "settings)")
+        if depth > deepest:
+            levels = "level" if deepest == 1 else "levels"
+            raise Refused(f"session {sid} is at level {depth - 1}, and "
+                          f"subagents go {deepest} {levels} below a session "
+                          "the user started")
+        title = " ".join((request.get("title") or "").split()) or first_words(text)
+        task = subtools.WORKFLOW_TASK.format(parent=sid, title=info["title"],
+                                             task=text)
+        row = {
+            "parent": sid, "start_from": "handoff", "depth": depth,
+            "started_from_seq": self.runtime.log(sid).last_seq,
+            "estimate_minutes": 0, "estimate_weighted_tokens": None,
+            "estimate_dollars": 0, "started_through": WORKFLOW,
+        }
+        child, why = self.made(sid, title, "handoff", row, task, WORKFLOW)
+        if child is None:
+            raise Refused(why)
+        return {"ok": True, "session": child, "started": True}
 
     def send(self, sid, to, text):
         """A message to any other session, by its id, as a notice. A
@@ -349,6 +431,10 @@ class SubagentsService(Service):
         row = self.store.subagent(sid)
         if row is None or self.runtime.store.session(row["parent"]) is None:
             return
+        # A workflow reads its subagent's answers and how its turns ended;
+        # only a question waiting for the user goes up
+        if by_workflow(row) and outcome != "waiting":
+            return
         records = self.runtime.log(sid).branch()
         info = self.runtime.store.session(sid)
         found = {**row, "title": info["title"]}
@@ -392,7 +478,7 @@ class SubagentsService(Service):
             row = self.store.subagent(sid)
             if row is None or self.runtime.store.session(row["parent"]) is None:
                 return
-            if row["past_estimate_at"] is None:
+            if row["past_estimate_at"] is None and estimate_of(row):
                 use = self.subtree_use(sid)
                 if past(use, row):
                     info = self.runtime.store.session(sid)
@@ -425,6 +511,28 @@ class SubagentsService(Service):
             return ("a subagent under this session is at work; stop it, or "
                     "delete the session once it is at rest")
         return None
+
+
+def by_workflow(row):
+    """Whether a subagent's row is one a workflow started."""
+    return bool(row) and row.get("started_through") == WORKFLOW
+
+
+def estimate_of(row):
+    """A subagent's estimate, (minutes, weighted tokens), or None: a session
+    the user started, or a subagent a workflow started, has none."""
+    if not row or by_workflow(row):
+        return None
+    return row["estimate_minutes"], row["estimate_weighted_tokens"]
+
+
+def first_words(text, chars=TITLE_CHARS):
+    """A title from a task: its first line, cut after a word."""
+    line = " ".join(text.strip().splitlines()[0].split()) if text.strip() else ""
+    if len(line) <= chars:
+        return line
+    kept = line[:chars - 1].rsplit(" ", 1)[0] or line[:chars - 1]
+    return kept.rstrip(" ,;:") + "…"
 
 
 def last_end(records):

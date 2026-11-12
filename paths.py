@@ -17,14 +17,24 @@ Also the version this copy of ZERO is: its CHANGELOG.md, in ZERO's own
 folder beside this file, has a section for each release, the newest at its
 top.
 
+And the one way a file in the home is written (design rule 10): whole or not
+at all (`write_whole`), and a change read, made and written back by one writer
+at a time across ZERO's processes (`changing`). Each file ZERO reads back
+states its format (`FILE_FORMAT_KEY`; the database's user_version, a log's
+first record), and its reader takes what it knows of a newer one and says so
+(`newer_note`).
+
 Shared by the server and its clients, so neither imports the other. Read when
 called, so a test's ZERO_HOME counts; nothing here names a user or a
 machine.
 """
 
+import fcntl
 import hashlib
 import os
 import re
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 NAME = "zero"
@@ -37,6 +47,106 @@ UNIT = f"{NAME}-server"
 
 # A CHANGELOG section's heading: the version it is for
 CHANGELOG_SECTION = re.compile(r"(?m)^## (\S+)")
+# The line of a TOML file of ZERO's (and the key of a JSON one) that states
+# the file's format
+FILE_FORMAT_KEY = "file_format"
+
+
+def process_umask():
+    """The process's umask, read without setting it (Linux's status file);
+    else set and set back, once, as the module loads, before any thread."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("Umask:"):
+                return int(line.split()[1], 8)
+    except (OSError, ValueError):
+        pass
+    mask = os.umask(0o077)
+    os.umask(mask)
+    return mask
+
+
+# What a new file's mode loses, when its writer gives none
+UMASK = process_umask()
+
+
+def write_whole(path, data, mode=None):
+    """Write a file whole or not at all: a draft beside it, synced, moved over
+    it in one step, its folder synced; a reader sees the old file or the new,
+    and a crash leaves the old. `data`: text, bytes, or pieces of bytes. The
+    file keeps its mode; a new one takes `mode`, else the umask's. A link is
+    written through: the file it points to is replaced, the link kept (a
+    dotfiles repo's, or a dev home's link to the main home's keys)."""
+    path = Path(os.path.realpath(path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        kept = os.stat(path).st_mode & 0o7777
+    except FileNotFoundError:
+        kept = mode if mode is not None else 0o666 & ~UMASK
+    handle, draft = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".draft",
+                                     dir=path.parent)
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            if isinstance(data, str):
+                stream.write(data.encode("utf-8"))
+            elif isinstance(data, (bytes, bytearray)):
+                stream.write(data)
+            else:
+                for piece in data:
+                    stream.write(piece)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(draft, kept)
+        os.replace(draft, path)
+    except BaseException:
+        try:
+            os.unlink(draft)
+        except FileNotFoundError:
+            pass
+        raise
+    sync_folder(path.parent)
+
+
+def sync_folder(folder):
+    """Sync a folder, so a file moved into it lasts a power cut."""
+    try:
+        handle = os.open(folder, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(handle)
+    except OSError:
+        pass
+    finally:
+        os.close(handle)
+
+
+@contextmanager
+def changing(path):
+    """Hold a file of ZERO's while it is read, changed and written back: one
+    writer at a time, across ZERO's processes (a lock on its folder), so two
+    changes made at once both land. A link's file is held where it is."""
+    folder = Path(os.path.realpath(path)).parent
+    folder.mkdir(parents=True, exist_ok=True)
+    handle = os.open(folder, os.O_RDONLY)
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(handle)
+
+
+def newer_note(where, found, known):
+    """What a reader says of a file a newer ZERO wrote."""
+    return (f"{where} was written by a newer ZERO (its format {found}; this one "
+            f"knows {known}): what this ZERO knows of it is read, the rest left "
+            "as it is")
+
+
+def unknown_note(where, names):
+    """What a reader says of lines it doesn't know."""
+    listed = ", ".join(f"`{name}`" for name in sorted(names))
+    return f"{where}: {listed} not known to this ZERO, left as it is"
 
 
 def changelog_version(changelog=None):
@@ -93,8 +203,10 @@ def permissions_file():
 
 def model_features_file():
     """What each model was measured to honour of its API's features
-    (model/features.py): ZERO's own record, not the user's to edit."""
-    return Paths().state / "model_features.json"
+    (model/features.py): ZERO's own record, not the user's to edit. Named
+    from the home alone: finding the socket's folder can fail, and has
+    nothing to do with it."""
+    return home() / "state" / "model_features.json"
 
 
 def config_file():

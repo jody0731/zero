@@ -107,18 +107,31 @@ class SettingsView(Scrolled, Screen):
 
     def fetch(self):
         """ZERO's settings and their values, from the server, and what the
-        session in view runs with."""
-        try:
-            listed, self.error = self.zero.connection.settings()
-        except ERRORS as error:
-            self.notify(str(error), severity="error")
-            listed = []
-        try:
-            self.now = self.zero.runs_with()
-        except ERRORS as error:
-            # The session's rows show the defaults' values meanwhile
-            self.notify(str(error), severity="error")
-            self.now = {}
+        session in view runs with, asked on the requests thread; the rows
+        are drawn again once they come."""
+
+        def work():
+            found = {}
+            try:
+                found["listed"], found["error"] = self.zero.connection.settings()
+            except ERRORS as error:
+                found["listed"], found["failed"] = [], [str(error)]
+            try:
+                found["now"] = self.zero.runs_with()
+            except ERRORS as error:
+                # The session's rows show the defaults' values meanwhile
+                found["now"] = {}
+                found.setdefault("failed", []).append(str(error))
+            return found
+
+        self.zero.request(work, then=self.fetched)
+
+    def fetched(self, found):
+        for said in found.get("failed", ()):
+            self.notify(said, severity="error")
+        listed = found["listed"]
+        self.error = found.get("error", self.error)
+        self.now = found["now"]
         shown = []
         for row in listed:
             fields = {k: v for k, v in row.items() if k != "value"}
@@ -140,6 +153,10 @@ class SettingsView(Scrolled, Screen):
             key=lambda s: groups.index(s.group),
         )
         self.rows = [*rows, *links]
+        # A view closed before the answer came has nothing to draw into
+        if self.query("#rows"):
+            self.draw()
+            self.measure()
 
     def value(self, row):
         if isinstance(row, SessionRow):
@@ -409,10 +426,15 @@ class SettingsView(Scrolled, Screen):
         default_model = default_model or self.zero.default_model()
         none = controller.setting_text(setting, None, default_model)
         other = "another model…"
-        named = controller.model_choices(
-            self.zero.defaults.get("model"), self.zero.lists.sessions,
-            self.zero.served_models(),
-        )
+
+        def offer(served):
+            named = controller.model_choices(
+                self.zero.defaults.get("model"), self.zero.lists.sessions, served,
+            )
+            choices = [*([none] if unset else []), *named, other]
+            current = now or (none if unset else None)
+            self.app.push_screen(ChoiceView(setting.label, choices, current),
+                                 chosen)
 
         def chosen(value):
             if value == other:
@@ -423,9 +445,8 @@ class SettingsView(Scrolled, Screen):
             elif value is not None:
                 done(None if unset and value == none else value)
 
-        choices = [*([none] if unset else []), *named, other]
-        current = now or (none if unset else None)
-        self.app.push_screen(ChoiceView(setting.label, choices, current), chosen)
+        # The servers' models are asked on the requests thread
+        self.zero.request(self.zero.served_models, then=offer)
 
     def typed(self, setting, text):
         if text is None:
@@ -445,8 +466,7 @@ class SettingsView(Scrolled, Screen):
             if setting.name in config.BY_NAME:
                 self.zero.save_settings(**{setting.name: value})
             else:
-                self.zero.set_setting(setting.name, value)
-                self.fetch()
+                self.zero.set_setting(setting.name, value, then=self.fetch)
         except (*ERRORS, OSError) as error:
             self.notify(str(error), severity="error")
         self.draw()
@@ -584,13 +604,18 @@ class KeyBindingsView(Scrolled, Screen):
         self.save(overrides)
 
     def save(self, overrides):
-        # A key set back to its default is no change
-        overrides = {
-            id: bound for id, bound in overrides.items()
-            if bound != keybindings.ACTIONS[id].keys
-        }
+        overrides = changed_keys(overrides)
         try:
             self.zero.save_settings(keys=overrides)
         except OSError as error:
             self.notify(str(error), severity="error")
         self.draw()
+
+
+def changed_keys(overrides):
+    """The key bindings to save: a key set back to its default is no change;
+    an action this ZERO doesn't know (a newer one's) is kept as it is."""
+    return {
+        id: bound for id, bound in overrides.items()
+        if id not in keybindings.ACTIONS or bound != keybindings.ACTIONS[id].keys
+    }

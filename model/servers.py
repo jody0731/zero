@@ -19,6 +19,7 @@ environment its commands inherit (key_envs: what the sandbox strips).
 
 import json
 import os
+import sys
 import tomllib
 import urllib.error
 import urllib.request
@@ -47,8 +48,13 @@ SERVER_FIELDS = {
 MODEL_FIELDS = ("context_window", "context_stop", "price")
 # Lines named otherwise before 0.6.2.8, read under their names now
 RENAMED = {"name": "title", "context": "context_window"}
-# Lines a server had before 0.6.2.7: what a model honours is measured now
+# Lines a server had before 0.6.2.7: what a model honours is measured now;
+# read and left out
 RETIRED = ("json_format", "thinking")
+# The formats of models.toml and keys.toml, a line at each one's top
+# (paths.FILE_FORMAT_KEY)
+MODELS_FILE_FORMAT = 1
+KEYS_FILE_FORMAT = 1
 # What a keyless server is sent for a key: the client needs one
 NO_KEY = "none"
 # Servers whose root answers no /tokenize (llama.cpp's), by url: asked once
@@ -106,20 +112,61 @@ def filled_prices():
     return CACHE["prices"]
 
 
-def load(path, where):
-    """A servers file's tables, checked; no file, none."""
+def load(path, where, notes=None):
+    """A servers file's tables, checked; no file, none. What this ZERO
+    doesn't know of it (a newer format, a line it has no such name for, a
+    line gone since an older release) is left out, and said in `notes`, a
+    list, when one is given; a line it knows with a value no server can use
+    stops it."""
     try:
-        data = tomllib.loads(Path(path).read_text())
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
-    except (OSError, tomllib.TOMLDecodeError) as e:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         raise ModelServerError(f"can't read {where}: {e}") from e
-    data = {name: renamed(entry) for name, entry in data.items()}
+    told = notes if notes is not None else []
+    found = data.pop(paths.FILE_FORMAT_KEY, MODELS_FILE_FORMAT)
+    if isinstance(found, int) and found > MODELS_FILE_FORMAT:
+        told.append(paths.newer_note(where, found, MODELS_FILE_FORMAT))
+    loose = [name for name, entry in data.items() if not isinstance(entry, dict)]
+    if loose:
+        told.append(paths.unknown_note(where, loose))
+    data = {name: known_lines(name, renamed(entry), where, told)
+            for name, entry in data.items() if name not in loose}
     for name, entry in data.items():
         problem = check(name, entry)
         if problem:
             raise ModelServerError(f"{where}: {problem}")
     return data
+
+
+def known_lines(name, entry, where, notes):
+    """A server's table less the lines this ZERO doesn't know, each said."""
+    unknown = [field for field in entry if field not in SERVER_FIELDS]
+    gone = [field for field in unknown if field in RETIRED]
+    if gone:
+        notes.append(
+            f"{where} [{name}]: {', '.join(gone)} gone since 0.6.2.7 (what a "
+            "model honours is measured now: zero model features MODEL), left "
+            "as it is")
+    if set(unknown) - set(gone):
+        notes.append(paths.unknown_note(f"{where} [{name}]",
+                                        set(unknown) - set(gone)))
+    entry = {field: value for field, value in entry.items()
+             if field not in unknown}
+    models = entry.get("models")
+    if isinstance(models, dict):
+        lines = {}
+        for model, line in models.items():
+            if isinstance(line, dict):
+                extra = [field for field in line if field not in MODEL_FIELDS]
+                if extra:
+                    notes.append(paths.unknown_note(
+                        f"{where} [{name}.models] {model!r}", extra))
+                line = {f: v for f, v in line.items() if f not in extra}
+            lines[model] = line
+        entry["models"] = lines
+    return entry
 
 
 def renamed(entry):
@@ -143,9 +190,6 @@ def check(name, entry):
         return f"{name} isn't a server's table ([{name}] with its url)"
     for field, value in entry.items():
         kind = SERVER_FIELDS.get(field)
-        if field in RETIRED:
-            return (f"[{name}] {field} is gone: what a model honours is "
-                    "measured now (zero model features MODEL)")
         if kind is None:
             return (f"[{name}] has no line {field!r}; known: "
                     f"{', '.join(SERVER_FIELDS)}")
@@ -190,9 +234,19 @@ def table():
     path = paths.models_file()
     key = (path, stamp(path))
     if CACHE.get("key") != key:
-        CACHE["table"] = merge(CACHE["shipped"], load(path, path), path)
+        found = []
+        CACHE["table"] = merge(CACHE["shipped"], load(path, path, found), path)
         CACHE["key"] = key
+        CACHE["notes"] = found
+        for note in found:
+            print(f"ZERO: {note}", file=sys.stderr, flush=True)
     return CACHE["table"]
+
+
+def notes():
+    """What the last read of the user's models.toml didn't know of it."""
+    table()
+    return list(CACHE.get("notes", []))
 
 
 def find(name):

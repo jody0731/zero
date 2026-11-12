@@ -103,8 +103,8 @@ class SessionJobs:
         the place of the end's notice."""
         row = self.service.store.job(id)
         files = self.service.files(id)
-        text, dropped = files.read(row["read_bytes"])
-        self.service.store.update_job(id, read_bytes=files.size)
+        text, dropped, through = files.read_through(row["read_bytes"])
+        self.service.store.update_job(id, read_bytes=through)
         if row["state"] != "running":
             self.service.store.withdraw(f"job:{id}:end")
         return text, dropped

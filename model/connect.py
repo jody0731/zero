@@ -18,7 +18,6 @@ A key is never put in a reply: any error that would echo it is scrubbed.
 """
 
 import json
-import os
 import re
 from pathlib import Path
 
@@ -140,9 +139,23 @@ def table_text(name, lines):
 
 def read(path):
     try:
-        return Path(path).read_text()
+        return Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
         return ""
+
+
+# A table's header line: its name, bare or quoted, and a comment after it
+HEADER = re.compile(r'^\[\s*("(?:[^"\\]|\\.)*"|[^\]#]*?)\s*\]\s*(?:#.*)?$')
+
+
+def table_name(header):
+    """The table a header line opens (`[deepseek] # mine`, `["deepseek"]`,
+    `[deepseek.models]`), or None for no header."""
+    match = HEADER.match((header or "").strip())
+    if not match:
+        return None
+    name = match.group(1)
+    return json.loads(name) if name.startswith('"') else name
 
 
 def replaced(text, name, new):
@@ -150,7 +163,7 @@ def replaced(text, name, new):
     (gone for None) where the first of them stood; the rest as it was."""
     pieces, at = [], None
     for header, piece in sections(text):
-        inner = (header or "").strip("[]").strip()
+        inner = table_name(header) or ""
         if header and (inner == name or inner.startswith(name + ".")):
             if at is None:
                 at = len(pieces)
@@ -169,35 +182,43 @@ def replaced(text, name, new):
     return joined.rstrip("\n") + "\n" if joined.strip() else ""
 
 
-def write(path, text, mode=None):
-    """The whole file in one move; owner-only from the start for a key."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    draft = path.with_name(path.name + ".new")
-    fd = os.open(draft, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode or 0o644)
-    with os.fdopen(fd, "w") as f:
-        if mode:
-            os.fchmod(f.fileno(), mode)
-        f.write(text)
-    os.replace(draft, path)
+def with_format(text, number):
+    """The file's text with its format line once, under the comments that
+    open it."""
+    if re.search(rf"(?m)^\s*{paths.FILE_FORMAT_KEY}\s*=", text):
+        return text
+    lines = text.splitlines(keepends=True)
+    top = 0
+    while top < len(lines) and lines[top].lstrip().startswith("#"):
+        top += 1
+    line = f"{paths.FILE_FORMAT_KEY} = {number}\n"
+    rest = "".join(lines[top:])
+    return "".join(lines[:top]) + line + ("\n" + rest if rest.strip() else "")
 
 
 def save_key(name, key, path=None):
-    """The server's key in keys.toml (mode 600); None takes it out."""
+    """The server's key in keys.toml (owner-only from the start); None takes
+    it out."""
     path = Path(path or paths.keys_file())
-    text = read(path)
-    if key is None and f"[{name}]" not in text:
-        return
-    new = None if key is None else table_text(name, {"api_key": key})
-    write(path, replaced(text, name, new), mode=0o600)
+    with paths.changing(path):
+        text = read(path)
+        if key is None and name not in {table_name(h) for h, _ in
+                                        sections(text)}:
+            return
+        new = None if key is None else table_text(name, {"api_key": key})
+        text = with_format(replaced(text, name, new), servers.KEYS_FILE_FORMAT)
+        paths.write_whole(path, text, mode=0o600)
 
 
 def save_server(name, lines, path=None):
     """The server's table in models.toml; None takes it out."""
     path = Path(path or paths.models_file())
-    text = read(path)
-    new = None if lines is None else table_text(name, lines)
-    write(path, replaced(text, name, new))
+    with paths.changing(path):
+        text = read(path)
+        new = None if lines is None else table_text(name, lines)
+        text = with_format(replaced(text, name, new),
+                           servers.MODELS_FILE_FORMAT)
+        paths.write_whole(path, text, mode=0o644)
 
 
 def own_lines(name, path=None):

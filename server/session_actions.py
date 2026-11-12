@@ -11,6 +11,8 @@ session. A service of the runtime's own class, over its store, locks and logs.
 
 import json
 import secrets
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -248,18 +250,30 @@ class SessionActions:
                    if name in now and old.get(name) != new.get(name)}
         return {**changed, **pending}
 
-    def refuse_if_busy(self, sid, what):
-        """Refused while a turn of the session runs, waits for an answer or
-        waits to start, or a service has work of it open (a run in rounds)."""
-        row = self.store.session(sid)
-        if (sid in self.runners or sid in self.store.waiting_sessions()
-                or row["state"] in ("running", "waiting")):
-            raise Refused(f"a turn is running or waiting in this session; {what} "
-                          "once it ends")
-        for service in self.services.values():
-            why = service.refuse_rewind(sid)
-            if why:
-                raise Refused(why)
+    @contextmanager
+    def held(self, sid, busy, states=()):
+        """The session held as its runner, as a compaction holds it, so no
+        turn starts while slow work on it (a harness built, files moved to
+        the trash) runs outside the runtime's lock, and the services are
+        asked outside it too (design rule 12). Refused with `busy` while a
+        turn of it runs or waits to start, or its row is in `states`; a
+        message admitted meanwhile starts its turn after."""
+        with self.lock:
+            row = self.store.session(sid)
+            if row is None:
+                raise Refused(f"no session {sid!r}")
+            if (sid in self.runners or sid in self.store.waiting_sessions()
+                    or row["state"] in states):
+                raise Refused(busy)
+            self.hold_runner(sid, threading.current_thread())
+        try:
+            yield row
+        finally:
+            with self.changed:
+                del self.runners[sid]
+                self.changed.notify_all()
+            if self.started:
+                self.dispatch()
 
     def rewind(self, sid, seq):
         """Go back to before the user's message `seq` on the current branch
@@ -267,10 +281,13 @@ class SessionActions:
         kept in the log, and the files and memory stay as they are. Refused
         while anything of the session runs or waits to. Returns the rewind's
         record and the message's text, for the user's input."""
-        if self.store.session(sid) is None:
-            raise Refused(f"no session {sid!r}")
-        with self.lock:
-            self.refuse_if_busy(sid, "rewind")
+        busy = ("a turn is running or waiting in this session; rewind once "
+                "it ends")
+        with self.held(sid, busy, states=("running", "waiting")):
+            for service in self.services.values():
+                why = service.refuse_rewind(sid)
+                if why:
+                    raise Refused(why)
             lock = self.session_lock(sid)
             try:
                 lock.acquire()
@@ -412,12 +429,8 @@ class SessionActions:
         """Move the session's log and its services' files (the jobs' output) to
         the trash, then forget its rows. Refused while anything of it runs or
         waits to."""
-        if self.store.session(sid) is None:
-            raise Refused(f"no session {sid!r}")
         services = list(self.services.values())
-        with self.lock:
-            if sid in self.runners or sid in self.store.waiting_sessions():
-                raise Refused("a turn is running in this session; stop it first")
+        with self.held(sid, "a turn is running in this session; stop it first"):
             for service in services:
                 why = service.refuse_delete(sid)
                 if why:
@@ -434,8 +447,9 @@ class SessionActions:
                 where = trash.move(self.paths, files)
                 tables = [table for service in services for table in service.tables]
                 self.store.forget(sid, tables)
-                self.live.pop(sid, None)
-                self.blocked.discard(sid)
+                with self.lock:
+                    self.live.pop(sid, None)
+                    self.blocked.discard(sid)
             finally:
                 lock.release()
         (self.paths.locks / f"{sid}.lock").unlink(missing_ok=True)

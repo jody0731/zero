@@ -18,6 +18,7 @@ client, a process of the caller's and not of ZERO's.
 """
 
 import threading
+import time
 from typing import Any
 from pathlib import Path
 
@@ -32,6 +33,8 @@ ERRORS = (ValueError, LookupError, ProtocolError, NotRunning)
 # How long zero_wait waits by default, and at most
 WAIT_SECONDS = 300
 MAX_WAIT_SECONDS = 3600
+# Seconds before a dropped watch is followed again
+RECONNECT_SECONDS = 0.2
 
 INSTRUCTIONS = (
     "Z.E.R.O. is a general purpose agent on this machine with its own tools "
@@ -72,27 +75,38 @@ class ZeroTools:
         return {"ok": True, "session": reply["session"]}
 
     def wait(self, session, seconds=WAIT_SECONDS):
+        """The session's result once it settles, or "running" when the
+        seconds run out. A watch that drops first (the server restarting
+        for a newer build, say) is followed again, its turn read afresh."""
         sid = self.session(session)["id"]
         seconds = max(1, min(int(seconds), MAX_WAIT_SECONDS))
-        records, _ = self.connection.history(sid, limit=None)
-        result = Result(sid)
-        stream = self.connection.watch(sid, after=latest_turn(records))
-        done = threading.Event()
+        deadline = time.monotonic() + seconds
+        while True:
+            records, _ = self.connection.history(sid, limit=None)
+            result = Result(sid)
+            stream = self.connection.watch(sid, after=latest_turn(records))
+            done = threading.Event()
 
-        def read():
-            try:
-                for event in stream:
-                    if result.add(event):
-                        break
-            except (OSError, ValueError):
-                pass
-            finally:
-                done.set()
+            def read(stream=stream, result=result, done=done):
+                try:
+                    for event in stream:
+                        if result.add(event):
+                            break
+                except (OSError, ValueError):
+                    pass
+                finally:
+                    done.set()
 
-        threading.Thread(target=read, daemon=True).start()
-        done.wait(seconds)
-        stream.close()
-        return result.as_json()
+            reader = threading.Thread(target=read, daemon=True)
+            reader.start()
+            done.wait(max(0.0, deadline - time.monotonic()))
+            stream.close()
+            # Read once the reader is done with it
+            reader.join(1)
+            if result.settled or time.monotonic() >= deadline:
+                return result.as_json()
+            time.sleep(min(RECONNECT_SECONDS,
+                           max(0.0, deadline - time.monotonic())))
 
     def reply(self, session, text=None, choice=None):
         info = self.session(session)

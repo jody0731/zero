@@ -78,7 +78,7 @@ class ModelService(Service):
         except (servers.ModelServerError, features.FeatureError) as e:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "model": model, "api": api.NAME,
-                "measured_at": row["measured_at"],
+                "measured_at": row.get("measured_at"),
                 "features": {name: row["features"].get(name)
                              for name in features.FEATURES}}
 

@@ -8,7 +8,7 @@ without one.
 """
 
 from core.tools import tool
-from usage.spend import describe, estimate_text, past_estimate, tokens_text
+from usage.spend import against_estimate, describe, tokens_text
 
 NOT_HERE = "Usage isn't available in this session."
 # The context's size as the last call's server counted it, and what a step
@@ -22,8 +22,7 @@ def subagent_line(entry):
     line = (f"- {entry['id']} \"{entry['title']}\" ({entry['state']}): "
             f"{describe(entry['use'])}")
     if entry.get("estimate"):
-        where = "past" if past_estimate(entry["use"], *entry["estimate"]) else "of"
-        line += f", {where} your estimate of {estimate_text(*entry['estimate'])}"
+        line += ", " + against_estimate(entry["use"], *entry["estimate"])
     return line
 
 

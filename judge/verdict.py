@@ -121,9 +121,10 @@ SCHEMA = {
             "decision": {"type": "string", "enum": list(DECISIONS)},
         },
         "required": list(FIELDS),
+        # Strict structured output (OpenAI's) refuses a schema without it
+        "additionalProperties": False,
     },
 }
-
 
 
 class VerdictError(ValueError):

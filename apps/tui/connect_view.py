@@ -94,13 +94,11 @@ def pick_default(zero):
             take(value)
 
     def take(model):
-        try:
-            zero.set_setting("model", model)
-        except ERRORS as error:
-            zero.notify(str(error), severity="error")
-            return
-        zero.note(f"ZERO: new sessions use {model}; /settings changes it.")
-        zero.focus_input()
+        def taken():
+            zero.note(f"ZERO: new sessions use {model}; /settings changes it.")
+            zero.focus_input()
+
+        zero.set_setting("model", model, then=taken)
 
     def run():
         named = listed()
@@ -335,11 +333,11 @@ class ServersView(Screen):
         self.draw()
 
     def fetch(self):
-        try:
-            reply = self.zero.connection.servers()
-        except ERRORS as error:
-            self.notify(str(error), severity="error")
-            return
+        """The servers, asked on the requests thread; drawn again once they
+        come."""
+        self.zero.request(self.zero.connection.servers, then=self.fetched)
+
+    def fetched(self, reply):
         listed = reply["servers"]
         # The catalog's in its order, then the user's own
         ordered = ([r for r in listed if r["in_catalog"]]
@@ -347,6 +345,9 @@ class ServersView(Screen):
         self.rows = [*ordered, None]
         self.default = reply["default"]
         self.not_ready_reason = reply["not_ready_reason"]
+        # A view closed before the answer came has nothing to draw into
+        if self.query("#rows"):
+            self.draw()
 
     def draw(self):
         self.selected = max(0, min(self.selected, len(self.rows) - 1))
@@ -425,11 +426,10 @@ class ServersView(Screen):
                     "so its URL and key work.")
 
     def take_back(self, row):
-        try:
-            reply = self.zero.connection.disconnect(row["name"])
-        except ERRORS as error:
-            self.notify(str(error), severity="error")
-            return
+        self.zero.request(lambda: self.zero.connection.disconnect(row["name"]),
+                          then=lambda reply: self.taken_back(row, reply))
+
+    def taken_back(self, row, reply):
         said = f"Removed {row['title']}'s key and your lines for it."
         if reply["default_unset"]:
             said += " New sessions have no model: pick one in Default → Model."
@@ -461,10 +461,4 @@ class ServersView(Screen):
             )
 
     def make_default(self, model):
-        try:
-            self.zero.set_setting("model", model)
-        except ERRORS as error:
-            self.notify(str(error), severity="error")
-            return
-        self.fetch()
-        self.draw()
+        self.zero.set_setting("model", model, then=self.fetch)

@@ -11,10 +11,16 @@ transaction: the server's live session list.
 
 import json
 import sqlite3
+import sys
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from datetime import datetime
+
+# The database's format, its user_version: a newer ZERO's database is read for
+# what this one knows of it, and said
+FILE_FORMAT = 1
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -171,21 +177,35 @@ class Store:
                 **{table: columns for each in added_columns
                    for table, columns in each.items()},
             })
+            found = self.db.execute("PRAGMA user_version").fetchone()[0]
+            if found > FILE_FORMAT:
+                print(f"ZERO's server: {path} was written by a newer ZERO (its "
+                      f"format {found}; this one knows {FILE_FORMAT}): what "
+                      "this ZERO knows of it is read", file=sys.stderr, flush=True)
+            else:
+                self.db.execute(f"PRAGMA user_version = {FILE_FORMAT}")
         self.on_change = None
 
     @contextmanager
     def transaction(self):
+        """One transaction: committed whole, or rolled back, a failed commit
+        included, so the connection is never left inside one."""
         with self.lock:
             self.db.execute("BEGIN IMMEDIATE")
             try:
                 yield self.db
+                self.db.execute("COMMIT")
             except BaseException:
-                self.db.execute("ROLLBACK")
+                if self.db.in_transaction:
+                    self.db.execute("ROLLBACK")
                 raise
-            self.db.execute("COMMIT")
-        # Outside the lock: a listener may read the store
+        # Outside the lock: a listener may read the store. The change is
+        # committed; a listener's failure is the listener's, not the caller's
         if self.on_change is not None:
-            self.on_change()
+            try:
+                self.on_change()
+            except Exception:
+                traceback.print_exc()
 
     def query(self, sql, *args):
         with self.lock:

@@ -169,7 +169,18 @@ def start_rounds(objective, rounds, minutes, weighted_tokens, done_check=None,
 def run_check(command, sandbox, stop=None, now=time.monotonic):
     """The done check, run where the session's commands run: (exit code, its
     output, how long it took). A check past CHECK_SECONDS is stopped, exit
-    code None; a stop ends it at once."""
+    code None; a stop ends it at once. A start the sandbox spoiled ran
+    nothing, so it may go again."""
+    tries = 0
+    while True:
+        tries += 1
+        code, text, seconds = run_check_once(command, sandbox, stop, now)
+        if not sandbox.start_again(tries, code, text):
+            return code, text, seconds
+
+
+def run_check_once(command, sandbox, stop, now):
+    """One start of the done check."""
     box = sandbox
     t0 = now()
     # The output to a file, not a pipe: a long one can't fill a pipe and hang

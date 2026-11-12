@@ -88,7 +88,7 @@ from client.connection import (  # noqa: E402
 from client.launcher import (  # noqa: E402
     Hung, busy_text, ensure_server, hello, server_pid,
 )
-from paths import Paths, changelog_version  # noqa: E402
+from paths import Paths, changelog_version, write_whole  # noqa: E402
 
 NAME = "ZERO"
 
@@ -114,9 +114,9 @@ def install(folder=None):
     script = Path(__file__).resolve()
     python = Path(sys.executable).absolute()
     launcher = Path(folder) / "zero" if folder else launcher_path()
-    launcher.parent.mkdir(parents=True, exist_ok=True)
-    launcher.write_text(
-        f'#!/bin/sh\nexec {shell_path(python)} {shell_path(script)} "$@"\n'
+    write_whole(
+        launcher,
+        f'#!/bin/sh\nexec {shell_path(python)} {shell_path(script)} "$@"\n',
     )
     launcher.chmod(0o755)
     print(f"Installed {launcher}.")
@@ -162,6 +162,10 @@ def server_stop(paths, force=False, confirm=None, seconds=20, as_json=False):
     if as_json:
         try:
             reply = launcher.shutdown(paths)
+        except NoAnswer:
+            reply = {"ok": False, "error": (
+                f"ZERO's server (pid {server_pid(paths)}) doesn't answer; stop "
+                "it with: zero server stop --force")}
         except NotRunning:
             reply = {"ok": False, "error": "ZERO's server isn't running."}
         print(json.dumps(reply, ensure_ascii=False))
@@ -246,6 +250,8 @@ def run_server(model=None):
 # command line imports none of them, nor they it
 TUI_SCRIPT = ROOT / "apps" / "tui" / "main.py"
 MCP_SCRIPT = ROOT / "apps" / "mcp" / "main.py"
+# `zero doctor`'s, which loads the harness to try what ZERO needs
+DOCTOR_SCRIPT = ROOT / "doctor.py"
 
 
 def run_tui(argv):
@@ -259,11 +265,16 @@ def run_mcp():
     os.execv(sys.executable, [sys.executable, str(MCP_SCRIPT)])
 
 
+def run_doctor():
+    """`zero doctor`: what ZERO needs from the machine, tried."""
+    os.execv(sys.executable, [sys.executable, str(DOCTOR_SCRIPT)])
+
+
 COMMANDS = ("zero", "zero new", "zero -r", "zero -p TEXT", "zero session …",
             "zero job …", "zero grant …", "zero model …", "zero setting …",
             "zero server hello|stop|status|run", "zero mcp serve",
-            "zero install|uninstall", "zero update")
-OWN_COMMANDS = ("server", "mcp", "install", "uninstall", "update")
+            "zero install|uninstall", "zero update", "zero doctor")
+OWN_COMMANDS = ("server", "mcp", "install", "uninstall", "update", "doctor")
 # The full screen's word; its flags are its own (apps/tui/main.py)
 TUI_COMMANDS = ("new",)
 
@@ -335,6 +346,9 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
     server's argv, how a detached one is spawned, a throwaway unit name, and
     whether to use systemd (None: ask it)."""
     parser, args = parser_for(argv_of(argv))
+    # `new` after the flags (`zero --mode auto new`) is the full screen's too
+    if args.command is None and args.p is None and args.words == ["new"]:
+        args.command, args.words = "tui", []
     if args.command is None and args.words:
         # A stray word would start a session: it is refused
         print(f"zero: unknown command {' '.join(args.words)!r}. Commands: "
@@ -352,6 +366,8 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
         return 0
     if args.command == "mcp":
         return run_mcp()
+    if args.command == "doctor":
+        return run_doctor()
     if args.command == "tui" or (args.command is None and args.p is None):
         return run_tui(argv_of(argv))
     paths = Paths()

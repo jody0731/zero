@@ -180,8 +180,7 @@ def ensure(path, template):
     """The user's file, written from `template` when there is none."""
     path = Path(path)
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(template.read_text())
+        paths.write_whole(path, template.read_text(encoding="utf-8"))
     return path
 
 
@@ -266,11 +265,14 @@ def read(instructions, workspace, most_chars):
         parts.append(block)
         room -= len(block) + 2
 
-    for path in (instructions.soul, instructions.user):
+    # Each file's text under its name and path: told that the sandbox hides
+    # ZERO's home, a model read SOUL.md's text, unnamed, as the harness's own
+    for label, path in (("SOUL.md", instructions.soul),
+                        ("The user's ZERO.md", instructions.user)):
         if path is not None:
             body = text(path)
             if body:
-                add("", body, path)
+                add(f"{label} ({path}):\n", body, path)
     root = project_root(workspace) if instructions.project else None
     if root is not None:
         found.project_file = root / PROJECT_FILE

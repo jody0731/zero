@@ -44,7 +44,8 @@ class ZeroFilesGuard(Hook):
 
     def system_prompt(self, session):
         lines = [
-            "\n\nYour own files, read when this system message was written (the "
+            "\n\nYour own files, read when this system message was written, "
+            "each one's text above under its path, comments left out (the "
             "memory tool changes them; the file tools don't):"
         ]
         if self.own.get("soul"):

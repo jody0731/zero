@@ -4,7 +4,8 @@ built from the protocol's messages (protocol/messages.py).
 A connection that fails or drops before its reply is NotRunning: the caller may
 start a server and send the same request again, with the same message id, which
 the server admits once. A server that takes the connection but never answers is
-NoAnswer.
+NoAnswer: the request may be running there, and most carry no id to admit once,
+so it isn't sent again.
 """
 
 import json
@@ -138,6 +139,8 @@ class Connection:
         self.ready()
         try:
             reply = request(self.paths.socket, payload, timeout)
+        except NoAnswer:
+            raise
         except NotRunning:
             if self.ensure is None:
                 raise

@@ -38,10 +38,11 @@ from apps.tui import clipboard, config, controller, keybindings
 from apps.tui.connect_view import ServersView, connected_servers, pick_default
 from apps.tui.controller import SessionInput
 from apps.tui.dialogs import KeyCaptureView, ChoiceView, PromptView, TextView
+from apps.tui.requests import Requests
 from apps.tui.session_view import SessionView
 from apps.tui.session_list_view import SessionListView
 from apps.tui.settings_view import SettingsView
-from apps.tui.widgets import ERRORS, MessageBox, Plain, Transcript, message, placeholder
+from apps.tui.widgets import ERRORS, MessageBox, Plain, Transcript, placeholder
 from client import render, session_list
 from client.follower import Follower
 from client.render import jobs_text
@@ -261,11 +262,18 @@ class ZeroApp(SafeClicks, App):
         # Which follower is current: a stopped one's late events are dropped
         self.generation = 0
         self.lists = ListWatch(connection, lambda: self.run_on_screen(self.listed))
+        # Every request to the server goes through it, off the drawing thread
+        self.requests = Requests(self.run_on_screen)
+        # The session an `open` was last asked for: an earlier one's answer
+        # that comes in after is dropped
+        self.opening = None
         self.view = SessionView()
         # config.toml's settings (/settings); a broken file is said, not used
         self.config_error = None
+        # What this ZERO doesn't know of the file, said once it opens
+        self.config_notes = []
         try:
-            self.config = config.load()
+            self.config = config.load(notes=self.config_notes)
         except settings.SettingsError as error:
             self.config = {**config.DEFAULTS, "keys": {}}
             self.config_error = str(error)
@@ -280,19 +288,16 @@ class ZeroApp(SafeClicks, App):
         self.view.query_one("#reply", MessageBox).pick = self.pick_key
         if self.config_error:
             self.note(f"ZERO: {self.config_error}; running on the defaults.")
+        for note in self.config_notes:
+            self.note(f"ZERO: {note}.")
         if self.notice:
             self.note(self.notice)
         self.lists.start()
-        try:
-            if self.first is not None:
-                self.wait_for_list()
-                self.open(self.first, remember=False)
-            else:
-                self.new_session(self.client.workspace)
-        except ERRORS as error:
-            self.note(f"ZERO: {error}")
+        if self.first is not None:
+            self.open(self.first, remember=False)
+        else:
+            self.new_session(self.client.workspace)
         if self.show_list:
-            self.wait_for_list()
             self.action_sessions()
         if self.model is None:
             self.offer_connect()
@@ -305,10 +310,10 @@ class ZeroApp(SafeClicks, App):
         "Connect a model" in front (nothing connected, its key missing, no
         window). A server that can't say leaves it to the first message's
         refusal."""
-        try:
-            reply = self.connection.servers()
-        except ERRORS:
-            return
+        self.request(self.connection.servers, then=self.connect_offered,
+                     failed=ignored)
+
+    def connect_offered(self, reply):
         if not reply.get("not_ready_reason"):
             return
         servers = connected_servers(reply.get("servers", ()))
@@ -327,8 +332,16 @@ class ZeroApp(SafeClicks, App):
     def on_unmount(self):
         self.lists.stop()
         self.stop_following()
+        self.requests.stop()
+
+    def request(self, work, then=None, failed=None):
+        """`work()`, a call to the server, on the requests thread, never the
+        drawing one (design rule 12); `then(result)` back on the screen, and
+        an error `failed`'s, said in the transcript by default."""
+        self.requests.submit(work, then, failed or self.failed)
 
     def wait_for_list(self, seconds=2):
+        """For a thread of its own: the session list, once it came."""
         deadline = time.monotonic() + seconds
         while not self.lists.sessions and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -355,8 +368,22 @@ class ZeroApp(SafeClicks, App):
         if remember and self.client.session and self.client.session != sid:
             self.back.append(self.client.session)
         self.stop_following()
-        row = self.row(sid) or find(self.connection.sessions(), sid)
-        records, gap = self.connection.history(sid, after=0, limit=MAX_RECORDS_SHOWN)
+        self.opening = sid
+        known = self.row(sid)
+
+        def fetch():
+            row = known or find(self.connection.sessions(), sid)
+            records, gap = self.connection.history(sid, after=0,
+                                                   limit=MAX_RECORDS_SHOWN)
+            return row, records, gap
+
+        self.request(fetch, then=lambda found: self.show(sid, *found))
+
+    def show(self, sid, row, records, gap):
+        """An opened session's records, fetched (open)."""
+        if sid != self.opening:
+            return
+        self.stop_following()
         self.client = SessionInput(self.connection, sid, workspace=row["workspace"])
         transcript = self.transcript
         transcript.clear()
@@ -382,6 +409,7 @@ class ZeroApp(SafeClicks, App):
         if self.client.session:
             self.back.append(self.client.session)
         self.stop_following()
+        self.opening = None
         self.client = SessionInput(
             self.connection, None, self.mode, self.model, workspace=workspace
         )
@@ -416,11 +444,12 @@ class ZeroApp(SafeClicks, App):
         self.thread.start()
 
     def stop_following(self):
+        """The follower is told to stop and ends on its own thread, never
+        waited for here: what it hands on late carries an old generation
+        and is dropped."""
         self.generation += 1
         if self.follower is not None:
             self.follower.stop()
-        if self.thread is not None:
-            self.thread.join(timeout=2)
         self.follower = self.thread = None
 
     def followed_line(self, generation, line):
@@ -455,10 +484,7 @@ class ZeroApp(SafeClicks, App):
         sid = self.client.session
         if sid is None:
             return
-        try:
-            self.connection.mark_seen(sid, seq)
-        except ERRORS:
-            pass
+        self.request(lambda: self.connection.mark_seen(sid, seq), failed=ignored)
 
     def note(self, text):
         self.transcript.line(text)
@@ -529,13 +555,18 @@ class ZeroApp(SafeClicks, App):
     def send(self, text, follow_up=False, reply=False, choice=None):
         if not text.strip():
             return
-        made = self.client.session is None
-        try:
-            answer = self.client.line(text, follow_up=follow_up, choice=choice)
-        except Exception as error:
-            self.failed(error)
-            return
-        if answer is None:
+        client = self.client
+
+        def work():
+            # Asked here, in turn: a line before it may have made the session
+            made = client.session is None
+            return made, client.line(text, follow_up=follow_up, choice=choice)
+
+        self.request(work, then=lambda sent: self.sent(client, text, *sent))
+
+    def sent(self, client, text, made, answer):
+        """A line the server took: shown as said, and followed."""
+        if answer is None or client is not self.client:
             return
         handled_as = answer.get("handled_as")
         mark = {"steered": "steer", "queued": "queued"}.get(handled_as)
@@ -604,20 +635,19 @@ class ZeroApp(SafeClicks, App):
             elif sid is None:
                 self.note("This session isn't made yet: send a message first.")
             elif name == "/continue":
-                reply = self.connection.continue_session(sid)
-                self.transcript.sent("/continue", reply.get("id"))
-                self.client.running = True
-                self.client.doing("thinking")
+                self.request(lambda: self.connection.continue_session(sid),
+                             then=self.continued)
             elif name == "/rename":
                 if rest:
-                    self.connection.rename(sid, rest)
+                    self.request(lambda: self.connection.rename(sid, rest))
                 else:
                     title = (self.row() or {}).get("title", "")
-                    self.ask_line("New title", title,
-                                  lambda text: self.connection.rename(sid, text))
+                    self.ask_line("New title", title, lambda text: self.request(
+                        lambda: self.connection.rename(sid, text)))
             elif name == "/compact":
-                reply = self.connection.compact(sid)
-                self.note(render.COMPACTING[reply["compacting"]])
+                self.request(lambda: self.connection.compact(sid),
+                             then=lambda reply: self.note(
+                                 render.COMPACTING[reply["compacting"]]))
             elif name == "/rewind":
                 self.pick_message(
                     sid, "Rewind to before which of your messages? Its text goes "
@@ -630,9 +660,10 @@ class ZeroApp(SafeClicks, App):
                 )
             elif name == "/archive":
                 archived = not (self.row() or {}).get("archived", False)
-                self.connection.archive(sid, archived)
-                self.note("Archived: hidden from the list." if archived
-                          else "Back in the list.")
+                self.request(lambda: self.connection.archive(sid, archived),
+                             then=lambda _: self.note(
+                                 "Archived: hidden from the list." if archived
+                                 else "Back in the list."))
             elif name == "/delete":
                 self.confirm_delete(sid)
             elif name == "/copy":
@@ -644,29 +675,45 @@ class ZeroApp(SafeClicks, App):
                 if sid is None:
                     self.note("ZERO: no session yet.")
                     return
-                grants = self.connection.grants(sid)
-                words = rest.split()
-                if len(words) == 2 and words[0] == "forget" and words[1].isdigit():
-                    index = int(words[1]) - 1
-                    if not 0 <= index < len(grants):
-                        self.note(f"ZERO: no permission {words[1]}.")
-                        return
-                    self.connection.forget_grant(sid, grants[index]["id"])
-                    self.note(f"ZERO: taken back: {grants[index]['description']}.")
-                    return
-                self.push_screen(TextView("Permissions",
-                                          render.grants_text(grants)))
+                self.request(lambda: self.connection.grants(sid),
+                             then=lambda grants: self.granted(sid, grants, rest))
             elif name == "/jobs":
-                jobs = self.connection.jobs(sid)
-                body = jobs_text(jobs) if jobs else "No jobs in this session."
-                self.push_screen(TextView("Jobs", body))
+                self.request(lambda: self.connection.jobs(sid), then=self.listed_jobs)
         except Exception as error:
             self.failed(error)
+
+    def continued(self, reply):
+        self.transcript.sent("/continue", reply.get("id"))
+        self.client.running = True
+        self.client.doing("thinking")
+
+    def granted(self, sid, grants, rest):
+        """/permissions: the session's grants shown, or one taken back."""
+        words = rest.split()
+        if len(words) == 2 and words[0] == "forget" and words[1].isdigit():
+            index = int(words[1]) - 1
+            if not 0 <= index < len(grants):
+                self.note(f"ZERO: no permission {words[1]}.")
+                return
+            grant = grants[index]
+            self.request(lambda: self.connection.forget_grant(sid, grant["id"]),
+                         then=lambda _: self.note(
+                             f"ZERO: taken back: {grant['description']}."))
+            return
+        self.push_screen(TextView("Permissions", render.grants_text(grants)))
+
+    def listed_jobs(self, jobs):
+        body = jobs_text(jobs) if jobs else "No jobs in this session."
+        self.push_screen(TextView("Jobs", body))
 
     def pick_message(self, sid, label, then, whole=False):
         """A list of the user's messages on the conversation's current branch,
         newest first, to rewind or fork from; `whole`: all of it on top."""
-        messages = self.connection.user_messages(sid)
+        self.request(lambda: self.connection.user_messages(sid),
+                     then=lambda messages: self.offer_messages(
+                         sid, label, then, whole, messages))
+
+    def offer_messages(self, sid, label, then, whole, messages):
         if not messages and not whole:
             self.note("No message of yours to go back to yet.")
             return
@@ -684,23 +731,22 @@ class ZeroApp(SafeClicks, App):
 
     def rewind_to(self, sid, seq):
         """Rewind, then show the branch it leaves, the message in the input."""
-        try:
-            reply = self.connection.rewind(sid, seq)
-        except Exception as error:
-            self.failed(error)
-            return
-        self.open(sid, remember=False)
-        self.fill_input(reply["text"])
+
+        def rewound(reply):
+            self.open(sid, remember=False)
+            self.fill_input(reply["text"])
+
+        self.request(lambda: self.connection.rewind(sid, seq), then=rewound)
 
     def fork_from(self, sid, value):
         """Fork, then open the new session, the message in its input."""
-        try:
-            reply = self.connection.fork(sid, None if value == ALL_OF_IT else value)
-        except Exception as error:
-            self.failed(error)
-            return
-        self.open(reply["session"]["id"])
-        self.fill_input(reply["text"])
+
+        def forked(reply):
+            self.open(reply["session"]["id"])
+            self.fill_input(reply["text"])
+
+        seq = None if value == ALL_OF_IT else value
+        self.request(lambda: self.connection.fork(sid, seq), then=forked)
 
     def fill_input(self, text):
         field = self.view.query_one("#message", MessageBox)
@@ -730,13 +776,17 @@ class ZeroApp(SafeClicks, App):
                 self.notify(f"This session will start with {said[:1].lower()}"
                             f"{said[1:]}.")
             else:
-                reply = self.connection.set(sid, **values)
-                said = controller.switched_text(reply["set"])
-                when = "from the next turn" if reply["next_turn"] else "from now"
-                self.notify(f"{said}, {when}.")
-                self.lists.resume()
+                self.request(lambda: self.connection.set(sid, **values),
+                             then=self.switched)
         except Exception as error:
             self.failed(error)
+        self.draw()
+
+    def switched(self, reply):
+        said = controller.switched_text(reply["set"])
+        when = "from the next turn" if reply["next_turn"] else "from now"
+        self.notify(f"{said}, {when}.")
+        self.lists.resume()
         self.draw()
 
     def action_cycle_mode(self):
@@ -755,9 +805,21 @@ class ZeroApp(SafeClicks, App):
         if getattr(self, "loading", False):
             return
         self.loading = True
-        records, gap = self.connection.history(
-            sid, after=0, limit=MAX_RECORDS_SHOWN, before=self.oldest
-        )
+        oldest = self.oldest
+
+        def failed(error):
+            self.loading = False
+            self.failed(error)
+
+        self.request(lambda: self.connection.history(
+            sid, after=0, limit=MAX_RECORDS_SHOWN, before=oldest
+        ), then=lambda found: self.earlier(sid, *found), failed=failed)
+
+    def earlier(self, sid, records, gap):
+        """Earlier records, fetched (load_earlier), put in above."""
+        if sid != self.client.session:
+            self.loading = False
+            return
         transcript = self.transcript
         made = []
         for record in records:
@@ -789,7 +851,9 @@ class ZeroApp(SafeClicks, App):
         def delete(text):
             if (text or "").strip().lower() not in ("y", "yes"):
                 return
-            where = self.connection.delete(sid)
+            self.request(lambda: self.connection.delete(sid), then=deleted)
+
+        def deleted(where):
             self.notify(f"Moved “{row['title']}” to {where}.")
             if sid == self.client.session:
                 self.new_session(self.cwd)
@@ -817,7 +881,7 @@ class ZeroApp(SafeClicks, App):
 
     def modes(self):
         """The modes the server offers (its `hello`): the client knows none."""
-        return list(self.defaults.get("modes") or controller.MODE_CYCLE)
+        return list(self.defaults.get("modes") or controller.MODES_KNOWN)
 
     def served_models(self):
         """The models every server lists, asked of the server; none when it
@@ -869,17 +933,22 @@ class ZeroApp(SafeClicks, App):
         self.apply_settings()
         self.draw()
 
-    def set_setting(self, name, value):
+    def set_setting(self, name, value, then=None):
         """Change one of ZERO's settings through the server, which reads it for
-        its next session."""
-        self.connection.set_setting(name, value)
-        # What a session not made yet starts with
-        if name == "mode":
-            self.defaults["mode"] = value
-        if name == "model":
-            self.defaults["model"] = value or self.default_model()
-        # The status line shows a new session's mode and model
-        self.draw()
+        its next session; `then()` once it has."""
+
+        def done(_):
+            # What a session not made yet starts with
+            if name == "mode":
+                self.defaults["mode"] = value
+            if name == "model":
+                self.defaults["model"] = value or self.default_model()
+            # The status line shows a new session's mode and model
+            self.draw()
+            if then is not None:
+                then()
+
+        self.request(lambda: self.connection.set_setting(name, value), then=done)
 
     def check_action(self, action, parameters):
         # While a new key is captured, every key goes to the capture
@@ -938,11 +1007,12 @@ class ZeroApp(SafeClicks, App):
         field = self.view.query_one("#message", MessageBox)
         empty = not field.value
         field.value = ""
-        try:
-            if self.client.ctrl_c(empty):
-                self.action_leave()
-        except ERRORS as error:
-            self.note(f"ZERO: {error}")
+
+        def stop(sid):
+            self.request(lambda: self.connection.stop(sid))
+
+        if self.client.ctrl_c(empty, stop=stop):
+            self.action_leave()
         if self.client.notice:
             self.notify(self.client.notice)
             self.client.notice = None
@@ -1041,6 +1111,10 @@ class ZeroApp(SafeClicks, App):
             parts.append((f"\n{mark} {n}. {label}", style))
         parts.append(("\n  ↑/↓ and Enter, a number, or type an answer", "dim"))
         return Content.assemble(*parts)
+
+
+def ignored(error):
+    """A request whose failure isn't worth a word (a seen mark, say)."""
 
 
 def earlier_line(count):

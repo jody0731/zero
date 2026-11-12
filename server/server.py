@@ -45,6 +45,9 @@ MAX_REQUEST = 1 << 20
 LIST_GATHER_SECONDS = 0.1
 # Seconds between two drafts on a watch: ten a second at most
 DRAFT_EVERY_SECONDS = 0.1
+# How long a watch's client may take to read what is sent before the watch
+# is let go: a stalled client frees its thread (design rule 12)
+WATCH_SEND_SECONDS = 30
 STOP_REASONS = ("stopped", "restart")
 # The messages the kernel serves itself; a service adds its own (server/services.py)
 SERVED = ("server/hello", "server/stop", "session/send", "session/continue",
@@ -477,7 +480,7 @@ class Server:
         except Refused as exc:
             self.emit(conn, error(str(exc)))
             return
-        conn.settimeout(None)
+        conn.settimeout(WATCH_SEND_SECONDS)
         try:
             # Subscribed first, so a record appended meanwhile is in the queue
             # and the seq check drops the copy
@@ -533,7 +536,7 @@ class Server:
         except Refused as exc:
             self.emit(conn, error(str(exc)))
             return
-        conn.settimeout(None)
+        conn.settimeout(WATCH_SEND_SECONDS)
         sent = None
         version = self.runtime.list_version
         try:

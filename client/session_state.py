@@ -117,9 +117,9 @@ class SessionState:
         after the turn's answer), and the reply to the open ask while one
         waits, marked with its id, and with `choice` when it was picked at
         the box."""
+        if not text.strip():
+            return None
         with self.lock:
-            if not text.strip():
-                return None
             reply_to = self.ask["ask"] if self.ask is not None else None
             options = {
                 "session": self.session, "mode": self.mode, "model": self.model,
@@ -131,12 +131,14 @@ class SessionState:
                 options["when_busy"] = "queue"
             if choice is not None and reply_to is not None:
                 options["choice"] = choice
-            reply = self.connection.send(text, **options)
+        # Sent outside the lock: the follower's events go on meanwhile
+        reply = self.connection.send(text, **options)
+        with self.lock:
             self.session = reply["session"]
             if not self.running:
                 self.doing("thinking")
             self.running = True
-            return reply
+        return reply
 
     def take_withdrawn(self):
         with self.lock:

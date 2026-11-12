@@ -45,16 +45,17 @@ BY_NAME = {setting.name: setting for setting in SETTINGS}
 DEFAULTS = {**{s.name: s.default for s in SETTINGS}, "keys": {}}
 
 
-def load(path=None):
+def load(path=None, notes=None):
     """The [tui] table (else the [cli] of before) over the defaults; no file
     or no table, the defaults. SettingsError for a file that can't be read
-    or a wrong value."""
+    or a wrong value; a setting this ZERO doesn't know (a newer one's) goes
+    to `notes`, a list, when one is given, and is left as it is."""
     path = Path(path) if path else paths.config_file()
     try:
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {**DEFAULTS, "keys": {}}
-    except (OSError, tomllib.TOMLDecodeError) as e:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         raise SettingsError(f"can't read {path}: {e}") from e
     name = TABLE if TABLE in data or OLD_TABLE not in data else OLD_TABLE
     table = data.get(name, {})
@@ -62,10 +63,10 @@ def load(path=None):
         raise SettingsError(f"{path}: [{name}] is a table")
     unknown = set(table) - set(DEFAULTS)
     if unknown:
-        raise SettingsError(
-            f"{path}: unknown settings in [{name}] {sorted(unknown)}; known: "
-            f"{sorted(DEFAULTS)}"
-        )
+        if notes is not None:
+            notes.append(paths.unknown_note(f"{path} [{name}]", unknown))
+        table = {key: value for key, value in table.items()
+                 if key not in unknown}
     keys = table.get("keys", {})
     if not isinstance(keys, dict) or not all(
         isinstance(v, str) for v in keys.values()
@@ -94,9 +95,11 @@ def save(values, path=None):
     """Write the [tui] table, leaving out what is at its default, and the
     rest of the file as it is (a [cli] of before goes)."""
     path = Path(path) if path else paths.config_file()
-    kept = [text for header, text in settings.sections(settings.read(path))
-            if not in_tui_table(header)]
-    write(path, kept, table(values))
+    with paths.changing(path):
+        text = settings.read(path)
+        kept = [text for header, text in settings.sections(text)
+                if not in_tui_table(header)]
+        write(path, kept, table(values, unknown_in_table(text)))
 
 
 def in_tui_table(header):
@@ -109,13 +112,30 @@ def in_tui_table(header):
                for table in (TABLE, OLD_TABLE))
 
 
-def table(values):
-    """The [tui] table's text: its settings, then its keys."""
+def unknown_in_table(text):
+    """The [tui] table's settings this ZERO doesn't know, as they are."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return {}
+    name = TABLE if TABLE in data or OLD_TABLE not in data else OLD_TABLE
+    found = data.get(name, {})
+    if not isinstance(found, dict):
+        return {}
+    return {key: value for key, value in found.items()
+            if key not in DEFAULTS and not isinstance(value, dict)}
+
+
+def table(values, unknown=None):
+    """The [tui] table's text: its settings, those this ZERO doesn't know,
+    then its keys."""
     lines = []
     for setting in SETTINGS:
         value = values.get(setting.name, setting.default)
         if value != setting.default:
             lines.append(f"{setting.name} = {settings.toml(value)}\n")
+    for name, value in (unknown or {}).items():
+        lines.append(f"{name} = {settings.toml(value)}\n")
     text = f"[{TABLE}]\n" + "".join(lines) if lines else ""
     keys = values.get("keys") or {}
     if keys:
@@ -144,9 +164,14 @@ def move(path=None):
     """Move theme, mouse and [keys] from the file's top level under [tui],
     once; whether anything moved. A file that can't be read is left alone."""
     path = Path(path) if path else paths.config_file()
+    with paths.changing(path):
+        return moved(path)
+
+
+def moved(path):
     try:
-        data = tomllib.loads(path.read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return False
     old = {name: data[name] for name in TOP_LEVEL_KEYS if name in data}
     keys = data.get("keys")

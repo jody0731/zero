@@ -9,11 +9,12 @@ each part its values from here.
 config.toml sits in ZERO's config folder (paths.py). Its top-level settings
 are ZERO's, with one writer, the server (the settings view sends each change
 through it, `Config.set`); hand edits work too. A table in it is a face's own
-(the full screen's [tui]): this module skips it and keeps it as it is.
+(the full screen's [tui]): this module skips it and keeps it as it is. The
+file states its format (`file_format`); a setting this ZERO doesn't know (a
+newer one's, say) is reported, left out of the values and kept in the file.
 """
 
 import json
-import os
 import tomllib
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -94,10 +95,16 @@ HEADER = (
     "# ZERO's settings. The settings view (/settings in zero) writes this file\n"
     "# and leaves out what is at its default; edits by hand work too.\n"
 )
+# config.toml's format, its first line (paths.FILE_FORMAT_KEY)
+FILE_FORMAT = 1
+# The full screen's settings, at the file's top before 0.6.2.8: it moves them
+# into its table when it starts; until then, not the server's to report
+FACES_BEFORE = ("theme", "mouse")
 
 
 class SettingsError(Exception):
-    """config.toml is broken: none of it is taken, rather than half of it."""
+    """config.toml can't be read, or a setting in it has a value no setting
+    takes: none of it is taken, rather than half of it."""
 
 
 def check(setting, value, mode=None):
@@ -138,24 +145,30 @@ def check(setting, value, mode=None):
     return None
 
 
-def load(path=None, mode=None):
+def load(path=None, mode=None, notes=None):
     """config.toml's settings over the defaults; no file, the defaults.
-    `mode`: as for check. Its tables are the faces' and left out."""
+    `mode`: as for check. Its tables are the faces' and left out. What this
+    ZERO doesn't know of the file (a newer format, a setting it has no
+    such name for) goes to `notes`, a list, when one is given."""
     path = Path(path) if path else paths.config_file()
     try:
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return dict(DEFAULTS)
-    except (OSError, tomllib.TOMLDecodeError) as e:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         raise SettingsError(f"can't read {path}: {e}") from e
+    told = notes if notes is not None else []
+    found = data.pop(paths.FILE_FORMAT_KEY, FILE_FORMAT)
+    if isinstance(found, int) and found > FILE_FORMAT:
+        told.append(paths.newer_note(path, found, FILE_FORMAT))
     data = {name: value for name, value in data.items()
-            if not isinstance(value, dict)}
+            if not isinstance(value, dict) and name not in FACES_BEFORE}
     data = renamed(data)
     unknown = set(data) - set(DEFAULTS)
     if unknown:
-        raise SettingsError(
-            f"{path}: unknown settings {sorted(unknown)}; known: {sorted(DEFAULTS)}"
-        )
+        told.append(paths.unknown_note(path, unknown))
+        data = {name: value for name, value in data.items()
+                if name not in unknown}
     for name, value in data.items():
         problem = check(name, value, mode)
         if problem:
@@ -235,34 +248,47 @@ def renamed(values):
 
 def save(values, path=None):
     """Write `values` to config.toml, leaving out what is at its default, and
-    the file's tables as they are; in one move, so a reader never sees half a
-    file."""
+    what this ZERO doesn't know of the file (its tables, a newer ZERO's
+    settings) as it is; whole, and one writer at a time."""
     path = Path(path) if path else paths.config_file()
-    lines = [HEADER]
-    for setting in SETTINGS:
-        value = values.get(setting.name, setting.default)
-        if value is not None and value != setting.default:
-            lines.append(f"{setting.name} = {toml(value)}\n")
-    tables = "".join(text for header, text in sections(read(path)) if header)
-    if tables:
-        lines.append("\n" + tables.lstrip("\n"))
-    write(path, "".join(lines))
+    with paths.changing(path):
+        text = read(path)
+        lines = [HEADER, f"{paths.FILE_FORMAT_KEY} = {FILE_FORMAT}\n"]
+        for setting in SETTINGS:
+            value = values.get(setting.name, setting.default)
+            if value is not None and value != setting.default:
+                lines.append(f"{setting.name} = {toml(value)}\n")
+        for name, value in unknown_settings(text).items():
+            lines.append(f"{name} = {toml(value)}\n")
+        tables = "".join(text for header, text in sections(text) if header)
+        if tables:
+            lines.append("\n" + tables.lstrip("\n"))
+        paths.write_whole(path, "".join(lines))
+
+
+def unknown_settings(text):
+    """The top-level settings of config.toml's text this ZERO doesn't know,
+    as they are; none when the text can't be read."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return {}
+    # The full screen's old top-level ones are kept for it to move
+    known = {*DEFAULTS, *RENAMED, *RETIRED, paths.FILE_FORMAT_KEY}
+    return {name: value for name, value in data.items()
+            if name not in known and not isinstance(value, dict)}
 
 
 def read(path):
     try:
-        return Path(path).read_text()
+        return Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
         return ""
 
 
 def write(path, text):
-    """The whole file in one move."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    draft = path.with_name(path.name + ".new")
-    draft.write_text(text)
-    os.replace(draft, path)
+    """The whole file in one move (paths.write_whole)."""
+    paths.write_whole(path, text)
 
 
 def sections(text):
@@ -279,9 +305,14 @@ def sections(text):
 
 
 def toml(value):
-    if isinstance(value, str):
-        # A JSON string is a TOML basic string
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, list)):
+        # A JSON string is a TOML basic string, and a JSON list of strings,
+        # numbers and yes/no values a TOML array
         return json.dumps(value, ensure_ascii=False)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
     return repr(value)
 
 
@@ -304,8 +335,12 @@ class Config:
         self.mode = mode
         self.stamp = stamp(self.path)
         self.error = None
+        # What the last read didn't know of the file (paths.unknown_note)
+        self.notes = []
         try:
-            self.values = load(self.path, mode)
+            self.values = load(self.path, mode, self.notes)
+            for note in self.notes:
+                print(f"ZERO's server: {note}", flush=True)
         except SettingsError as e:
             self.values = dict(DEFAULTS)
             self.error = str(e)
@@ -316,7 +351,9 @@ class Config:
         if now != self.stamp:
             self.stamp = now
             try:
-                self.values = load(self.path, self.mode)
+                notes = []
+                self.values = load(self.path, self.mode, notes)
+                self.notes = notes
                 self.error = None
             except SettingsError as e:
                 self.error = str(e)

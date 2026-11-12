@@ -26,10 +26,12 @@ the user's saved file keeps it.
 import json
 import re
 import secrets
+import sys
 import tomllib
 from datetime import datetime
 from pathlib import Path
 
+import paths
 from core import history, tools
 from core.asking import SAVED, waiting_ask
 from core.hooks import Hook
@@ -40,6 +42,8 @@ SAVED_HEAD = (
     "every\n# session without asking. /permissions lists them; delete a block "
     "to take one back.\n"
 )
+# permissions.toml's format, a line under its head (paths.FILE_FORMAT_KEY)
+FILE_FORMAT = 1
 
 PLAN_REMARK = "(Run without review: one of the calls of the plan {who} approved.)"
 SESSION_REMARK = "(Run without review: {who} allowed {what} for this session.)"
@@ -140,9 +144,17 @@ def read_saved(path):
     if path is None:
         return []
     try:
-        data = tomllib.loads(Path(path).read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return []
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        print(f"ZERO: {path} can't be read, so no saved permission holds: {e}",
+              file=sys.stderr, flush=True)
+        return []
+    found = data.get(paths.FILE_FORMAT_KEY, FILE_FORMAT)
+    if isinstance(found, int) and found > FILE_FORMAT:
+        print(f"ZERO: {paths.newer_note(path, found, FILE_FORMAT)}",
+              file=sys.stderr, flush=True)
     saved = []
     for entry in data.get("allow", []):
         if not isinstance(entry, dict) or not isinstance(entry.get("tool"), str):
@@ -174,8 +186,12 @@ def save(path, grant, session=None):
     lines.append(f"saved = {json.dumps(datetime.now().astimezone().isoformat())}")
     if session is not None:
         lines.append(f"session = {json.dumps(session)}")
-    text = path.read_text() if path.exists() else SAVED_HEAD
-    path.write_text(text.rstrip("\n") + "\n" + "\n".join(lines) + "\n")
+    with paths.changing(path):
+        text = path.read_text(encoding="utf-8") if path.exists() else (
+            f"{SAVED_HEAD}{paths.FILE_FORMAT_KEY} = {FILE_FORMAT}\n")
+        paths.write_whole(
+            path, text.rstrip("\n") + "\n" + "\n".join(lines) + "\n",
+            mode=0o600)
     return grant_id
 
 
@@ -191,12 +207,14 @@ def forget_saved(path, grant_id):
     path = Path(path)
     if not path.exists():
         return False
-    blocks = re.split(r"(?m)^(?=\[\[allow\]\])", path.read_text())
-    marker = f"id = {json.dumps(grant_id)}"
-    kept = [b for b in blocks if marker not in b.splitlines()]
-    if len(kept) == len(blocks):
-        return False
-    path.write_text("".join(kept))
+    with paths.changing(path):
+        blocks = re.split(r"(?m)^(?=\[\[allow\]\])",
+                          path.read_text(encoding="utf-8"))
+        marker = f"id = {json.dumps(grant_id)}"
+        kept = [b for b in blocks if marker not in b.splitlines()]
+        if len(kept) == len(blocks):
+            return False
+        paths.write_whole(path, "".join(kept))
     return True
 
 

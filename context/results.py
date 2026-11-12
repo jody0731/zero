@@ -10,6 +10,8 @@ reach it as ZERO was told.
 
 from pathlib import Path
 
+import paths
+
 
 def folder_of(log_path):
     """A session's results folder, from its log's path."""
@@ -24,7 +26,7 @@ def save(folder, name, text):
     folder.mkdir(parents=True, exist_ok=True)
     folder.chmod(0o700)
     path = folder / name
-    path.write_text(text, encoding="utf-8")
+    paths.write_whole(path, text, mode=0o600)
     return path
 
 

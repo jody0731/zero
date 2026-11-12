@@ -97,11 +97,15 @@ def json_request(model, api, schema):
 
 # The file, read again whenever it changes
 CACHE = {}
+# The file's format: {"file_format": 1, "models": {model: record}}; before
+# 0.7.1 the records sat at its top
+FILE_FORMAT = 1
 
 
 def records():
     """Every model's record: model → {"api", "measured_at", "features"}; a record
-    kept before 0.6.2.8 says `measured`."""
+    kept before 0.6.2.8 says `measured`. A record this ZERO can't read is
+    left out (measured again when asked)."""
     path = Path(paths.model_features_file())
     try:
         info = path.stat()
@@ -110,14 +114,24 @@ def records():
         return {}
     if CACHE.get("stamp") != stamp:
         try:
-            CACHE["records"] = {
-                model: renamed(found)
-                for model, found in json.loads(path.read_text()).items()
-            }
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            CACHE["records"] = {}
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if paths.FILE_FORMAT_KEY in data:
+            data = data.get("models")
+            data = data if isinstance(data, dict) else {}
+        CACHE["records"] = {model: renamed(found)
+                            for model, found in data.items() if readable(found)}
         CACHE["stamp"] = stamp
     return CACHE["records"]
+
+
+def readable(found):
+    """Whether a record has what this ZERO reads of one."""
+    return (isinstance(found, dict) and isinstance(found.get("api"), str)
+            and isinstance(found.get("features"), dict))
 
 
 def renamed(found):
@@ -221,10 +235,10 @@ def measure(model, api, client, server_model, timeout):
 
 
 def save_record(model, row):
-    """The record written whole, through a file beside it."""
+    """The record added to the file, written whole; one writer at a time."""
     path = Path(paths.model_features_file())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    kept = {**records(), model: row}
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(kept, indent=1, sort_keys=True) + "\n")
-    temporary.replace(path)
+    with paths.changing(path):
+        CACHE.clear()
+        kept = {**records(), model: row}
+        data = {paths.FILE_FORMAT_KEY: FILE_FORMAT, "models": kept}
+        paths.write_whole(path, json.dumps(data, indent=1, sort_keys=True) + "\n")

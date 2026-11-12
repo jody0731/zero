@@ -26,7 +26,9 @@ sets before another reads it (the permissions memory's `granted`, read by
 the repeat guard); it never changes how decisions combine (core/hooks.py).
 """
 
+import contextlib
 import hashlib
+import io
 import json
 from pathlib import Path
 
@@ -52,6 +54,7 @@ from core.loop import Session
 from model import SETTINGS as MODEL_SETTINGS
 from model.service import ModelService
 from model.servers import Model, ModelServerError, resolve
+from model import servers as model_servers
 from model.retry import ModelRetry
 from limits import SETTINGS as LIMIT_SETTINGS
 from context import SETTINGS as CONTEXT_SETTINGS
@@ -97,6 +100,8 @@ from prompt.hooks import Environment, Means
 from prompt.instructions import PROJECT_FILE, read, system_prompt, user_instructions
 from memory.hooks import ZeroFilesGuard
 from paths import permissions_file
+from permissions.grants import read_saved
+from sandbox.check import check_sandbox
 from sessions.log import Log, fresh_log
 from sandbox.sandbox import (
     Outside, Sandbox, Scratch, Unsandboxed, private_folders,
@@ -493,6 +498,9 @@ def make_session(
             "sandbox": sandbox, "outside": outside, "limits": limits,
             "web": web if web is not None else web_clients(limits),
             "own_files": own_files, "results": results,
+            # The share of the context ZERO's own files take, as it stands,
+            # for the memory tool's description
+            "own_files_percent": lambda: limits["result_share_percent"],
         },
         rebuild=rebuild, code_mark=lambda: code_mark(session), fallback=fallback,
     )
@@ -608,3 +616,32 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
     return [JobsService(tick=tick), PermissionsService(make_consent, saved_permissions),
             ModelService(), ContextService(), RoundsService(),
             SubagentsService(), SessionSearchService()]
+
+
+# What ZERO needs from the machine, each need's check, declared here once
+# (design rule 8; `zero doctor`): what is needed → check(), None when it is
+# met, else what is wrong
+MACHINE_CHECKS = {
+    "The sandbox runs a command": check_sandbox,
+}
+
+
+def home_file_notes():
+    """What ZERO's files in its home say that this ZERO doesn't know or
+    can't use, a line each (`zero doctor`): config.toml's, models.toml's and
+    keys.toml's, permissions.toml's, as each reader reports them."""
+    notes = []
+    said = io.StringIO()
+    with contextlib.redirect_stderr(said):
+        try:
+            settings.load(notes=notes)
+        except settings.SettingsError as error:
+            notes.append(f"{error}; ZERO runs on the defaults")
+        try:
+            model_servers.table()
+        except ModelServerError as error:
+            notes.append(str(error))
+        read_saved(permissions_file())
+    notes += [line.removeprefix("ZERO: ") for line in said.getvalue().splitlines()
+              if line.strip()]
+    return notes

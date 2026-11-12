@@ -14,7 +14,7 @@ from core import history
 from core.hooks import Hook, Stop
 from rounds import tool as roundtools
 from usage.spend import (
-    call_weighted_tokens, turn_dollars, turn_weighted_tokens,
+    call_weighted_tokens, tokens_text, turn_dollars, turn_weighted_tokens,
 )
 
 # A turn's second compaction: the fact that long work can run in rounds
@@ -31,8 +31,8 @@ ASKED = (
 )
 # Once, when the work passes ZERO's estimate
 PAST_ESTIMATE = (
-    "[Harness note: {id}, toward \"{objective}\", has used {spent}, past your "
-    "estimate of {estimate}. The work goes on.]"
+    "[Harness note: {id}, toward \"{objective}\", has used {spent}, past the "
+    "{passed} of your estimate. The work goes on.]"
 )
 # Turn outcomes that end a round as failed, not by the user's say
 FAILED = ("model_error", "crashed", "broken_replies", "judge_refusals",
@@ -113,16 +113,23 @@ class Rounds(Hook):
         if run["past_estimate_at"] is not None:
             return
         estimate_tokens = run["estimate_weighted_tokens"]
-        spent = roundtools.estimate_text(
-            run["round_count"], run["spent_minutes"] + minutes,
-            None if estimate_tokens is None
-            else run["spent_weighted_tokens"] + getattr(self, "_spent", 0.0))
-        estimate = roundtools.estimate_text(
-            run["estimate_rounds"], run["estimate_minutes"], estimate_tokens)
+        spent_minutes = run["spent_minutes"] + minutes
+        spent_tokens = (None if estimate_tokens is None else
+                        run["spent_weighted_tokens"] + getattr(self, "_spent", 0.0))
+        spent = roundtools.estimate_text(run["round_count"], spent_minutes,
+                                         spent_tokens)
+        # Only what was passed is named (usage/spend.py, passed_text)
+        passed = []
+        if run["round_count"] > run["estimate_rounds"]:
+            passed.append(f"{run['estimate_rounds']} rounds")
+        if spent_minutes > run["estimate_minutes"]:
+            passed.append(roundtools.duration(run["estimate_minutes"]))
+        if spent_tokens is not None and spent_tokens > estimate_tokens:
+            passed.append(tokens_text(estimate_tokens))
         turn.session.write("note", kind="past_estimate", run=run["id"],
                            text=PAST_ESTIMATE.format(
                                id=run["id"], objective=run["objective"],
-                               spent=spent, estimate=estimate))
+                               spent=spent, passed=" and ".join(passed)))
         turn.session.tool_context["session_rounds"].mark_past(run["id"])
 
     def before_model(self, step):

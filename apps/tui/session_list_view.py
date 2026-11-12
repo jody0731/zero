@@ -133,12 +133,20 @@ class SessionListView(Screen):
     def action_archived(self):
         self.show_archived = not self.show_archived
         if self.show_archived:
-            try:
-                self.archived = self.zero.connection.sessions(archived=True)
-            except ERRORS as error:
-                self.notify(str(error), severity="error")
+            self.fetch_archived()
         self.selected = 0
         self.draw()
+
+    def fetch_archived(self):
+        """The archived sessions, asked on the requests thread."""
+        self.zero.request(lambda: self.zero.connection.sessions(archived=True),
+                          then=self.archived_came)
+
+    def archived_came(self, rows):
+        self.archived = rows
+        # A view closed before the answer came has nothing to draw into
+        if self.query("#rows"):
+            self.draw()
 
     def open_selected(self):
         kind, row = self.chosen()
@@ -159,12 +167,13 @@ class SessionListView(Screen):
         sid = row["id"]
         try:
             if what == "rename":
-                zero.ask_line("New title", row["title"],
-                              lambda text: zero.connection.rename(sid, text))
+                zero.ask_line("New title", row["title"], lambda text: zero.request(
+                    lambda: zero.connection.rename(sid, text)))
             elif what == "archive":
-                zero.connection.archive(sid, not row.get("archived", False))
-                if self.show_archived:
-                    self.archived = zero.connection.sessions(archived=True)
+                archived = not row.get("archived", False)
+                zero.request(lambda: zero.connection.archive(sid, archived),
+                             then=lambda _: self.show_archived
+                             and self.fetch_archived())
             elif what == "delete":
                 zero.confirm_delete(sid, after=self.draw)
         except ERRORS as error:

@@ -18,7 +18,7 @@ from core.asking import (
     APPROVED, APPROVED_LATE, CANCELLED, DECLINED_STOP, NO, NOT_ASKED, choices,
 )
 from core.control import Stopped
-from core.history import LOG_FORMAT, OldLog, log_format
+from core.history import LOG_FORMAT, NewerLog, OldLog, log_format
 from core.hooks import Deny, HookRunner, Park, Stop
 from core.llm import MODEL_ERRORS
 from core.records import Call, ModelFailure, Step, Turn
@@ -26,6 +26,11 @@ from core.records import Call, ModelFailure, Step, Turn
 CUT_OFF = "[Your last reply hit the output limit and was cut off.]"
 INTERRUPTED = "[The user interrupted this turn.]"
 NOT_STARTED = "Not run: the user interrupted the turn before this call started."
+# A crash isn't the user's doing
+CRASHED_FIRST = (
+    "Not run: the turn stopped on an error in the harness before this call "
+    "started."
+)
 EMPTY = "[Your last reply was empty.]"
 # The session's model failed (past its retries, when the error is retried)
 # and the turn goes on with the fallback model; the next turn tries the
@@ -145,7 +150,10 @@ class Session:
     def restore(self, log):
         """Restore the logged prompt and messages without rebuilding hooks."""
         records = log.branch()
-        if not records or log_format(records) != LOG_FORMAT:
+        found = log_format(records) if records else None
+        if found is not None and found > LOG_FORMAT:
+            raise NewerLog(found)
+        if found != LOG_FORMAT:
             raise OldLog("This session needs a log upgrade before it can run")
         self.log = log
         self.settings = history.settings_now(records)
@@ -311,7 +319,7 @@ class Session:
             turn.outcome, turn.detail = "interrupted", detail
             self.take_steers(turn)
         except BaseException:
-            self.close_dangling_calls()
+            self.close_dangling_calls(CRASHED_FIRST)
             turn.outcome, turn.error = "crashed", traceback.format_exc()
             raise
         finally:

@@ -25,6 +25,9 @@ BOX_DELAY_SECONDS = 1.0
 # What Shift+Tab steps through (Claude Code's key); bypassPermissions only by
 # name, typed, so no key lands on it by accident
 MODE_CYCLE = ("default", "auto", "auto+", "readOnly")
+# The modes offered where the server's hello names none: the cycle's and the
+# one typed by name
+MODES_KNOWN = (*MODE_CYCLE, "bypassPermissions")
 COMMANDS = {
     "/new": "a new session (asks for its workspace)",
     "/continue": "go on with a turn that ended without an answer",
@@ -103,14 +106,17 @@ class SessionInput(SessionState):
         """A line typed disarms Ctrl+C's second press (SessionState.line)."""
         with self.lock:
             self.interrupt_armed = False
-            return super().line(text, follow_up, choice)
+        return super().line(text, follow_up, choice)
 
-    def ctrl_c(self, empty=True):
-        """Stop a moving turn; a parked one isn't moving, so only say so."""
+    def ctrl_c(self, empty=True, stop=None):
+        """Stop a moving turn; a parked one isn't moving, so only say so.
+        `stop(session)` sends the stop (the full screen's: on its requests
+        thread); the connection's own call by default, never under the lock."""
+        stopping = None
         with self.lock:
             if self.running:
                 self.interrupt_armed = False
-                self.connection.stop(self.session)
+                stopping = self.session
             elif self.ask is not None:
                 self.interrupt_armed = False
                 self.notice = WAITING
@@ -118,7 +124,10 @@ class SessionInput(SessionState):
                 self.leaving = True
             else:
                 self.interrupt_armed = True
-            return self.leaving
+            leaving = self.leaving
+        if stopping is not None:
+            (stop or self.connection.stop)(stopping)
+        return leaving
 
     def eof(self):
         with self.lock:

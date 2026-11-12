@@ -9,7 +9,10 @@ crash mid-write can leave half a line at the end: reading leaves it out, and the
 next append cuts it off first so the file stays whole. `on_append` hears each
 record once it is on disk: the server hands it to the session's watchers. A new
 session's log is named when it is made and claimed when its first turn starts
-(fresh_log).
+(fresh_log). A Log keeps what it read in memory and later reads only what was
+appended since, by itself or another writer, so a step's look at the log costs
+what is new, not the whole log (design rule 12); the records it hands out are
+the log's, read and never changed.
 """
 
 import json
@@ -30,21 +33,53 @@ class Log:
         # log holds its parent's records with their numbers, so its seqs can
         # skip where the parent's branch did
         self.last_seq = None
+        # What was read so far: the file (its inode), the bytes of its whole
+        # lines, how many lines, the last of them, and their records
+        self.kept = None
 
     def records(self):
-        """Every newline-terminated record; broken whole lines are errors."""
-        if not self.path.exists():
+        """Every newline-terminated record; broken whole lines are errors.
+        Read from where the last read ended; the whole file again when it
+        was replaced (a new inode), cut shorter (a half line repaired) or
+        changed where it was read (its last line read isn't there)."""
+        try:
+            found = self.path.stat()
+        except FileNotFoundError:
+            self.kept = None
             return []
-        lines = self.path.read_bytes().split(b"\n")[:-1]
-        records = []
-        for n, line in enumerate(lines, 1):
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line.decode("utf-8")))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                raise ValueError(f"broken record at {self.path}:{n}") from None
-        return records
+        empty = {"inode": found.st_ino, "size": 0, "lines": 0, "last": b"",
+                 "records": []}
+        kept = self.kept
+        if (kept is None or kept["inode"] != found.st_ino
+                or found.st_size < kept["size"]):
+            kept = empty
+        if found.st_size > kept["size"] or kept is not empty:
+            with open(self.path, "rb") as f:
+                f.seek(kept["size"] - len(kept["last"]))
+                data = f.read()
+            if not data.startswith(kept["last"]):
+                kept = empty
+                data = self.path.read_bytes()
+            else:
+                data = data[len(kept["last"]):]
+            whole = data[: data.rfind(b"\n") + 1]
+            added = []
+            for n, line in enumerate(whole.split(b"\n")[:-1], kept["lines"] + 1):
+                if not line:
+                    continue
+                try:
+                    added.append(json.loads(line.decode("utf-8")))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    raise ValueError(f"broken record at {self.path}:{n}") from None
+            if whole:
+                kept = {
+                    "inode": kept["inode"], "size": kept["size"] + len(whole),
+                    "lines": kept["lines"] + whole.count(b"\n"),
+                    "last": whole[whole.rfind(b"\n", 0, -1) + 1:],
+                    "records": kept["records"] + added,
+                }
+        self.kept = kept
+        return list(kept["records"])
 
     def first_record(self):
         """The log's first record, its header, read alone; None while empty."""

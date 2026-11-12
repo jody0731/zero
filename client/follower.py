@@ -74,6 +74,9 @@ class Follower:
                     )
                 return
             if not self.leaving.is_set():
+                if stream.bye == "behind":
+                    # Followed again from the last record shown, unsaid
+                    continue
                 if not reconnecting:
                     if stream.bye == "restart":
                         self.emit("(the server restarts with newer code)")

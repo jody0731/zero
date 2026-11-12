@@ -22,6 +22,7 @@ class RepeatGuard(Hook):
 
     def __init__(self, limits):
         self._limits = limits
+        self._seen = {}
 
     def turn_start(self, turn):
         # (tool, normalised arguments) -> the step it first ran at
@@ -43,5 +44,7 @@ class RepeatGuard(Hook):
         )
 
     def after_tool(self, call):
-        if not call.error and not call.notes.get("cancelled"):
+        # Only a call that ran counts: one denied (this guard's own denial
+        # included) or declined never ran, and names no step that ran it
+        if call.ran and not call.error and not call.notes.get("cancelled"):
             self._seen[call.key] = (call.step.number, time.monotonic())

@@ -87,6 +87,15 @@ class OldLog(ValueError):
     """The server must upgrade this log before handing it to the harness."""
 
 
+class NewerLog(ValueError):
+    """A newer ZERO wrote this log: this one neither runs nor upgrades it."""
+
+    def __init__(self, found):
+        super().__init__(
+            f"this session's log was written by a newer ZERO (its format "
+            f"{found}; this one reads {LOG_FORMAT}): update ZERO to open it")
+
+
 # What the user may change between a session's turns, each logged as a
 # switch: its `to` values and the session's settings from then on. A change
 # to what the agent knows of itself (MODEL_VISIBLE) is a `switch` note the
@@ -281,9 +290,12 @@ def rewind_note(when_iso, left, line_chars, extra="", session=None):
 
 
 def log_format(records):
+    """The format a log was written in: its session record's, else 1 (logs
+    before formats were numbered). A newer ZERO's is its own number."""
     if records and records[0].get("type") == "session":
-        if records[0].get("format") == LOG_FORMAT:
-            return LOG_FORMAT
+        found = records[0].get("format")
+        if isinstance(found, int) and not isinstance(found, bool) and found > 1:
+            return found
     return 1
 
 

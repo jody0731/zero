@@ -59,6 +59,13 @@ KINDS = ("user", "notice", "reply", "call", "handoff")
 # holds); its words are the search's (session_search_snippet_words; FTS5
 # allows 64)
 MARKS = ("«", "»")
+# How a record ranks: FTS5's bm25, a call (its command and output) weighed at
+# half, so the user's words and ZERO's replies come before the output they
+# talk about, which a command's output, saying a word again and again, can
+# otherwise bury. Measured on real searches in ZERO's logs: one of seven had
+# its answer sixth, behind five commands; first at half; the rest unchanged
+CALL_WEIGHT = 0.5
+RANK = f"bm25(records) * (CASE kind WHEN 'call' THEN {CALL_WEIGHT} ELSE 1.0 END)"
 # A query's pieces: "a phrase" (maybe a prefix) or a run of anything else
 QUERY_PIECE = re.compile(r'"[^"]*"\*?|[^\s"]+')
 OPERATORS = ("OR", "AND", "NOT")
@@ -287,7 +294,7 @@ class Index:
         best first, for an FTS5 query."""
         rows = self._match(
             "SELECT rowid, session FROM records WHERE records MATCH ? "
-            "ORDER BY bm25(records)", query,
+            f"ORDER BY {RANK}", query,
         )
         counts = Counter(row["session"] for row in rows)
         best = {}
@@ -316,7 +323,7 @@ class Index:
         ))
         rows = self._match(
             f"SELECT rowid, {self._fields(snippet_words)} FROM records "
-            "WHERE records MATCH ? AND session = ? ORDER BY bm25(records) "
+            f"WHERE records MATCH ? AND session = ? ORDER BY {RANK} "
             "LIMIT ?", query, sid, count,
         )
         return total, [hit(row) for row in rows]

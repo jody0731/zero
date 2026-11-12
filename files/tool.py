@@ -44,15 +44,21 @@ class SandboxedIOError(Exception):
 def run_sandboxed_io(box, request):
     """One request to sandboxed_io, through `box` (a Sandbox, Unsandboxed or
     Outside). The sandbox raises rather than hand back a bare command."""
-    done = subprocess.run(
-        box.command([PYTHON, "-I", "-c", SANDBOXED_IO_SOURCE]),
-        input=json.dumps(request),
-        capture_output=True,
-        text=True,
-        env=box.env(),
-        cwd=box.workspace,
-        timeout=SANDBOXED_IO_SECONDS,
-    )
+    # A start the sandbox spoiled ran nothing, so it may go again
+    tries = 0
+    while True:
+        tries += 1
+        done = subprocess.run(
+            box.command([PYTHON, "-I", "-c", SANDBOXED_IO_SOURCE]),
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+            env=box.env(),
+            cwd=box.workspace,
+            timeout=SANDBOXED_IO_SECONDS,
+        )
+        if not box.start_again(tries, done.returncode, done.stderr):
+            break
     try:
         return json.loads(done.stdout)
     except json.JSONDecodeError:

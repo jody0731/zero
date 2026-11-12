@@ -15,9 +15,9 @@ session (`own_files`), never from the model.
 
 import os
 import re
-import tempfile
 from pathlib import Path
 
+import paths
 from core.asking import TO_APPROVER
 from core.tools import tool
 from prompt.instructions import clean
@@ -112,24 +112,9 @@ def added(text, new, heading):
 
 
 def store(path, text):
-    """Write the whole file at once, through any link to it, keeping its
-    permissions."""
-    real = Path(os.path.realpath(path))
-    real.parent.mkdir(parents=True, exist_ok=True)
-    mode = real.stat().st_mode & 0o777 if real.exists() else None
-    handle, temporary = tempfile.mkstemp(dir=real.parent, prefix=".memory-")
-    try:
-        with os.fdopen(handle, "w") as out:
-            out.write(text)
-        if mode is None:
-            umask = os.umask(0)
-            os.umask(umask)
-            mode = 0o666 & ~umask
-        os.chmod(temporary, mode)
-        os.replace(temporary, real)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+    """Write the whole file at once (paths.write_whole), through any link to
+    it, keeping its permissions."""
+    paths.write_whole(Path(os.path.realpath(path)), text)
 
 
 def clipped(text, whole=False):
@@ -158,24 +143,31 @@ def crossing(args):
             "every_mode": True}
 
 
-DESCRIPTION = (
-    "Change your own files, which every session reads at its start: SOUL.md "
-    "(target soul: your character), the user's ZERO.md (target user: the user, "
-    "their machines, their instructions and what you remember) and the "
-    "project's ZERO.md (target project: at the git root, else the workspace). "
-    "add puts text at the end of a heading's section (the heading is made when "
-    "missing; with none, at the end of the file); replace swaps old_text for "
-    "text; remove deletes old_text. old_text occurs exactly once. Each change "
-    f"goes first to {TO_APPROVER}. A change's result holds the file as it "
-    "then reads, for this session; later sessions read it at their start, "
-    "the three files in 15% of their context's line together, a longer one "
-    "cut with a note of where it goes on. The file tools don't change these "
-    "files; the user edits them by hand too."
-)
+def describe(limits, context=None):
+    """The tool's description, with the share of the context the three files
+    take as it stands (`own_files_percent`, the assembly's); without a
+    session, the share isn't a number yet."""
+    percent = (context or {}).get("own_files_percent")
+    share = f"{percent()}%" if percent is not None else "a share"
+    return (
+        "Change your own files, which every session reads at its start: SOUL.md "
+        "(target soul: your character), the user's ZERO.md (target user: the "
+        "user, their machines, their instructions and what you remember) and "
+        "the project's ZERO.md (target project: at the git root, else the "
+        "workspace). add puts text at the end of a heading's section (the "
+        "heading is made when missing; with none, at the end of the file); "
+        "replace swaps old_text for text; remove deletes old_text. old_text "
+        f"occurs exactly once. Each change goes first to {TO_APPROVER}. A "
+        "change's result holds the file as it then reads, for this session; "
+        "later sessions read it at their start, the three files in "
+        f"{share} of their context's line together, a longer one cut with a "
+        "note of where it goes on. The file tools don't change these files; "
+        "the user edits them by hand too."
+    )
 
 
 @tool(
-    DESCRIPTION,
+    describe,
     optional=("text", "old_text", "heading", "reason"),
     summary=summary,
     ready=lambda context: context.get("own_files") is not None,

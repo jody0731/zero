@@ -265,6 +265,30 @@ def estimate_text(minutes, weighted_tokens):
     return f"{minutes:g} min and {tokens_text(weighted_tokens)}"
 
 
+def passed_text(use, minutes, weighted_tokens):
+    """What of its estimate a use passed, as the model reads it: "12 min",
+    "150,000 weighted tokens", or both; None when it passed neither. Only
+    the half passed is named: a subagent 32 s in, told it was "past your
+    estimate of 12 min and 150,000 weighted tokens", read the minutes as
+    passed."""
+    parts = []
+    if use.minutes() > minutes:
+        parts.append(f"{minutes:g} min")
+    if weighted_tokens is not None and use.weighted_tokens > weighted_tokens:
+        parts.append(tokens_text(weighted_tokens))
+    return " and ".join(parts) or None
+
+
+def against_estimate(use, minutes, weighted_tokens, whose="your"):
+    """A use against its estimate: "past the 12 min of your estimate" (only
+    what it passed), else "of your estimate of 20 min and 150,000 weighted
+    tokens"; `whose` estimate it is."""
+    passed = passed_text(use, minutes, weighted_tokens)
+    if passed is not None:
+        return f"past the {passed} of {whose} estimate"
+    return f"of {whose} estimate of {estimate_text(minutes, weighted_tokens)}"
+
+
 def past_estimate(use, minutes, weighted_tokens):
     """Whether a use passes its estimate, in minutes or weighted tokens (an
     estimate from before 0.6.8 has minutes alone)."""

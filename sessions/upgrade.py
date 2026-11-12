@@ -14,7 +14,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from core.history import LOG_FORMAT, log_format
+from core.history import LOG_FORMAT, NewerLog, log_format
 
 UPGRADED = (
     "[The turns below come from a log without a harness header: their questions "
@@ -137,6 +137,8 @@ def upgrade_file(log, header):
     log.check_lock()
     records = log.records()
     source = log_format(records)
+    if source > LOG_FORMAT:
+        raise NewerLog(source)
     if not log.path.exists() or source == LOG_FORMAT:
         return False
     original = log.path.read_bytes()

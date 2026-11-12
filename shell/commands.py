@@ -3,7 +3,10 @@
 
 A command is split into its parts (at ; && || | & newlines and parentheses),
 `bash -c` is looked inside, wrappers (`sudo`, `env`, `timeout` …) are looked
-past, and VAR=x is skipped. A command that can't be parsed raises Unparseable.
+past, and VAR=x is skipped. A command that can't be parsed raises Unparseable,
+and so does one with parts the split can't see: a substitution inside quotes,
+a process substitution. Every doubt makes the verdict stricter: a grant may
+miss a command it could have covered, never cover one it shouldn't.
 """
 
 import shlex
@@ -58,18 +61,27 @@ def split(command, depth=0):
     if "`" in command:
         raise Unparseable("backticks")
     lexer = shlex.shlex(command, posix=True, punctuation_chars=PUNCTUATION)
-    # Newlines end a command in bash, so they are separators, not spaces
+    # Newlines end a command in bash, so they are separators, not spaces.
+    # shlex takes a '#' inside a word as a comment, which bash doesn't
+    # (`echo a#b; rm x` runs the rm), so nothing is a comment here: a real
+    # comment's words only make the verdict stricter
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
+    lexer.commenters = ""
     try:
         tokens = list(lexer)
     except ValueError as e:
         raise Unparseable(str(e)) from e
     parts, words, skip = [], [], False
     for token in tokens:
+        # Inside quotes, a substitution is one word the split can't open
+        if "$(" in token:
+            raise Unparseable("a substitution inside quotes")
         if skip:
             skip = False
         elif token and all(c in PUNCTUATION for c in token):
+            if ("<" in token or ">" in token) and "(" in token:
+                raise Unparseable("a process substitution")
             if "<" in token or ">" in token:
                 # The word after a redirect is a file, not a command
                 skip = True
@@ -87,9 +99,11 @@ def split(command, depth=0):
 
 def prefix(words):
     """The words that name what a simple command does: `git push`, `docker
-    compose up`, `rm` (OpenCode's prefix()); never past an option."""
+    compose up`, `rm` (OpenCode's prefix()); never past an option. A program
+    named by its path keeps it: `./ls` is a script, not `ls`."""
+    named = [program(words[0])] + words[1:]
     for length in range(min(len(words), 3), 0, -1):
-        arity = ARITY.get(" ".join(words[:length]))
+        arity = ARITY.get(" ".join(named[:length]))
         if arity is not None:
             break
     else:
@@ -108,7 +122,7 @@ def unwrap(words, depth):
         words = words[1:]
     if not words:
         return []
-    if Path(words[0]).name not in WRAPPERS:
+    if program(words[0]) not in WRAPPERS:
         return command(words, depth)
     # Which word starts the wrapped command depends on the wrapper's options
     # (sudo -u x, nice -n 5), so every tail is checked: an extra match only
@@ -120,13 +134,19 @@ def unwrap(words, depth):
 
 
 def command(words, depth):
-    """One simple command, its program by basename; `bash -c` opened up."""
-    words = [Path(words[0]).name] + words[1:]
-    if words[0] in SHELLS:
+    """One simple command, as written; `bash -c` opened up."""
+    if program(words[0]) in SHELLS:
         for i, word in enumerate(words[1:], 1):
             if word.startswith("-") and "c" in word and i + 1 < len(words):
                 return split(words[i + 1], depth + 1)
     return [words]
+
+
+def program(word):
+    """The program a command's first word runs, by its name: `/bin/sed` is
+    sed. What it may do is judged by this name; its grant keeps the path.
+    `.` (bash's source) has no name of its own, so it is itself."""
+    return Path(word).name or word
 
 
 INTERPRETERS = {
@@ -134,8 +154,17 @@ INTERPRETERS = {
     "lua", "deno", "bun", "Rscript", "julia", "osascript", "pwsh",
     "powershell", "fish", "ksh", "tclsh", "awk", "gawk", "mawk", "nawk",
 }
+# Programs that run their arguments, or a file, as commands: another shell's
+# line, another user's, another machine's, another namespace's
+RUNNERS = {
+    "eval", "source", ".", "builtin", "trap", "watch", "setsid", "su", "sg",
+    "runuser", "pkexec", "ssh", "flock", "script", "unshare", "nsenter",
+    "chroot", "parallel", "systemd-run", "strace", "ltrace", "gdb", "busybox",
+    "firejail", "bwrap", "taskset", "chrt", "numactl", "unbuffer", "faketime",
+    "fakeroot", "proot", "newgrp", "at", "batch", "dbus-launch",
+}
 # Programs whose prefix would cover anything they run
-NEVER_GRANTED = SHELLS | WRAPPERS | INTERPRETERS
+NEVER_GRANTED = SHELLS | WRAPPERS | INTERPRETERS | RUNNERS
 # Prefixes that run whatever a project or an option says (Codex's banned
 # suggestions): `git -C x …`, a bare `npm run`
 WIDE = {"git", "npm run", "pnpm run", "yarn run", "bun run"}
@@ -151,7 +180,11 @@ NOT_COMMANDS = {"for", "case", "esac", "select", "function", "coproc"}
 # deletes, or writes a file. A grant for the program doesn't cover them
 ACTING = {
     "find": ("-exec", "-ok", "-delete", "-fprint", "-fls"),
-    "sed": ("--in-place",),
+    "sed": ("--in-place", "-f", "--file"),
+    "tar": ("--to-command", "--checkpoint-action", "--use-compress-program",
+            "-I", "--info-script", "-F", "--new-volume-script"),
+    "rsync": ("-e", "--rsh", "--rsync-path"),
+    "sort": ("--compress-program",),
 }
 
 
@@ -170,30 +203,112 @@ def prefixes(command):
         first = words[0]
         if first in NOT_COMMANDS or first.startswith("-") or first.isdigit():
             return None
-        # A program named by a variable runs whatever it holds
-        if "$" in first:
+        # A comment line, or a program named by a variable (it runs whatever
+        # the variable holds)
+        if first.startswith("#") or "$" in first:
             return None
-        if first in NEVER_GRANTED or acts(words):
+        if program(first) in NEVER_GRANTED or acts(words):
             return None
         found.add(prefix(words))
     if not found:
         return None
-    if found & WIDE:
+    # A wide program named by its path is as wide
+    named = {" ".join([program(p.split()[0])] + p.split()[1:]) for p in found}
+    if named & WIDE:
         return None
     return sorted(found)
 
 
 def acts(words):
     """Whether a simple command acts through its options (ACTING); for sed,
-    an -i among its short options (`-i`, `-i.bak`, `-ni`) too."""
-    options = ACTING.get(words[0], ())
+    an -i or -f among its short options (`-i`, `-i.bak`, `-ni`) too, or a
+    script that runs a command or writes a file."""
+    name = program(words[0])
+    options = ACTING.get(name, ())
     for word in words[1:]:
-        if word.startswith(options):
+        if options and word.startswith(options):
             return True
         short = word.startswith("-") and not word.startswith("--")
-        if words[0] == "sed" and short and "i" in word:
+        if name == "sed" and short and ("i" in word or "f" in word):
             return True
+    return name == "sed" and any(sed_acts(s) for s in sed_scripts(words))
+
+
+def sed_scripts(words):
+    """The scripts a sed command runs: each -e's, else its first operand."""
+    scripts, operands, rest = [], [], iter(words[1:])
+    for word in rest:
+        if word in ("-e", "--expression"):
+            scripts.append(next(rest, ""))
+        elif word.startswith("--expression="):
+            scripts.append(word.split("=", 1)[1])
+        elif word.startswith("-e") and len(word) > 2:
+            scripts.append(word[2:])
+        elif word in ("-l", "--line-length"):
+            next(rest, None)
+        elif not word.startswith("-"):
+            operands.append(word)
+    return scripts or operands[:1]
+
+
+# sed's commands that run a command (e) or write a file (w, W); the s
+# command's flags of the same letters do the same
+SED_ACTING = set("ewW")
+# What separates commands, and what an address is made of
+SED_SKIPPED = set("; \t\n{}0123456789$,!~+")
+# Commands that take the rest of their line: text to add, a file to read, a
+# label, a comment
+SED_TO_LINE_END = set("aicrRbtTlq:#")
+
+
+def sed_acts(script):
+    """Whether a sed script runs a command or writes a file; a script this
+    can't read through counts as one that does."""
+    i, n = 0, len(script)
+    try:
+        while i < n:
+            c = script[i]
+            if c in SED_SKIPPED:
+                i += 1
+            elif c == "/":
+                i = sed_past(script, i, "/")
+            elif c == "\\":
+                i = sed_past(script, i + 1, script[i + 1])
+            elif c in SED_ACTING:
+                return True
+            elif c in "sy":
+                delimiter = script[i + 1]
+                end = sed_past(script, i + 1, delimiter)
+                end = sed_past(script, end - 1, delimiter)
+                flags = ""
+                while end < n and script[end] not in ";\n}":
+                    flags += script[end]
+                    end += 1
+                if c == "s" and SED_ACTING & set(flags):
+                    return True
+                i = end
+            elif c in SED_TO_LINE_END:
+                i = script.find("\n", i)
+                i = n if i < 0 else i
+            else:
+                i += 1
+    except IndexError:
+        return True
     return False
+
+
+def sed_past(script, start, delimiter):
+    """The index just past a delimited part whose opening delimiter is at
+    `start`; IndexError when it never closes."""
+    i = start + 1
+    while True:
+        c = script[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == delimiter:
+            return i + 1
+        i += 1
 
 
 def prefix_words(grant):

@@ -122,6 +122,31 @@ class RoundStore:
                     db, msg_id, session, SOURCE, {"text": text, "run": id}
                 )
 
+    def finish(self, id, notice=None, **fields):
+        """A round's end, as `update`, unless the run was stopped meanwhile
+        (its handoff is a model call): then what the round used is kept, and
+        the run stays stopped, no next round queued. Whether it went on."""
+        names = ", ".join(f"{name} = ?" for name in fields)
+        with self.store.transaction() as db:
+            row = db.execute("SELECT state, session FROM rounds WHERE id = ?",
+                             (id,)).fetchone()
+            if row["state"] == "stopped":
+                fields = {name: value for name, value in fields.items()
+                          if name.startswith("spent_") or name in (
+                              "failed_count", "last_status", "check_exit_code",
+                              "check_output_path")}
+                names = ", ".join(f"{name} = ?" for name in fields)
+                notice = None
+            if fields:
+                db.execute(f"UPDATE rounds SET {names} WHERE id = ?",
+                           (*fields.values(), id))
+            if notice is not None:
+                msg_id, text = notice
+                self.store.queue_notice(
+                    db, msg_id, row["session"], SOURCE, {"text": text, "run": id}
+                )
+        return notice is not None
+
     def withdraw(self, msg_id):
         """A round's message no turn took yet, withdrawn (a stop)."""
         self.store.withdraw(msg_id)

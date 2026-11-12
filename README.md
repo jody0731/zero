@@ -43,12 +43,14 @@
 
 ## Install
 
+ZERO runs on Linux; Windows and macOS come later in its development.
+
 ```bash
 git clone https://github.com/jody0731/zero.git ~/Applications/zero
 ~/Applications/zero/install.sh
 ```
 
-The installer checks what ZERO needs, checks out the newest release, makes a Python environment in the clone (`.venv/`), installs the requirements and puts the `zero` command in `~/.local/bin` (`--bin DIR` puts it elsewhere). Nothing starts at login.
+The installer checks what ZERO needs, checks out the newest release, makes a Python environment in the clone (`.venv/`), installs the requirements and puts the `zero` command in `~/.local/bin` (`--bin DIR` puts it elsewhere). Then it runs `zero doctor`, which tries what ZERO needs from the machine (a command in the sandbox, its home) and lists what ZERO's files hold that it doesn't know; run it again any time. Nothing starts at login.
 
 <details>
 <summary><b>What it needs</b></summary>
@@ -56,6 +58,21 @@ The installer checks what ZERO needs, checks out the newest release, makes a Pyt
 - Linux, with `git`, Python 3.11 or newer (made and tested on 3.14) and its `venv` module
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`): ZERO's sandbox for the commands it runs
 - a model: an API key for a server ZERO knows (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter), or a server of your own that speaks OpenAI's Chat Completions API, such as Ollama or llama-server
+
+</details>
+
+<details>
+<summary><b>When the sandbox can't start</b></summary>
+
+bwrap needs unprivileged user namespaces. Ubuntu 23.10 and later restrict them (`kernel.apparmor_restrict_unprivileged_userns = 1`), and bwrap then fails with `setting up uid map: Permission denied`; `zero doctor` says so, and so does a command ZERO runs. Lifting the restriction lets bwrap start:
+
+```bash
+echo 'kernel.apparmor_restrict_unprivileged_userns = 0' | sudo tee /etc/sysctl.d/60-userns.conf
+sudo sysctl --system
+zero doctor
+```
+
+That lifts it for every program. Ubuntu's `apparmor` package also ships a profile that allows it for bwrap alone (`/etc/apparmor.d/bwrap-userns-restrict`), for where a release enables it.
 
 </details>
 
@@ -118,6 +135,7 @@ zero model server list                             # probe, connect, disconnect
 zero model features MODEL                          # what it honours of its API; --test
 zero setting set max_subagent_depth 1             # setting list
 zero server status                                 # whether the server runs and what keeps it busy
+zero doctor                                        # what ZERO needs from the machine, tried
 ```
 
 <details>

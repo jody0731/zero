@@ -10,7 +10,7 @@ belongs to the server that hands a session its `session_subagents`
 from core import history
 from core.tools import tool
 from subagents import SETTINGS
-from usage.spend import describe, estimate_text, past_estimate
+from usage.spend import against_estimate, describe
 
 # Who a notice from or about another session comes from; the system message
 # names who sends notices. "subagent": the harness, of a subagent's turn;
@@ -62,8 +62,8 @@ WAITING = (
 )
 # Once, when a subagent's use passes the estimate it was started with
 PAST_ESTIMATE = (
-    "Subagent {id} (\"{title}\") has used {use}, past your estimate of "
-    "{estimate}. It is still running."
+    "Subagent {id} (\"{title}\") has used {use}, past the {passed} of your "
+    "estimate. It is still running."
 )
 # A message one session sends another
 MESSAGE = "Session {id} (\"{title}\") sends:\n{text}"
@@ -81,8 +81,7 @@ def use_text(row, use):
     """What a subagent has used in all (its own subagents' included),
     against its estimate."""
     estimate = (row["estimate_minutes"], row["estimate_weighted_tokens"])
-    where = "past" if past_estimate(use, *estimate) else "of"
-    return f"{describe(use)}, {where} your estimate of {estimate_text(*estimate)}"
+    return f"{describe(use)}, {against_estimate(use, *estimate)}"
 
 
 def report_text(row, outcome, use, detail=None):
@@ -119,9 +118,8 @@ def tree_line(entry, indent=True):
     line = (f"{indent}- {entry['id']}{this} \"{entry['title']}\": {who}; "
             f"{state_text(entry)}; used {describe(entry['use'])}")
     if entry.get("estimate"):
-        past = past_estimate(entry["use"], *entry["estimate"])
-        line += (f", {'past' if past else 'of'} its estimate of "
-                 f"{estimate_text(*entry['estimate'])}")
+        line += ", " + against_estimate(entry["use"], *entry["estimate"],
+                                        whose="its")
     return line
 
 

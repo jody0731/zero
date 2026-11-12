@@ -100,6 +100,13 @@ class OutputFiles:
 
     def read(self, start):
         """The kept output from byte `start` on, and how much of it was dropped."""
+        text, dropped, _ = self.read_through(start)
+        return text, dropped
+
+    def read_through(self, start):
+        """As `read`, with the byte it read up to: the pump may write on
+        while this reads, past the size this was made with, and the next read
+        starts where this one ended, not where the size said."""
         pieces = [(0, self.start_file.read_bytes())]
         pieces += [(self.offset(p), p.read_bytes()) for p in self.tails()]
         out = bytearray()
@@ -115,7 +122,8 @@ class OutputFiles:
             out += data[position - offset:]
             position = end
         dropped += max(0, self.size - position)
-        return out.decode("utf-8", errors="replace"), dropped
+        return out.decode("utf-8", errors="replace"), dropped, max(position,
+                                                                   start)
 
 
 class Job:

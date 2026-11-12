@@ -13,6 +13,8 @@ import secrets
 import time
 from pathlib import Path
 
+import paths
+
 from server.services import Refused, Service
 from rounds import tool as roundtools
 from rounds.hooks import FAILED, STOPPED
@@ -34,7 +36,7 @@ def save(folder, name, text):
     folder.mkdir(parents=True, exist_ok=True)
     folder.chmod(0o700)
     path = folder / name
-    path.write_text(text, encoding="utf-8")
+    paths.write_whole(path, text, mode=0o600)
     return path
 
 
@@ -163,8 +165,8 @@ class SessionRounds:
             notice = (msg_id, text)
         else:
             fields["ended_at"] = self.service.clock()
-        self.service.store.update(id, notice=notice, **fields)
-        if notice is not None:
+        went_on = self.service.store.finish(id, notice=notice, **fields)
+        if went_on:
             self.service.wake()
 
 

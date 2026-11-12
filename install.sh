@@ -1,8 +1,9 @@
 #!/bin/sh
 # Z.E.R.O.'s installer, run from the clone it installs. It checks what ZERO
 # needs, checks out the newest release, makes the clone's Python environment
-# (.venv/), installs the requirements and writes the zero command. Run again,
-# it does the same, which repairs an install. ZERO's home (~/.zero) is made on
+# (.venv/), installs the requirements, writes the zero command and tries what
+# ZERO needs from the machine (zero doctor). Run again, it does the same, which
+# repairs an install. ZERO's home (~/.zero) is made on
 # first use and never touched here.
 #
 #   install.sh [--bin DIR]    DIR: where the zero command goes (~/.local/bin)
@@ -70,3 +71,7 @@ if [ -n "$BIN" ]; then
 else
     "$ROOT/.venv/bin/python" "$ROOT/apps/cli/main.py" install
 fi
+
+# What ZERO needs from this machine, tried; a need not met is said with its
+# fix, and ZERO stays installed
+"$ROOT/.venv/bin/python" "$ROOT/doctor.py" || :

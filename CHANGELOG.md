@@ -3,6 +3,43 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.1
+
+The fixes: what a full read of ZERO's code found, and ZERO kept out of the way of slow work.
+
+- **A "don't ask again" covers only the command it names.** What a remembered permission matches
+  is now read as bash runs it: a comment, a substitution inside quotes, `eval`, `sudo` or `ssh`,
+  a sed script that runs or writes, `./ls` for `ls`: each of these asks again.
+- **The sandbox hides more.** Cloud, registry and other agents' logins, browsers' profiles and
+  keyrings are hidden from sandboxed commands, and the machine's sockets (docker's, the system
+  bus, X11's, those in `/tmp`) are out of reach. A command can't plant a ZERO.md or a git hook:
+  where none exists, an empty stand-in is held read-only while it runs.
+- **`zero doctor`** checks what ZERO needs from the machine: Python, a command started in the
+  sandbox, and anything in your files this ZERO doesn't know. It runs at install; when the
+  sandbox can't start a command, the result says why (on Ubuntu, often its user-namespace
+  limit; the README shows the fix). The README says ZERO runs on Linux, and it runs on
+  Python 3.11.
+- **Your files across versions.** Each file ZERO keeps states its format. A setting or line this
+  ZERO doesn't know is reported and kept, never a refusal: one unknown key no longer refuses all
+  of `config.toml`, and lines an older `models.toml` holds no longer stop every session. A file
+  is written whole or not at all, one writer at a time; a link to it (a dotfiles repository's)
+  stays a link.
+- **The full screen never waits on the server.** It keeps drawing and taking keys while the
+  server is slow; a long delete or rewind in one session no longer holds the others, and a
+  client that falls behind follows again from the log. Long sessions read only their new lines.
+- **What ZERO knows of its sandbox:** a command there sees only its own processes, and ZERO's
+  own folder reads as missing there; SOUL.md and your ZERO.md stand under their names in its
+  system message.
+- **A subagent past its estimate is told which half it passed**, the time or the tokens, not
+  the whole estimate.
+- **Session search ranks the words said above the output that repeats them.**
+- **Smaller fixes:** a request the server didn't answer isn't sent twice; a question answered
+  just before a crash no longer waits forever; a crash no longer reads as your interruption; a
+  stop between two rounds stays stopped; a refused call isn't counted as one that ran; `zero
+  --mode auto new` opens the full screen; `zero mcp serve`'s `zero_wait` follows a dropped
+  watch; a job's output is never shown twice; `[deepseek] # mine` in `models.toml` stays one
+  table; the build's hash covers only what ships, so starting is quicker.
+
 ## 0.7.0
 
 The first release of ZERO's seventh generation: the sixth carried over as it was, ahead of the

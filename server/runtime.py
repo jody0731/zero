@@ -65,6 +65,11 @@ MAX_RESUMES = 3
 WHEN_BUSY = ("steer", "queue")
 # What a turn begun by `continue` opens with: the user's wish, not their words
 CONTINUE = "[The user asked you to go on with the task.]"
+# Events a watch may have waiting; a watcher further behind is let go with
+# a `bye` "behind", and follows again from the log, which holds them all
+WATCH_QUEUE_MAX = 2000
+# Why a watch the runtime lets go ends (protocol/messages.py)
+BEHIND = "behind"
 
 
 @dataclass
@@ -111,27 +116,35 @@ def switch_note(changes, session):
 
 
 class Watcher:
-    """One watching connection's queue: records and events, in order."""
+    """One watching connection's queue: records and events, in order, at
+    most `most` of them (design rule 12: every queue has a cap)."""
 
-    def __init__(self):
+    def __init__(self, most=None):
         self.events = deque()
+        self.most = WATCH_QUEUE_MAX if most is None else most
         self.ready = threading.Condition()
         # Why the server closes this watch: a `bye` reason, once it does
         self.bye = None
 
     def put(self, event):
         with self.ready:
+            if self.bye is not None:
+                return
             # A draft holds the whole reply so far, so a newer one replaces
             # one still queued: a slow reader gets the latest, not each
             if "draft" in event and self.events and "draft" in self.events[-1]:
                 self.events[-1] = event
+            elif len(self.events) >= self.most:
+                # Too far behind: let go, to follow again from the log
+                self.events.clear()
+                self.bye = BEHIND
             else:
                 self.events.append(event)
             self.ready.notify_all()
 
     def close(self, reason):
         with self.ready:
-            self.bye = reason
+            self.bye = self.bye or reason
             self.ready.notify_all()
 
     def take(self, timeout):
@@ -174,6 +187,8 @@ class Runtime(SessionActions):
         self.live = {}
         # One runner thread per session with work: id → thread
         self.runners = {}
+        # How many runners were ever held (hold_runner)
+        self.runners_held = 0
         # Sessions whose runner has left `runners` and still has its last word
         # to say (settled, then dispatch), as id → how many: that dispatch may
         # start a turn on a message admitted meanwhile, so nothing is at rest
@@ -449,9 +464,18 @@ class Runtime(SessionActions):
             upgrade.record_failure(log, row["id"], traceback.format_exc())
             self.store.finish(row["arrival"], sid, "failed")
             return
+        # A reply to an ask already in the log: the ask closed with it, if the
+        # server died before its row was
+        answers = [r for r in all_records
+                   if r["type"] == "answer" and r.get("inbox") == row["id"]]
+        open_ask = self.store.open_ask(sid) if answers else None
+        if open_ask is not None and open_ask["id"] == answers[-1].get("ask"):
+            self.store.close_ask(open_ask["id"], row["id"],
+                                 bool(answers[-1].get("yes")), row["source"])
+            return
         # A steer, or a reply to an ask, already in the log
-        if any((r.get("steer") or r["type"] == "answer") and r.get("inbox") == row["id"]
-               for r in all_records):
+        if answers or any(r.get("steer") and r.get("inbox") == row["id"]
+                          for r in all_records):
             self.store.mark_steer_done(row["id"])
             return
         if row["kind"] == "stop":
@@ -535,8 +559,15 @@ class Runtime(SessionActions):
                     )
                     # A stop doesn't wait on a thread past the drain
                     thread.daemon = True
-                    self.runners[sid] = thread
+                    self.hold_runner(sid, thread)
                     thread.start()
+
+    def hold_runner(self, sid, thread):
+        """`self.lock` held: `thread` is the session's runner, so no other
+        turn of it starts; counted, so a look at what is busy made in two
+        steps sees one that came between (close_if_idle)."""
+        self.runners[sid] = thread
+        self.runners_held += 1
 
     def runner(self, sid):
         """Run a session's queued messages one at a time, then leave."""
@@ -987,7 +1018,7 @@ class Runtime(SessionActions):
                 raise Refused("the session has no conversation yet")
             thread = threading.Thread(target=self._compact, args=(sid,),
                                       name=f"compact-{sid}", daemon=True)
-            self.runners[sid] = thread
+            self.hold_runner(sid, thread)
         thread.start()
         return {"compacting": "now"}
 
@@ -1042,16 +1073,28 @@ class Runtime(SessionActions):
             return self.changed.wait_for(idle, timeout)
 
     def close_if_idle(self):
-        """Take no new messages, but only if nothing is busy, in one step under
-        the lock that starting a turn takes: True if the server may go."""
+        """Take no new messages, but only if nothing is busy: True if the
+        server may go. The services are asked outside the lock that starting
+        a turn takes (design rule 12), between two looks under it: what a
+        service has at work is started by a turn, which the second look
+        sees, running or come and gone."""
         with self.lock:
-            queued = [s for s in self.store.waiting_sessions() if s not in self.blocked]
-            services = any(v for service in self.services.values()
-                           for v in service.busy_with().values())
-            if self.runners or self.leaving or queued or services:
+            if self.turns_busy():
+                return False
+            held = self.runners_held
+        if any(v for service in self.services.values()
+               for v in service.busy_with().values()):
+            return False
+        with self.lock:
+            if self.turns_busy() or self.runners_held != held:
                 return False
             self.accepting = False
             return True
+
+    def turns_busy(self):
+        """`self.lock` held: a turn runs, says its last word or can start."""
+        queued = [s for s in self.store.waiting_sessions() if s not in self.blocked]
+        return bool(self.runners or self.leaving or queued)
 
     def stop(self, timeout=10):
         """Take no new messages; give running turns up to `timeout` to end.

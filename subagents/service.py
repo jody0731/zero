@@ -41,7 +41,7 @@ from server.services import Refused, Service
 from subagents import tool as subtools
 from subagents.store import ADDED_COLUMNS, SCHEMA, SubagentStore
 from usage.spend import (
-    describe, dollars_of, estimate_text, log_use, past_estimate,
+    describe, dollars_of, log_use, passed_text, past_estimate,
 )
 
 # What send_message returns when a message went through
@@ -394,8 +394,8 @@ class SubagentsService(Service):
                     text = subtools.PAST_ESTIMATE.format(
                         id=sid, title=info["title"],
                         use=describe(use),
-                        estimate=estimate_text(
-                            row["estimate_minutes"],
+                        passed=passed_text(
+                            use, row["estimate_minutes"],
                             row["estimate_weighted_tokens"]),
                     )
                     self.store.notice(

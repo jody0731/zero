@@ -1,7 +1,6 @@
 """Plain text from log records and ask events."""
 
 import json
-import time
 from datetime import datetime
 
 

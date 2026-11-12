@@ -3,6 +3,18 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.4.3
+
+ZERO keeps working when its MCP servers bring more tools than fit.
+
+- **Many tools, found by a search.** A server's tools are sent with each request while they fit
+  their share of the context (5%, servers in your list's order); a server that doesn't fit is
+  listed by name instead, and ZERO finds its tools with `tool_search` and calls one with
+  `call_tool`. The call is the tool's own: it asks, and "this session" covers it, as if the tool
+  had been sent. The tools sent never change on a search, so the model's cache keeps working.
+  Put the servers you use most first in `~/.zero/mcp_servers.toml`, or narrow one with `--tools`.
+- **ZERO's own tools are always sent.**
+
 ## 0.7.4.2
 
 ZERO uses the tools of MCP servers, and runs a step's reads side by side.

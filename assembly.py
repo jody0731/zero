@@ -50,6 +50,7 @@ import subagents.tool
 import wait.tool
 import usage.tool
 import session_search.tool
+import found_tools.tool
 from core import history, tools
 from core.asking import PARK
 from core.loop import Session
@@ -157,7 +158,7 @@ tools.add(
     *memory.tool.TOOLS, *permissions.tool.TOOLS, *web.tool.TOOLS,
     *skills.tool.TOOLS, *context.tool.TOOLS, *rounds.tool.TOOLS,
     *subagents.tool.TOOLS, *wait.tool.TOOLS, *usage.tool.TOOLS,
-    *session_search.tool.TOOLS,
+    *session_search.tool.TOOLS, *found_tools.tool.TOOLS,
 )
 # Who sends notices, as the system message names them
 for senders in (jobs.tool.NOTICE_SENDERS, rounds.tool.NOTICE_SENDERS,
@@ -566,6 +567,10 @@ def make_session(
     session.tool_context["files"] = SeenFiles(lambda: session.log)
     # What it has used, for `usage` (a server adds its subagents')
     session.tool_context["session_use"] = SessionUse(lambda: session)
+    # The tools found at run time it can call but doesn't send, for room,
+    # which tool_search finds (found_tools/)
+    session.tool_context["deferred_tools"] = (
+        lambda: tools.deferred(session.tool_context))
     return session
 
 

@@ -91,7 +91,11 @@ TOOL_RECORD = {
         "type": {"const": "tool"},
         "tool": {**STRING, "description": "the tool's name"},
         "arguments": {**STRING, "description": "the call's arguments, as "
-                      "the model wrote them (JSON)"},
+                      "the model wrote them (JSON); for a call made through "
+                      "another tool, those it gave for this one"},
+        "called_through": {**STRING, "description": "the tool the model "
+                           "called, which called this one by its name "
+                           "(missing: it called this one itself)"},
         "result": {**STRING, "description": "the answer the model read"},
         "ran": {**BOOLEAN, "description": "the tool ran"},
         "denied": {**BOOLEAN, "description": "it was refused, so never ran"},

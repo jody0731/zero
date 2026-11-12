@@ -1968,7 +1968,11 @@
         },
         "arguments": {
           "type": "string",
-          "description": "the call's arguments, as the model wrote them (JSON)"
+          "description": "the call's arguments, as the model wrote them (JSON); for a call made through another tool, those it gave for this one"
+        },
+        "called_through": {
+          "type": "string",
+          "description": "the tool the model called, which called this one by its name (missing: it called this one itself)"
         },
         "result": {
           "type": "string",

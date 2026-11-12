@@ -1,7 +1,12 @@
 """The tool registry: a decorator declares each tool and builds its schema;
 the assembly adds the components' tools (`add`); a component's door adds the
 tools it finds at run time and takes them back (`add_found`, an MCP server's);
-calls are checked, then run."""
+calls are checked, then run.
+
+A found tool a session can call may not be sent with its requests, for room
+(`deferred`): a tool that declares `calls_by_name` calls it, and such a call
+is the named tool's own from the start (`unwrapped`), so every check, ask and
+record reads the tool that runs."""
 
 import inspect
 import json
@@ -53,7 +58,7 @@ def tool(description, optional=(), summary=None, ready=None,
          crossing=None, grant=None, written_files=None, means=None,
          fields=None, result_summary=None, reads_records=False,
          reads_in_parts=None, never_cleared=False, side_by_side=False,
-         **params):
+         calls_by_name=None, **params):
     """Declare a function as a tool the model can call: the function comes
     back marked with its declaration (`declared`), which the assembly adds to
     the registry (`add`); declaring registers nothing.
@@ -119,6 +124,11 @@ def tool(description, optional=(), summary=None, ready=None,
     where it needs no permission and crosses nothing either
     (`runs_side_by_side`), so no call that could ask is in flight with
     another.
+    `calls_by_name`: for a tool that calls a found tool by its name (one a
+    session can call but doesn't send, `deferred`), the two arguments that
+    hold the name and the arguments, an object. A well-formed call is the
+    named tool's own from the start (`unwrapped`): its checks, its ask and
+    its record are that tool's, so the tool itself never runs.
     """
 
     def declare(fn):
@@ -156,6 +166,11 @@ def tool(description, optional=(), summary=None, ready=None,
             # Arguments its schema doesn't list are refused
             "extra_arguments": False,
             "side_by_side": side_by_side,
+            "calls_by_name": calls_by_name,
+            # A found tool's (found_tool); ZERO's own are sent wherever ready
+            "reachable": None,
+            "source": None,
+            "name_at_source": None,
             "output_schema": output_schema,
             "result_summary": result_summary,
             "reads_records": reads_records,
@@ -208,22 +223,31 @@ def add(*declared):
         TOOLS[name] = entry
 
 
-def found_tool(name, description, parameters, run, *, ready, summary=None,
-               crossing=None, grant=None, extra_arguments=True,
-               output_schema=None):
+def found_tool(name, description, parameters, run, *, ready, reachable=None,
+               source=None, name_at_source=None, summary=None, crossing=None,
+               grant=None, extra_arguments=True, output_schema=None):
     """A tool found at run time, as `add_found` takes it: told to the model
     as `name`, `description` and `parameters` (a JSON schema of an object,
     the arguments), run as `run(args, context)`, which gives its Result.
-    `ready(context)`: whether a session offers it now (its door is there,
-    its server connected). Every call needs permission: what a found tool
-    says of itself isn't trusted. `extra_arguments`: whether arguments its
-    schema doesn't list go through (its schema says so), for its own side to
-    judge. The rest as `tool` declares them."""
+    `ready(context)`: whether a session sends it with its requests now (its
+    door is there, its server connected, room for it). `reachable(context)`:
+    whether a session can call it now where `ready` says it isn't sent (a
+    search finds it, `deferred`); None: only where it is sent. `source`:
+    whose it is, in a few words ("the MCP server rea"), and
+    `name_at_source`, its name there, which a search's listing groups and
+    names it by. Every call needs permission: what a found tool says of
+    itself isn't trusted. `extra_arguments`: whether arguments its schema
+    doesn't list go through (its schema says so), for its own side to judge.
+    The rest as `tool` declares them."""
     return {
         "fn": run,
         "found": True,
         "extra_arguments": extra_arguments,
         "side_by_side": False,
+        "calls_by_name": None,
+        "reachable": reachable,
+        "source": source,
+        "name_at_source": name_at_source or name,
         "output_schema": output_schema or {"type": "object", "properties": {}},
         "result_summary": None,
         "reads_records": False,
@@ -288,6 +312,71 @@ def entry_of(name):
 def entries():
     """(name, declaration) of every tool, ZERO's own first, then the found."""
     return [*TOOLS.items(), *FOUND.items()]
+
+
+def deferred(context=None):
+    """(name, entry) of each found tool a session can call but doesn't send
+    with its requests (`reachable`, not `ready`, in its `context`), in the
+    order found: what a search for tools finds, and a tool that declares
+    `calls_by_name` calls."""
+    context = context or {}
+    found = []
+    for name, entry in FOUND.items():
+        reachable = entry["reachable"]
+        if reachable is None or not reachable(context):
+            continue
+        if entry["ready"] is None or entry["ready"](context):
+            continue
+        found.append((name, entry))
+    return found
+
+
+def named_call(arguments, held_in):
+    """(the found tool's name, its arguments as a dict) from a call's
+    arguments (JSON) to a tool that calls one by name, `held_in` its two
+    arguments; or (None, what is wrong) for one that names no found tool or
+    gives its arguments as something other than an object. Arguments given
+    as JSON text are read as the object they hold."""
+    name_argument, arguments_argument = held_in
+    try:
+        args = json.loads(arguments or "{}")
+    except json.JSONDecodeError as e:
+        return None, f"the arguments are not valid JSON ({e})"
+    if not isinstance(args, dict):
+        return None, "the arguments must be a JSON object"
+    name = args.get(name_argument)
+    given = args.get(arguments_argument, {})
+    if isinstance(given, str):
+        try:
+            given = json.loads(given or "{}")
+        except json.JSONDecodeError:
+            pass
+    if not isinstance(name, str) or not name.strip():
+        return None, f"{name_argument} is the name of the tool to call"
+    name = name.strip()
+    if name in TOOLS:
+        return None, (f"{name} is among the tools sent with your requests: "
+                      "call it directly")
+    if name not in FOUND:
+        return None, f"no tool found at run time is named {name!r}"
+    if not isinstance(given, dict):
+        return None, (f"{arguments_argument} is an object of {name}'s "
+                      "arguments")
+    return (name, given), None
+
+
+def unwrapped(name, arguments):
+    """For a well-formed call to a tool that calls a found tool by its name
+    (`calls_by_name`): (that tool's name, its arguments as JSON), the call
+    it is; None for any other call."""
+    entry = TOOLS.get(name)
+    if entry is None or entry["calls_by_name"] is None:
+        return None
+    found, _ = named_call(arguments, entry["calls_by_name"])
+    if found is None:
+        return None
+    inner, given = found
+    return inner, json.dumps(given, ensure_ascii=False)
 
 
 def means_lines(context=None):
@@ -454,6 +543,8 @@ def summary(name, args, arguments, whole=False):
 
 # Before what is wrong with a call, in its error's text
 ERROR = "Error: "
+# The found tools an unknown tool's error names, the rest counted
+FOUND_NAMED_MOST = 50
 
 
 def check(name, arguments):
@@ -467,8 +558,7 @@ def check_problem(name, arguments):
     with it), the error's text without its start (ERROR)."""
     entry = entry_of(name)
     if entry is None:
-        available = ", ".join(name for name, _ in entries())
-        return None, f"unknown tool {name!r}. Available tools: {available}."
+        return None, f"unknown tool {name!r}. {available_tools()}"
     params = entry["schema"]["function"]["parameters"]
     properties = params.get("properties") or {}
     required = params.get("required") or []
@@ -496,6 +586,18 @@ def check_problem(name, arguments):
                 return None, f"bad call to {name}: {problem}."
             problem = f"missing arguments {missing}, unknown arguments {unknown}"
     return None, f"bad call to {name}: {problem}. Expected: {expected}"
+
+
+def available_tools():
+    """The tools there are, as an unknown tool's error names them: ZERO's
+    own, then the found ones while FOUND_NAMED_MOST hold them, the rest
+    counted (an MCP server can list hundreds)."""
+    found = list(FOUND)
+    named = [*TOOLS, *found[:FOUND_NAMED_MOST]]
+    text = f"Available tools: {', '.join(named)}"
+    if len(found) > FOUND_NAMED_MOST:
+        text += f", and {len(found) - FOUND_NAMED_MOST} more found at run time"
+    return text + "."
 
 
 def kind_of(schema):

@@ -92,6 +92,14 @@ class Call:
         self.id = raw.id
         self.name = raw.function.name
         self.arguments = raw.function.arguments
+        # A call to a tool that calls a found tool by its name is that
+        # tool's call: every check, ask and record reads the tool that runs,
+        # and `called_through` keeps the tool the model called
+        self.called_through = None
+        inner = tools.unwrapped(self.name, self.arguments)
+        if inner is not None:
+            self.called_through = self.name
+            self.name, self.arguments = inner
         self.key = (self.name, tools.normalise(self.arguments))
         # A malformed call has `error` set and is answered without running
         self.args, self.error = tools.check(self.name, self.arguments)
@@ -127,6 +135,8 @@ class Call:
             **({"failed": True} if self.failed else {}),
             **({"output_at": self.output_at}
                if self.output_at is not None else {}),
+            **({"called_through": self.called_through}
+               if self.called_through is not None else {}),
         }
 
 

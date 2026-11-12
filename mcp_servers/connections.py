@@ -15,9 +15,12 @@ tools (`notifications/tools/list_changed`) is listed again. At ZERO's
 server's stop, each is closed as the SDK closes it: its input closed, then
 SIGTERM, then SIGKILL, each after 2 s, its whole process tree.
 
-What a session is offered of the tools: those of its servers that fit
-TOOLS_PERCENT of its line, in the list's order (a search for the rest comes
-with many tools); a server's `tools` names the ones to offer.
+What a session sends of the tools with its requests: each server's whole,
+in the list's order, while it fits what is left of TOOLS_PERCENT of the
+line; a server that doesn't fit is skipped, its tools reachable all the
+same through a search (found_tools/, core's `deferred`), so a server's tools
+are either all sent or all found. A server's `tools` names the ones to
+offer at all.
 """
 
 import asyncio
@@ -41,9 +44,12 @@ from core.control import Stopped
 from core.tools import ERROR, Grant, Result
 from mcp_servers import adapter, listed
 
-# The share of a session's line its servers' tools may take, in characters
-# at the token a byte ZERO's own files count (the skills' list takes 2%)
+# The share of a session's line its servers' tools sent with each request
+# may take, in characters at the token a byte ZERO's own files count (the
+# skills' list takes 2%); the rest are found through a search
 TOOLS_PERCENT = 5
+# Whose a server's tools are, as a search's listing and answer say it
+SOURCE = "the MCP server {server}"
 # A server's last words on stderr kept, in characters (Pi keeps 2,000)
 STDERR_CHARS = 2000
 # Pages of a tool list read at most (Codex's 100)
@@ -362,6 +368,8 @@ class McpServers:
         return tools.found_tool(
             name, adapter.description(server_name, tool.description), schema,
             run, ready=lambda context: self.offers(name, context),
+            reachable=lambda context: self.reaches(name, context),
+            source=SOURCE.format(server=server_name), name_at_source=tool_name,
             crossing=crossing, extra_arguments=extra,
             grant=Grant("tools", lambda args: [name],
                         lambda grant: "the MCP tools "
@@ -370,38 +378,56 @@ class McpServers:
         )
 
     def offers(self, name, context):
-        """Whether a session offers the tool now: its door is this one, its
-        server is ready (or went away, to start again at the call), and it
-        fits the session's room."""
-        if context.get("mcp_servers") is not self:
+        """Whether a session sends the tool with its requests now: it can
+        reach it (`reaches`), and its server fits the session's room."""
+        if not self.reaches(name, context):
             return False
         line_chars = context.get("line_chars")
         room = line_chars() * TOOLS_PERCENT // 100 if line_chars else None
         return name in self.fitting(room)
 
+    def reaches(self, name, context):
+        """Whether a session can call the tool now: its door is this one, and
+        its server is ready (or went away, to start again at the call)."""
+        if context.get("mcp_servers") is not self:
+            return False
+        return name in self.offered_names()
+
+    def offered_names(self):
+        """Every tool of the servers that are ready, or gone to start again:
+        a server gone, or starting again after it went, keeps its tools, so
+        the next call goes to the new one."""
+        with self.lock:
+            key = ("all", self.changes)
+            if key not in self.fits:
+                self.fits[key] = frozenset(
+                    name for server in self.servers.values()
+                    if server.tools and server.state not in (FAILED, STOPPED)
+                    for name in server.tools)
+            return self.fits[key]
+
     def fitting(self, room):
-        """The names offered within `room` characters (None: no bound): the
-        ready servers' tools in the list's order while their schemas fit."""
+        """The names sent within `room` characters (None: no bound): each
+        server's tools whole, in the list's order, while their schemas fit
+        what is left; a server that doesn't fit is skipped."""
         with self.lock:
             key = (room, self.changes)
             if key in self.fits:
                 return self.fits[key]
             names, used = set(), 0
             for server in self.servers.values():
-                # A server gone, or starting again after it went, keeps
-                # its tools offered: the next call goes to the new one
                 if not server.tools or server.state in (FAILED, STOPPED):
                     continue
-                for name, (_, tool) in server.tools.items():
-                    entry = tools.FOUND.get(name)
-                    if entry is None:
-                        continue
-                    size = len(json.dumps(entry["schema"], ensure_ascii=False))
-                    if room is not None and used + size > room:
-                        continue
-                    names.add(name)
-                    used += size
-            self.fits = {key: frozenset(names)}
+                own = [name for name in server.tools if name in tools.FOUND]
+                size = sum(
+                    len(json.dumps(tools.FOUND[name]["schema"],
+                                   ensure_ascii=False))
+                    for name in own)
+                if room is not None and used + size > room:
+                    continue
+                names.update(own)
+                used += size
+            self.fits[key] = frozenset(names)
             return self.fits[key]
 
     # --------------------------------------------------------------- calls

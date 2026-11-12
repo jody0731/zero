@@ -596,11 +596,18 @@ def closing_results(records, result, closed):
     for step, raw in dangling_calls(records):
         name = raw["function"]["name"]
         arguments = raw["function"]["arguments"]
+        # A call through a tool that calls another by name is that tool's,
+        # as its record would have said (core/records.py)
+        through = {}
+        inner = tools.unwrapped(name, arguments)
+        if inner is not None:
+            through = {"called_through": name}
+            name, arguments = inner
         _, error = tools.check(name, arguments)
         yield {
             "step": step, "call": raw["id"], "tool": name, "arguments": arguments,
             "result": result, "bad_call": bool(error), "denied": False, "ran": False,
-            "notes": {}, "closed": closed,
+            "notes": {}, "closed": closed, **through,
         }
 
 

@@ -3,7 +3,7 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
-## 0.7.6
+## 0.7.3.2
 
 ZERO sizes its context closer to the truth on DeepSeek and OpenAI.
 
@@ -15,8 +15,12 @@ ZERO sizes its context closer to the truth on DeepSeek and OpenAI.
   compaction, then the call again. Elsewhere nothing changes.
 - **A server of your own** can say it refuses too long a request with
   `refuses_overlong_requests = true` in `models.toml`.
+- **Versions renumbered.** A release carries its checkpoint's number again (0, then the
+  checkpoint): the releases once called 0.7.1 to 0.7.6 are 0.7.0.1, 0.7.1, 0.7.2, 0.7.3,
+  0.7.3.1 and this one, 0.7.3.2. If `zero --version` says 0.7.4, 0.7.5 or 0.7.6, run
+  `git -C ~/Applications/zero fetch --prune --prune-tags --tags origin`, then `zero update`.
 
-## 0.7.5
+## 0.7.3.1
 
 Compacting when you ask is now a clean break, and the automatic compaction keeps more.
 
@@ -30,7 +34,7 @@ Compacting when you ask is now a clean break, and the automatic compaction keeps
   which can't be undone, comes less often.
 - **Fix.** A handoff no longer takes an answer ZERO already gave for one still to give.
 
-## 0.7.4
+## 0.7.3
 
 A compaction told what to keep: you, or ZERO itself, can say what a handoff must hold when
 a long session's context is compacted.
@@ -51,7 +55,7 @@ a long session's context is compacted.
   model server that doesn't count tokens; a file read is no longer refused as too big for a
   fresh context when it fits.
 
-## 0.7.3
+## 0.7.2
 
 The log is the truth: what ZERO keeps of a session's state is rebuilt from the session's own
 log, so a server killed at any moment comes back right.
@@ -70,7 +74,7 @@ log, so a server killed at any moment comes back right.
   moves to format 4 the next time it runs, its original kept beside it. What ZERO reads in
   your sessions stays word for word the same.
 
-## 0.7.2
+## 0.7.1
 
 Data, not words: ZERO's parts now hand each other data where they used to read each other's
 sentences, so a change of wording can't break a part that depends on it.
@@ -87,7 +91,7 @@ sentences, so a change of wording can't break a part that depends on it.
   longer points at session search in a session without it.
 - **Smaller:** the use counters a long-running server keeps for its sessions' logs have a cap.
 
-## 0.7.1
+## 0.7.0.1
 
 The fixes: what a full read of ZERO's code found, and ZERO kept out of the way of slow work.
 

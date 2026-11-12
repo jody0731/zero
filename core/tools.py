@@ -46,7 +46,7 @@ def tool(description, optional=(), summary=None, ready=None,
          needs_permission=None, validate=None, changing=False, starts_job=None,
          crossing=None, grant=None, written_files=None, means=None,
          fields=None, result_summary=None, reads_records=False,
-         reads_in_parts=None, **params):
+         reads_in_parts=None, never_cleared=False, **params):
     """Declare a function as a tool the model can call: the function comes
     back marked with its declaration (`declared`), which the assembly adds to
     the registry (`add`); declaring registers nothing.
@@ -102,6 +102,9 @@ def tool(description, optional=(), summary=None, ready=None,
     to read them. `reads_in_parts`: the two arguments that read a file in
     parts, where to start and how many lines (`part_reader`), so a text
     naming a saved file can say how to read it.
+    `never_cleared`: True for a tool whose answer the session goes on
+    following (a skill's instructions), so clearing old outputs to make
+    room leaves it whole (context/compaction.py); a handoff still sums it up.
     """
 
     def declare(fn):
@@ -138,6 +141,7 @@ def tool(description, optional=(), summary=None, ready=None,
             "result_summary": result_summary,
             "reads_records": reads_records,
             "reads_in_parts": reads_in_parts,
+            "never_cleared": never_cleared,
             "describe": describe,
             "described_arguments": described,
             "summary": summary,
@@ -259,6 +263,13 @@ def schemas(limits=None, context=None):
             }}
         told.append(schema)
     return told
+
+
+def never_cleared(name):
+    """Whether the tool's answer stays whole when old outputs are cleared;
+    False for an unknown one."""
+    found = TOOLS.get(name)
+    return found is not None and found["never_cleared"]
 
 
 def changing(name):

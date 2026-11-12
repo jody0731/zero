@@ -42,6 +42,7 @@ import files.tool
 import memory.tool
 import permissions.tool
 import web.tool
+import skills.tool
 import context.tool
 import rounds.tool
 import subagents.tool
@@ -100,7 +101,9 @@ from prompt import SETTINGS as PROMPT_SETTINGS
 from prompt.hooks import Environment, Means
 from prompt.instructions import PROJECT_FILE, read, system_prompt, user_instructions
 from memory.hooks import ZeroFilesGuard
-from paths import permissions_file
+from skills.found import SkillFolders
+from skills.hooks import Skills
+from paths import permissions_file, skills_folder
 from permissions.grants import read_saved
 from sandbox.check import check_sandbox
 from sessions.log import Log, fresh_log
@@ -147,8 +150,9 @@ settings.add(
 tools.add(
     *jobs.tool.TOOLS, *shell.tool.TOOLS, *files.tool.TOOLS,
     *memory.tool.TOOLS, *permissions.tool.TOOLS, *web.tool.TOOLS,
-    *context.tool.TOOLS, *rounds.tool.TOOLS, *subagents.tool.TOOLS,
-    *wait.tool.TOOLS, *usage.tool.TOOLS, *session_search.tool.TOOLS,
+    *skills.tool.TOOLS, *context.tool.TOOLS, *rounds.tool.TOOLS,
+    *subagents.tool.TOOLS, *wait.tool.TOOLS, *usage.tool.TOOLS,
+    *session_search.tool.TOOLS,
 )
 # Who sends notices, as the system message names them
 for senders in (jobs.tool.NOTICE_SENDERS, rounds.tool.NOTICE_SENDERS,
@@ -164,7 +168,7 @@ HERE = Path(__file__).resolve().parent
 # tools' schemas, is new code that changes what the model reads (code_mark)
 SYSTEM_MESSAGE_SOURCES = (
     "prompt/instructions.py", "prompt/hooks.py", "permissions/modes.py",
-    "sandbox/sandbox.py", "memory/hooks.py",
+    "sandbox/sandbox.py", "memory/hooks.py", "skills/hooks.py",
 )
 
 
@@ -200,6 +204,7 @@ def session_hooks(
     own=None,
     results=None,
     runs_as=None,
+    skills=None,
 ):
     """`outside`: where a call let out of the sandbox runs; None if it can't.
     `saved`: the user's saved permissions (permissions/grants.py), None for
@@ -209,7 +214,9 @@ def session_hooks(
     where nobody watches the session (a subagent ZERO started: permissions'
     `raised`); None for `mode` itself. `judge`: the judge, which in default
     answers only a round's asks. `limits`: the session's, read at each use
-    (settings.LiveSettings)."""
+    (settings.LiveSettings). `skills`: the skills folders the session finds
+    skills through (skills/found.py's SkillFolders), whose skills its system
+    message lists after ZERO's own files; None for none."""
     mode = canonical(mode)
     runs_as = canonical(runs_as or mode)
     spec = MODES[runs_as]
@@ -217,6 +224,13 @@ def session_hooks(
              Environment(sandbox, answers_line(mode, runs_as))]
     if own is not None:
         hooks.append(own)
+    if skills is not None:
+        # The list's room: a share of the session's line, in characters as
+        # ZERO's own files count theirs
+        def line_chars():
+            return room.line(limits, server.context_window) * room.BYTES_PER_TOKEN
+
+        hooks.append(Skills(skills, line_chars))
     hooks += [
         ModelRetry(limits),
         # After Context: a turn's second compaction is told of rounds
@@ -302,6 +316,7 @@ def make_session(
     fallback_model=None,
     fallback_client=None,
     unattended=False,
+    skills=None,
 ):
     """A session on the chat profile. `limits`: its limits, read at each use:
     a settings.LiveSettings (the server's, config.toml as it stands), or a
@@ -343,6 +358,10 @@ def make_session(
     name none. `fallback_client`: its client (tests).
     `unattended`: nobody watches the session (a subagent ZERO started), so
     it runs as its mode raised: default as auto, the sandbox kept.
+    `skills`: the skills folders it finds skills through (skills/found.py's
+    SkillFolders: listed in its system message, read by read_skill, ZERO's
+    own folder shown to its commands, read-only); None for none, as in the
+    evals and tests, which the user's skills never move.
     """
     if workspace is None:
         raise ValueError("a session needs a workspace")
@@ -366,6 +385,10 @@ def make_session(
         folder_of(session_log.path.parent / f"{ancestor}.jsonl")
         for ancestor in (head.get("forked_from") or {}).get("ancestors", [])
     )]
+    # ZERO's own skills sit in its home, which every sandbox hides: their
+    # folder is shown again, read-only, so their scripts run as any command
+    if skills is not None and skills.own is not None:
+        shown.append(skills.own)
     # A sandbox of its own per session: its scratch folder starts empty, and a
     # session made later can't swap it out
     if box is not None:
@@ -468,7 +491,7 @@ def make_session(
         settings["runs_as"] = runs_as
     hooks = session_hooks(
         limits, server, sandbox, mode, ask, ask_when, judge, outside,
-        saved_permissions, own, results, runs_as,
+        saved_permissions, own, results, runs_as, skills,
     )
     # On a resume, the files the cut-off turn touched that changed meanwhile
     hooks.append(ChangedFiles())
@@ -515,6 +538,8 @@ def make_session(
             # The share of the context ZERO's own files take, as it stands,
             # for the memory tool's description
             "own_files_percent": lambda: limits["result_share_percent"],
+            # The door to the skills it finds (read_skill), None for none
+            "skills": skills,
         },
         rebuild=rebuild, code_mark=lambda: code_mark(session), fallback=fallback,
     )
@@ -582,9 +607,12 @@ def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options)
         ),
         **options,
     }
-    # Only when nothing else is given: the first use writes the user's files
+    # Only when nothing else is given: the first use writes the user's files;
+    # a session that reads the user's files finds the user's skills too
     if "instructions" not in options:
         options["instructions"] = user_instructions()
+        options.setdefault(
+            "skills", SkillFolders(options["workspace"], skills_folder()))
     session = make_session(
         info["model"], log=log, mode=info["mode"], ask=ask,
         limits=limits, unattended=info.get("started_by") == "zero", **options,
@@ -638,6 +666,13 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
 MACHINE_CHECKS = {
     "The sandbox runs a command": check_sandbox,
 }
+
+
+def skill_notes(workspace):
+    """What the skills found from `workspace` say that ZERO can't use as
+    they are, a line each (`zero doctor`): a skill left out, a name found
+    twice, a description cut (skills/found.py)."""
+    return SkillFolders(workspace, skills_folder()).found().notes
 
 
 def home_file_notes():

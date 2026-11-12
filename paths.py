@@ -201,6 +201,17 @@ def permissions_file():
     return home() / "permissions.toml"
 
 
+def skills_folder():
+    """ZERO's own skills, a folder each with its SKILL.md (skills/)."""
+    return home() / "skills"
+
+
+def shared_skills_folder():
+    """The skills the agents on this machine share: the Agent Skills
+    standard's folder in the user's home (skills/)."""
+    return Path.home() / ".agents" / "skills"
+
+
 def model_features_file():
     """What each model was measured to honour of its API's features
     (model/features.py): ZERO's own record, not the user's to edit. Named

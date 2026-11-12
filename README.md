@@ -149,6 +149,10 @@ zero doctor                                        # what ZERO needs from the ma
 
 </details>
 
+### Skills
+
+ZERO uses skills by the [Agent Skills](https://agentskills.io) standard: a folder with a `SKILL.md` that says what the skill is for and how to do it, often with scripts beside it. It finds them in `~/.agents/skills` (shared by the agents on your machine), `~/.zero/skills` (ZERO's own) and a project's `.agents/skills`, nearest first. Its system message lists each one with its description; ZERO reads a skill in full when a task calls for it, and the skill's scripts run as any command does, under the session's mode. `zero doctor` names any skill ZERO can't use as it is.
+
 ## For other agents
 
 `zero mcp serve` serves ZERO as an MCP server on stdio. In Claude Code:
@@ -191,7 +195,8 @@ git -C ~/Applications/zero checkout --detach \
 | Path | What it holds |
 | --- | --- |
 | `~/Applications/zero/` | the code (this repository) and its `.venv/` |
-| `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), and in `state/` the sessions and their history (`state/sessions/results/` holds the outputs kept out of a session's context; `state/session_search.sqlite`, the search's index, is made again from the logs whenever it's gone) |
+| `~/.agents/skills/` | the skills the agents on your machine share, which ZERO reads too |
+| `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), its own skills (`skills/`), and in `state/` the sessions and their history (`state/sessions/results/` holds the outputs kept out of a session's context; `state/session_search.sqlite`, the search's index, is made again from the logs whenever it's gone) |
 
 ## Uninstall
 

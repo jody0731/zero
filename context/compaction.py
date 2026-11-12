@@ -210,10 +210,11 @@ def tool_name(record):
 
 def save_outputs(body, upto, folder, cleared, tokens=room.tokens):
     """The outputs already cleared, and each one before `upto` in `body` big
-    enough to clear (`tokens`: text's tokens), saved whole: {seq: line}."""
+    enough to clear (`tokens`: text's tokens), saved whole: {seq: line}. An
+    output its tool never clears (a skill's instructions) stays."""
     lines = dict(cleared)
     for record in body[:upto]:
-        if record["type"] != "tool":
+        if record["type"] != "tool" or tools.never_cleared(tool_name(record)):
             continue
         seq = str(record["seq"])
         if seq in lines:

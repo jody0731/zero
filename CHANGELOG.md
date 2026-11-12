@@ -3,6 +3,20 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.4.1
+
+ZERO uses skills: folders of instructions, often with scripts, by the Agent Skills standard that
+other agents share.
+
+- **Skills it finds on its own.** ZERO reads skills from `~/.agents/skills` (shared by the agents
+  on your machine), `~/.zero/skills` (its own) and a project's `.agents/skills`, nearest first. Its
+  system message lists each with its author's description; when a task calls for one, ZERO reads
+  it in full with `read_skill`, marked as the skill's own words, and runs its scripts as any
+  command, under the session's mode.
+- **`zero doctor` names skills it can't use** as they are: one with no description, frontmatter
+  that isn't YAML, or a name found twice.
+- **New requirement:** PyYAML, which `zero update` installs.
+
 ## 0.7.3.2
 
 ZERO sizes its context closer to the truth on DeepSeek and OpenAI.

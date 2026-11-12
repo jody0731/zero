@@ -5,7 +5,9 @@
 # api (the API its server speaks, model/apis/: "responses", or
 # "chat_completions" when left out),
 # context_window (its models' context window), price (USD per 1M tokens at
-# peak: cache hit, cache miss, output). Under [x.models], a model's own
+# peak: cache hit, cache miss, output), refuses_overlong_requests (true where
+# the server refuses a request longer than its context, as an error ZERO
+# knows, rather than cutting it; left out, not known). Under [x.models], a model's own
 # context_window and price. A model with no price here takes the one a
 # release filled in from models.dev's list (prices.toml), so a price is
 # written here only where that list's differs from the server's own. The
@@ -18,6 +20,8 @@ url = "https://api.deepseek.com"
 key_env = "DEEPSEEK_API_KEY"
 api = "responses"
 context_window = 1_000_000
+# Tried: 1.78M tokens came back 400, "maximum context length is 1048576"
+refuses_overlong_requests = true
 
 [deepseek.models]
 # Off-peak prices are half these
@@ -34,6 +38,8 @@ url = "http://localhost:11434/v1"
 title = "OpenAI"
 url = "https://api.openai.com/v1"
 key_env = "OPENAI_API_KEY"
+# Its docs: context_length_exceeded
+refuses_overlong_requests = true
 
 [openai.models]
 "gpt-5.6" = { context_window = 1_050_000 }

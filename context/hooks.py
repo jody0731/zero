@@ -60,14 +60,27 @@ PARTS = " It can be read in parts with {start} and {count}."
 LEAST_PREVIEW_TOKENS = 40
 
 
+def bytes_a_token(session):
+    """The bytes a token `session`'s text is estimated at: the session's own
+    (room.bytes_a_token) where its model server refuses a request longer
+    than its context, so a guess low is caught by the refusal; else, and
+    before a step has counted, one (never low). The memory reads the
+    server's facts, never its name."""
+    server = getattr(session.model, "server", None)
+    if not getattr(server, "refuses_overlong_requests", False):
+        return room.BYTES_PER_TOKEN
+    return room.bytes_a_token(session.log.branch()) or room.BYTES_PER_TOKEN
+
+
 def counter(session):
     """Text's tokens for `session`: its model server's count where it gives
-    one, else a token a byte (room.py)."""
+    one, else its bytes over the session's bytes a token (room.py)."""
     count = getattr(session.model, "count_tokens", None)
+    ratio = bytes_a_token(session)
 
     def tokens(text):
         found = count(text) if count else None
-        return room.tokens(text) if found is None else found
+        return room.tokens(text, ratio) if found is None else found
 
     return tokens
 
@@ -76,10 +89,11 @@ def counted(session):
     """Whether a model call has been made since the context's latest
     compaction, and counted it where its server reports a count. Until one
     has, the line isn't checked: a compaction leaves a context estimated
-    whole, a token a byte where the server counts nothing (four times high
-    for English), so the next check read it past the line and compacted
-    again at once (7.3's first eval). The next call goes ahead, its count
-    decides, and a refusal still meets the net."""
+    whole, a token a byte where the server counts nothing and may cut an
+    overlong request (four times high for English), so the next check read
+    it past the line and compacted again at once (7.3's first eval). The
+    next call goes ahead, its count decides, and a refusal still meets the
+    net."""
     for record in reversed(session.log.branch()):
         if record["type"] == "assistant":
             return True
@@ -95,13 +109,13 @@ def too_long(error):
     return code in (400, 413) and bool(TOO_LONG.search(str(error)))
 
 
-def preview(text, tokens):
-    """`text`'s start and end in about `tokens` tokens, cut at lines where it
-    can be; "" when there is no room for one."""
+def preview(text, tokens, bytes_a_token=room.BYTES_PER_TOKEN):
+    """`text`'s start and end in about `tokens` tokens at `bytes_a_token`,
+    cut at lines where it can be; "" when there is no room for one."""
     if tokens < LEAST_PREVIEW_TOKENS:
         return ""
     data = text.encode("utf-8")
-    side = tokens * room.BYTES_PER_TOKEN // 2
+    side = int(tokens * bytes_a_token) // 2
     head = data[:side].decode("utf-8", errors="ignore")
     tail = data[-side:].decode("utf-8", errors="ignore")
     if "\n" in head:
@@ -293,7 +307,7 @@ class Context(Hook):
         if cost <= allowed:
             return None
         path = whole_at or results.save(self.folder(), name, text)
-        shown = preview(text, allowed)
+        shown = preview(text, allowed, bytes_a_token(session))
         percent = self.limits["result_share_percent"]
         if after > left and allowed > 0:
             told = SHARE_AFTER.format(share=allowed, percent=percent, room=after)

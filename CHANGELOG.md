@@ -3,6 +3,19 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6
+
+ZERO sizes its context closer to the truth on DeepSeek and OpenAI.
+
+- **Its estimate learns from the model server's own counts.** Where the server refuses a request
+  that is too long (DeepSeek, OpenAI), ZERO now estimates new text at the rate the server's counts
+  show for this session, not at one token a byte, which read English about four times high. So
+  results get fairer shares, compactions come when they should, and clearing old outputs is
+  often enough. If a guess runs low there, the server's refusal is caught as before: one
+  compaction, then the call again. Elsewhere nothing changes.
+- **A server of your own** can say it refuses too long a request with
+  `refuses_overlong_requests = true` in `models.toml`.
+
 ## 0.7.5
 
 Compacting when you ask is now a clean break, and the automatic compaction keeps more.

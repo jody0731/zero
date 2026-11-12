@@ -186,14 +186,15 @@ def cut_points(body):
     return points
 
 
-def kept_from(body, budget):
+def kept_from(body, budget, tokens=room.tokens):
     """The index in `body` where the kept steps start: as far back as fits in
-    `budget` tokens, but never before the second cut point (something must
-    be left to hand off) nor after the newest one."""
+    `budget` tokens (`tokens`: text's tokens), but never before the second
+    cut point (something must be left to hand off) nor after the newest
+    one."""
     points = cut_points(body)
     if len(points) < 2:
         return None
-    sizes = [room.message_tokens(m) if (m := history.message(r)) else 0
+    sizes = [room.message_tokens(m, tokens) if (m := history.message(r)) else 0
              for r in body]
     chosen = points[-1]
     for point in reversed(points[1:]):
@@ -207,9 +208,9 @@ def tool_name(record):
     return record.get("tool") or "tool"
 
 
-def save_outputs(body, upto, folder, cleared):
+def save_outputs(body, upto, folder, cleared, tokens=room.tokens):
     """The outputs already cleared, and each one before `upto` in `body` big
-    enough to clear, saved whole: {seq: line}."""
+    enough to clear (`tokens`: text's tokens), saved whole: {seq: line}."""
     lines = dict(cleared)
     for record in body[:upto]:
         if record["type"] != "tool":
@@ -218,7 +219,7 @@ def save_outputs(body, upto, folder, cleared):
         if seq in lines:
             continue
         result = record.get("result") or ""
-        cost = room.tokens(result)
+        cost = tokens(result)
         if cost <= CLEAR_FROM_TOKENS:
             continue
         path = results.save(folder, f"{seq}-{tool_name(record)}.txt", result)
@@ -260,7 +261,7 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     previous = history.latest_compaction(records)
     cleared = dict(previous.get("cleared") or {}) if previous else {}
     asked_for = reason in history.ASKERS
-    start = kept_from(body, 0 if asked_for else int(at * TAIL_SHARE))
+    start = kept_from(body, 0 if asked_for else int(at * TAIL_SHARE), tokens)
     if start is None:
         raise NothingToCompact("nothing older than the newest step to hand off")
     instructions = {whose: words.strip() for whose, words in
@@ -269,7 +270,7 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     if instructions:
         fields["instructions"] = instructions
     # Clearing first: the older outputs saved whole, lines in their place
-    lines = save_outputs(body, start, folder, cleared)
+    lines = save_outputs(body, start, folder, cleared, tokens)
     kept = previous["kept_from"] if previous else body[0]["seq"]
     view = [m for r in body if (m := history.message(r)) is not None]
     after = tokens(session.messages[0]["content"])

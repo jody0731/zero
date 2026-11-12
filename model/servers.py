@@ -44,6 +44,7 @@ UNPREFIXED_SERVER = "ollama"
 SERVER_FIELDS = {
     "title": str, "url": str, "key_env": str, "api": str,
     "context_window": int, "context_stop": int, "price": list, "models": dict,
+    "refuses_overlong_requests": bool,
 }
 MODEL_FIELDS = ("context_window", "context_stop", "price")
 # Lines named otherwise before 0.6.2.8, read under their names now
@@ -93,6 +94,12 @@ class ModelServer:
         self.api = APIS[entry.get("api", DEFAULT)]
         # None: no key needed
         self.key_env = entry.get("key_env")
+        # Whether it refuses a request longer than its context, where a
+        # server may cut one silently (Ollama; llama-server with context
+        # shift): the context's estimate may then learn from its counts
+        # (context/room.py). Not known, not assumed
+        self.refuses_overlong_requests = entry.get(
+            "refuses_overlong_requests", False)
         # USD per 1M tokens at peak price: (cache hit, cache miss, output)
         price = merged.get("price")
         if not price and model:

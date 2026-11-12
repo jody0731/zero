@@ -2,12 +2,15 @@
 
 A call's size is known after it: the server counts the prompt's tokens.
 What came since (the reply, the results, the user's next message) is
-counted by the server where it can (llama.cpp's /tokenize), else taken as a
-token for every byte of UTF-8. A byte-level tokenizer gives no byte two
-tokens, so that never counts low: digits, hex and rare characters come to a
-token a byte, where a token every three bytes counted them a third (a local
-model's tokenizer, measured on 23 kinds of text). It counts English three or
-four times high, until the next call counts it.
+counted by the server where it can (llama.cpp's /tokenize). Else, where the
+server refuses a request longer than its context, it is estimated at the
+bytes a token the session's own counted steps show (bytes_a_token): a guess
+low there is caught by the refusal, one compaction and the call again.
+Where a server may cut such a request silently, or before a step has
+counted, a token for every byte of UTF-8, which never counts low: a
+byte-level tokenizer gives no byte two tokens, and digits, hex and rare
+characters come to a token a byte (measured on 23 kinds of text). It counts
+English three or four times high, until the next call counts it.
 
 The line is `compact_at_tokens`, or the model's window when it is unset, and
 never past the window. The headroom is what must fit beside the context: the
@@ -25,14 +28,19 @@ from dataclasses import dataclass
 from core import history
 
 BYTES_PER_TOKEN = 1
-# The steps a session's pace is measured over: its newest
+# The steps a session's pace, and its bytes a token, are measured over: its
+# newest
 PACE_STEPS = 20
+# A step with less between its two calls tells too little of the bytes a
+# token: a message's own wrapping counts for more there
+LEAST_STEP_BYTES = 1_000
 
 
-def tokens(text):
-    """`text`'s tokens with no count from the server: one a byte, never
-    fewer than the server's."""
-    return -(-len(text.encode("utf-8")) // BYTES_PER_TOKEN)
+def tokens(text, bytes_a_token=BYTES_PER_TOKEN):
+    """`text`'s tokens with no count from the server: its bytes over
+    `bytes_a_token`, rounded up; at one a byte, never fewer than the
+    server's."""
+    return int(-(-len(text.encode("utf-8")) // bytes_a_token))
 
 
 def message_tokens(message, count=tokens):
@@ -114,6 +122,40 @@ def tokens_a_step(records):
             last = record["prompt_tokens"]
     grown = grown[-PACE_STEPS:]
     return sum(grown) / len(grown) if grown else None
+
+
+def message_bytes(message):
+    """A message's bytes, as it is sent."""
+    return len(json.dumps(message, ensure_ascii=False).encode("utf-8"))
+
+
+def bytes_a_token(records):
+    """The bytes a token of this session's text, as its model server counts
+    it: what came between two counted calls in bytes, over the growth of the
+    server's count, the least of it over the newest PACE_STEPS steps of
+    LEAST_STEP_BYTES or more (the densest text a step held, so the estimate
+    is high rather than low), never under one; each pair of calls on one
+    context, since the latest model switch. None before a step has
+    counted."""
+    found, later, between = [], None, 0
+    for record in reversed(records):
+        kind = record["type"]
+        if kind == "session" or (kind == "system" and record.get("why") == "model"):
+            break
+        if kind in history.SYSTEM_RECORDS:
+            later, between = None, 0
+            continue
+        message = history.message(record)
+        between += message_bytes(message) if message is not None else 0
+        if kind != "assistant" or not record.get("prompt_tokens"):
+            continue
+        grown = (later or 0) - record["prompt_tokens"]
+        if later is not None and grown > 0 and between >= LEAST_STEP_BYTES:
+            found.append(between / grown)
+            if len(found) == PACE_STEPS:
+                break
+        later, between = record["prompt_tokens"], 0
+    return max(min(found), 1) if found else None
 
 
 def line(limits, window):

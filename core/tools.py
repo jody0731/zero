@@ -1,5 +1,7 @@
 """The tool registry: a decorator declares each tool and builds its schema;
-the assembly adds the components' tools (`add`); calls are checked, then run."""
+the assembly adds the components' tools (`add`); a component's door adds the
+tools it finds at run time and takes them back (`add_found`, an MCP server's);
+calls are checked, then run."""
 
 import inspect
 import json
@@ -8,6 +10,10 @@ from dataclasses import dataclass
 # The tools a session may offer, by name, in the order the model reads them:
 # what the assembly added (`add`), never what a module's import declared
 TOOLS = {}
+# The tools found at run time, after ZERO's own: what a component's door
+# added (`add_found`). Replaced whole at each change, never changed in place,
+# so a session reading it while a door changes it reads one or the other
+FOUND = {}
 
 
 @dataclass(frozen=True)
@@ -46,7 +52,8 @@ def tool(description, optional=(), summary=None, ready=None,
          needs_permission=None, validate=None, changing=False, starts_job=None,
          crossing=None, grant=None, written_files=None, means=None,
          fields=None, result_summary=None, reads_records=False,
-         reads_in_parts=None, never_cleared=False, **params):
+         reads_in_parts=None, never_cleared=False, side_by_side=False,
+         **params):
     """Declare a function as a tool the model can call: the function comes
     back marked with its declaration (`declared`), which the assembly adds to
     the registry (`add`); declaring registers nothing.
@@ -79,7 +86,8 @@ def tool(description, optional=(), summary=None, ready=None,
     `crossing(args)`: what a call crosses that is asked about first (leaving
     the sandbox, reaching the local network), or None: a dict of its "rule",
     the one sentence that says what is crossed ("fact") and the model's
-    reason ("why"). Whoever answers the ask (the user, the consent check, the
+    reason ("why"; left out by a tool with no reason argument, an MCP
+    server's). Whoever answers the ask (the user, the consent check, the
     judge) reads the same sentence (`as_clause` puts it inside theirs); the
     tool says what is crossed, in its words.
     `grant`: a Grant, what "don't ask again" grants for its calls; None
@@ -105,6 +113,12 @@ def tool(description, optional=(), summary=None, ready=None,
     `never_cleared`: True for a tool whose answer the session goes on
     following (a skill's instructions), so clearing old outputs to make
     room leaves it whole (context/compaction.py); a handoff still sums it up.
+    `side_by_side`: True for a tool whose calls may run beside the step's
+    other such calls next to them (a read, a search, a fetch): it changes
+    nothing and holds nothing another call could change. A call runs so only
+    where it needs no permission and crosses nothing either
+    (`runs_side_by_side`), so no call that could ask is in flight with
+    another.
     """
 
     def declare(fn):
@@ -137,6 +151,11 @@ def tool(description, optional=(), summary=None, ready=None,
         }
         fn.declared = {
             "fn": fn,
+            # Run with its arguments as keywords, not found at run time
+            "found": False,
+            # Arguments its schema doesn't list are refused
+            "extra_arguments": False,
+            "side_by_side": side_by_side,
             "output_schema": output_schema,
             "result_summary": result_summary,
             "reads_records": reads_records,
@@ -189,13 +208,95 @@ def add(*declared):
         TOOLS[name] = entry
 
 
+def found_tool(name, description, parameters, run, *, ready, summary=None,
+               crossing=None, grant=None, extra_arguments=True,
+               output_schema=None):
+    """A tool found at run time, as `add_found` takes it: told to the model
+    as `name`, `description` and `parameters` (a JSON schema of an object,
+    the arguments), run as `run(args, context)`, which gives its Result.
+    `ready(context)`: whether a session offers it now (its door is there,
+    its server connected). Every call needs permission: what a found tool
+    says of itself isn't trusted. `extra_arguments`: whether arguments its
+    schema doesn't list go through (its schema says so), for its own side to
+    judge. The rest as `tool` declares them."""
+    return {
+        "fn": run,
+        "found": True,
+        "extra_arguments": extra_arguments,
+        "side_by_side": False,
+        "output_schema": output_schema or {"type": "object", "properties": {}},
+        "result_summary": None,
+        "reads_records": False,
+        "reads_in_parts": None,
+        "never_cleared": False,
+        "describe": None,
+        "described_arguments": {},
+        "summary": summary,
+        "summary_cuts": False,
+        "ready": ready,
+        "needs_permission": None,
+        "validate": None,
+        # What it does is its own side's, so its answer may change on its
+        # own: the same call made again runs again
+        "changing": True,
+        "starts_job": None,
+        "crossing": crossing,
+        "grant": grant,
+        "written_files": None,
+        "means": None,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": parameters,
+            },
+        },
+    }
+
+
+def add_found(entries):
+    """Offer these found tools from now on (`found_tool`'s), after those
+    found before; one by a name ZERO's own tools hold is left out, and
+    returned by name."""
+    global FOUND
+    kept, clashing = dict(FOUND), []
+    for entry in entries:
+        name = entry["schema"]["function"]["name"]
+        if name in TOOLS:
+            clashing.append(name)
+            continue
+        kept[name] = entry
+    FOUND = kept
+    return clashing
+
+
+def remove_found(names):
+    """These found tools offered no more."""
+    global FOUND
+    gone = set(names)
+    FOUND = {name: entry for name, entry in FOUND.items() if name not in gone}
+
+
+def entry_of(name):
+    """A tool's declaration by its name, ZERO's own or found; None for an
+    unknown one."""
+    found = TOOLS.get(name)
+    return found if found is not None else FOUND.get(name)
+
+
+def entries():
+    """(name, declaration) of every tool, ZERO's own first, then the found."""
+    return [*TOOLS.items(), *FOUND.items()]
+
+
 def means_lines(context=None):
     """What each means of carrying out a task is for, a line a means, as the
     tools a session offers say it (`means`), in the order registered: only
     the means the session has, from what it hands its tools (`context`)."""
     context = context or {}
     lines = []
-    for t in TOOLS.values():
+    for _, t in entries():
         line = t["means"]
         if line is None or (t["ready"] is not None and not t["ready"](context)):
             continue
@@ -209,7 +310,7 @@ def means_lines(context=None):
 def offered(context=None):
     """(name, entry) of each tool a session offers: those ready in its
     `context`, every one without a context."""
-    for name, entry in TOOLS.items():
+    for name, entry in entries():
         if (context is None or entry["ready"] is None
                 or entry["ready"](context)):
             yield name, entry
@@ -242,7 +343,7 @@ def schemas(limits=None, context=None):
     """The tools as the model is told of them, under a session's `limits`;
     those not ready in its `context` are left out."""
     told = []
-    for t in TOOLS.values():
+    for _, t in entries():
         if t["ready"] is not None and not t["ready"](context or {}):
             continue
         schema = t["schema"]
@@ -268,20 +369,20 @@ def schemas(limits=None, context=None):
 def never_cleared(name):
     """Whether the tool's answer stays whole when old outputs are cleared;
     False for an unknown one."""
-    found = TOOLS.get(name)
+    found = entry_of(name)
     return found is not None and found["never_cleared"]
 
 
 def changing(name):
     """Whether the tool's answer changes on its own; False for an unknown one."""
-    found = TOOLS.get(name)
+    found = entry_of(name)
     return found is not None and found["changing"]
 
 
 def starts_job(name, args):
     """Whether the call starts a background job (its tool's `starts_job`
     argument is true); False for an unknown tool."""
-    found = TOOLS.get(name)
+    found = entry_of(name)
     return (found is not None and found["starts_job"] is not None
             and args.get(found["starts_job"]) is True)
 
@@ -289,7 +390,7 @@ def starts_job(name, args):
 def result_summary(name, fields):
     """What a call that ran came to, from its result's fields, in its
     tool's words (`result_summary`), or None."""
-    found = TOOLS.get(name)
+    found = entry_of(name)
     if not fields or found is None or found["result_summary"] is None:
         return None
     return found["result_summary"](fields)
@@ -297,7 +398,7 @@ def result_summary(name, fields):
 
 def crossing(name, args):
     """What the call crosses (its tool's `crossing`), or None."""
-    found = TOOLS.get(name)
+    found = entry_of(name)
     if found is None or found["crossing"] is None:
         return None
     return found["crossing"](args)
@@ -305,7 +406,7 @@ def crossing(name, args):
 
 def written_files(name, args):
     """The files the call writes (its tool's `written_files`); [] for none."""
-    found = TOOLS.get(name)
+    found = entry_of(name)
     if found is None or found["written_files"] is None:
         return []
     return list(found["written_files"](args) or [])
@@ -319,14 +420,14 @@ def as_clause(fact):
 
 def declared_grant(name):
     """The tool's Grant, or None for a tool that offers none."""
-    found = TOOLS.get(name)
+    found = entry_of(name)
     return None if found is None else found["grant"]
 
 
 def grant_fields():
     """The lists a grant may keep, as the tools declare them."""
     fields = []
-    for t in TOOLS.values():
+    for _, t in entries():
         if t["grant"] is not None and t["grant"].field not in fields:
             fields.append(t["grant"].field)
     return fields
@@ -335,14 +436,14 @@ def grant_fields():
 def needs_permission(name, args):
     """Whether a checked call needs permission (`tool`'s `needs_permission`);
     True for a tool that says nothing and for an unknown one."""
-    check = TOOLS.get(name, {}).get("needs_permission")
+    check = (entry_of(name) or {}).get("needs_permission")
     return True if check is None else bool(check(args))
 
 
 def summary(name, args, arguments, whole=False):
     """A checked call as an ask shows it; `whole`, as the judge reads it,
     with nothing cut (a write's content, an edit's strings)."""
-    entry = TOOLS.get(name, {})
+    entry = entry_of(name) or {}
     describe = entry.get("summary")
     if describe is None:
         return f"{name} {arguments}"
@@ -364,13 +465,16 @@ def check(name, arguments):
 def check_problem(name, arguments):
     """Return (args, None) for a well-formed call, or (None, what is wrong
     with it), the error's text without its start (ERROR)."""
-    if name not in TOOLS:
-        available = ", ".join(TOOLS)
+    entry = entry_of(name)
+    if entry is None:
+        available = ", ".join(name for name, _ in entries())
         return None, f"unknown tool {name!r}. Available tools: {available}."
-    params = TOOLS[name]["schema"]["function"]["parameters"]
-    properties = params["properties"]
+    params = entry["schema"]["function"]["parameters"]
+    properties = params.get("properties") or {}
+    required = params.get("required") or []
     expected = json.dumps({
-        p: f"<{s['type']}>" if p in params["required"] else f"<{s['type']}, optional>"
+        p: (f"<{kind_of(s)}>" if p in required
+            else f"<{kind_of(s)}, optional>")
         for p, s in properties.items()
     })
     try:
@@ -381,16 +485,26 @@ def check_problem(name, arguments):
         if not isinstance(args, dict):
             problem = "the arguments must be a JSON object"
         else:
-            missing = [p for p in params["required"] if p not in args]
-            unknown = [k for k in args if k not in params["properties"]]
+            missing = [p for p in required if p not in args]
+            unknown = [] if entry["extra_arguments"] else [
+                k for k in args if k not in properties]
             if not missing and not unknown:
-                validate = TOOLS[name].get("validate")
+                validate = entry.get("validate")
                 problem = validate(args) if validate is not None else None
                 if problem is None:
                     return args, None
                 return None, f"bad call to {name}: {problem}."
             problem = f"missing arguments {missing}, unknown arguments {unknown}"
     return None, f"bad call to {name}: {problem}. Expected: {expected}"
+
+
+def kind_of(schema):
+    """An argument's JSON type as the expected call names it: "any" for a
+    schema that names none (a found tool's union, say)."""
+    kind = schema.get("type") if isinstance(schema, dict) else None
+    if isinstance(kind, list):
+        return " or ".join(str(k) for k in kind)
+    return kind or "any"
 
 
 def run(name, args, context=None):
@@ -401,24 +515,40 @@ def run(name, args, context=None):
     `context`: what the session hands its tools (its sandbox); a tool gets the
     parts its function names, except a name that is one of its arguments (the
     job tool's `stop` is the model's, not the turn's stop flag). The model
-    can't set them: check() refuses any argument the schema doesn't list.
+    can't set them: check() refuses any argument the schema doesn't list. A
+    found tool gets its arguments and the whole context (`found_tool`), and
+    its fields are its own side's (an MCP tool's structured content).
     """
-    fn = TOOLS[name]["fn"]
-    wanted = inspect.signature(fn).parameters
-    arguments = TOOLS[name]["schema"]["function"]["parameters"]["properties"]
-    extra = {k: v for k, v in (context or {}).items()
-             if k in wanted and k not in arguments}
+    entry = entry_of(name)
+    fn = entry["fn"]
     try:
+        if entry["found"]:
+            answer = fn(args, dict(context or {}))
+            return answer if isinstance(answer, Result) else Result(str(answer))
+        wanted = inspect.signature(fn).parameters
+        arguments = entry["schema"]["function"]["parameters"]["properties"]
+        extra = {k: v for k, v in (context or {}).items()
+                 if k in wanted and k not in arguments}
         answer = fn(**args, **extra)
         if not isinstance(answer, Result):
             return Result(str(answer))
-        declared = TOOLS[name]["output_schema"]["properties"]
+        declared = entry["output_schema"]["properties"]
         unknown = sorted(set(answer.fields) - set(declared))
         if unknown:
             raise ValueError(f"{name} gave fields it doesn't declare: {unknown}")
         return answer
     except Exception as e:
         return Result(f"{ERROR}{type(e).__name__}: {e}", failed=True)
+
+
+def runs_side_by_side(name, args):
+    """Whether a checked call may run beside the step's other such calls next
+    to it: its tool says its calls may (`side_by_side`), and this one needs
+    no permission and crosses nothing, so it asks nobody."""
+    found = entry_of(name)
+    return (found is not None and found["side_by_side"]
+            and not needs_permission(name, args)
+            and crossing(name, args) is None)
 
 
 def normalise(arguments):

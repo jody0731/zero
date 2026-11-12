@@ -244,6 +244,27 @@ class Connection:
         """The server's key and the user's lines for it taken out."""
         return self.call(build("model/server/disconnect", name=name))
 
+    def mcp_servers(self):
+        """(the MCP servers listed, each with its state; what the list says
+        that ZERO can't use)."""
+        reply = self.call(build("mcp/list"))
+        return reply["servers"], reply["notes"]
+
+    def mcp_server(self, name):
+        """One MCP server, with its tools and its last words on stderr."""
+        return self.call(build("mcp/get", name=name))["server"]
+
+    def mcp_add(self, name, **fields):
+        """An MCP server listed, then started: the server's reply. Its start
+        may take the server's start time, so the wait is long."""
+        given = {k: v for k, v in fields.items() if v is not None}
+        request = build("mcp/add", name=name, **given)
+        return self.call(request, timeout=CONNECT_WAIT_SECONDS)
+
+    def mcp_remove(self, name):
+        """An MCP server taken off the list and stopped."""
+        return self.call(build("mcp/remove", name=name))
+
     def settings(self):
         """ZERO's settings, each with its value, and what is wrong with
         config.toml (None if nothing): the server's to read and write."""

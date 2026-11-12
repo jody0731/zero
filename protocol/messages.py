@@ -410,6 +410,44 @@ MESSAGES = {
         {"name": STRING}, required=("name",),
         reply={"removed": STRING, "default_unset": BOOLEAN},
     ),
+    "mcp/list": message(
+        "The MCP servers whose tools ZERO's sessions use, as the user listed "
+        "them, each with its state (starting, ready, failed, gone, stopped), "
+        "its error and how many tools it offers; and what the list says that "
+        "ZERO can't use. Values of env and headers are left out.",
+        reply={"servers": rows("name, transport, command, args, env, cwd, "
+                               "url, headers, tools, start_seconds, "
+                               "call_seconds, state, error, protocol_version"),
+               "notes": {"type": "array", "items": STRING}},
+    ),
+    "mcp/get": message(
+        "One MCP server: its list row, its tools as the model calls them, what "
+        "of its listing can't be offered, and its last words on stderr.",
+        {"name": STRING}, required=("name",),
+        reply={"server": OBJECT},
+    ),
+    "mcp/add": message(
+        "An MCP server listed (a command ZERO starts, or a url), or copied "
+        "from another agent's list (`from`: claude or codex; `tools` may "
+        "narrow it); then started, the reply saying how its start went. One "
+        "that fails stays listed.",
+        {"name": STRING, "command": STRING,
+         "args": {"type": "array", "items": STRING},
+         "env": {"type": "object", "additionalProperties": STRING},
+         "cwd": STRING, "url": STRING,
+         "headers": {"type": "object", "additionalProperties": STRING},
+         "tools": {"type": "array", "items": STRING},
+         "start_seconds": NUMBER, "call_seconds": NUMBER,
+         "from": one_of("claude", "codex")},
+        required=("name",),
+        reply={"server": OBJECT, "notes": {"type": "array", "items": STRING}},
+    ),
+    "mcp/remove": message(
+        "An MCP server taken off the list and stopped; its tools offered no "
+        "more.",
+        {"name": STRING}, required=("name",),
+        reply={"removed": STRING},
+    ),
     "setting/list": message(
         "ZERO's settings, each with its value, and what is wrong with "
         "config.toml (null: nothing).",

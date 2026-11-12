@@ -139,6 +139,7 @@ def search_summary(args):
     summary=search_summary,
     # It changes nothing on the machine
     needs_permission=lambda args: False,
+    side_by_side=True,
     ready=search_ready,
     query=("string", "What to search for, 1 to 128 characters"),
     count=("integer", lambda limits, context: (
@@ -269,6 +270,8 @@ def fetch_hosts(args):
     # A fetch from the internet changes nothing here; one from this machine or
     # its network may reach a service that does, and asks
     needs_permission=lambda args: args.get("local_network") is True,
+    # From the internet: beside other such calls (a local one asks, alone)
+    side_by_side=True,
     summary=fetch_summary,
     crossing=fetch_crossing,
     grant=Grant("hosts", fetch_hosts,

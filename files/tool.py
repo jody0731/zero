@@ -188,6 +188,7 @@ READ_DESCRIPTION = (
     summary=read_summary,
     # It changes nothing on the machine
     needs_permission=lambda args: False,
+    side_by_side=True,
     path=("string", "The file: relative to the workspace, or absolute"),
     offset=("integer", "The first line to read, from 1"),
     limit=("integer", "How many lines to read"),

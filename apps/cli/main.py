@@ -10,7 +10,7 @@ Usage:
                              zero session send: send, wait until the session
                              settles, print the answer (--json: one result
                              object; --events: every event, as JSON lines)
-    zero session|job|grant|model|setting ...
+    zero session|job|grant|model|setting|mcp ...
                              the plain commands, one for each of the
                              protocol's messages (commands.py)
     zero server status         whether the server runs, and what keeps it busy
@@ -18,6 +18,8 @@ Usage:
     zero server stop [--force] stop it (asked first if busy)
     zero server [--model NAME] run the server in this terminal
     zero mcp serve           ZERO as an MCP server on stdio, for other agents
+    zero mcp list|get|add|remove
+                             the MCP servers whose tools ZERO uses
     zero install [--bin DIR] put the zero command on the PATH (~/.local/bin)
     zero uninstall           remove the command
     zero update              an installed ZERO to its newest release
@@ -272,7 +274,7 @@ def run_doctor():
 
 COMMANDS = ("zero", "zero new", "zero -r", "zero -p TEXT", "zero session …",
             "zero job …", "zero grant …", "zero model …", "zero setting …",
-            "zero server hello|stop|status|run", "zero mcp serve",
+            "zero server hello|stop|status|run", "zero mcp serve|list|get|add|remove",
             "zero install|uninstall", "zero update", "zero doctor")
 OWN_COMMANDS = ("server", "mcp", "install", "uninstall", "update", "doctor")
 # The full screen's word; its flags are its own (apps/tui/main.py)
@@ -286,7 +288,9 @@ def parser_for(argv):
         parser = argparse.ArgumentParser(prog="zero")
         args = argparse.Namespace(command="tui", p=None, words=[])
         return parser, args
-    if argv and argv[0] in commands.FAMILIES:
+    # `zero mcp serve` is ZERO as an MCP server, its own entry; the rest of
+    # `zero mcp` is the family of the MCP servers ZERO uses
+    if argv and argv[0] in commands.FAMILIES and argv[:2] != ["mcp", "serve"]:
         parser = commands.parser()
         args = parser.parse_args(argv)
         args.command = "family"
@@ -305,8 +309,7 @@ def parser_for(argv):
                                 help="hello, status, stop: the reply as one "
                                      "JSON object")
         elif argv[0] == "mcp":
-            # The server side alone for now; list, get, add and remove (the
-            # servers ZERO itself uses) come with the toolbox
+            # list, get, add and remove are the family's (commands.py)
             parser.add_argument("action", choices=("serve",),
                                 help="serve: ZERO as an MCP server on stdio")
         elif argv[0] == "install":

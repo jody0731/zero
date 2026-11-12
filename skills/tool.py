@@ -54,6 +54,7 @@ def files_line(folder):
     summary=lambda args: f"read_skill {args.get('name', '')}",
     ready=lambda context: context.get("skills") is not None,
     needs_permission=lambda args: False,
+    side_by_side=True,
     never_cleared=True,
     fields={"name": ("string", "The skill's name"),
             "folder": ("string", "The skill's folder")},

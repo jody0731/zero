@@ -67,18 +67,22 @@ INTENT = (
     "asking."
 )
 # How a turn runs and ends, as facts: what a step reads (a plain turn's
-# cost), that its calls run in order (told nothing, the model believed a
-# batch ran side by side), and that the loop stops at a reply with no tool
-# call. Said as a rule ("When you have the answer, reply…"), the last tied a
-# turn to the answer, and the model held turns open with `sleep` to give one
-# reply. The rest it learns from the environment, the tools' descriptions and
-# what each call returns
+# cost), that its calls run in order but for those that run side by side
+# (told nothing, the model believed a whole batch ran side by side; core's
+# run_calls: reads, searches and fetches from the internet next to each
+# other, none of which asks), and that the loop stops at a reply with no
+# tool call. Said as a rule ("When you have the answer, reply…"), the last
+# tied a turn to the answer, and the model held turns open with `sleep` to
+# give one reply. The rest it learns from the environment, the tools'
+# descriptions and what each call returns
 TURN_FACTS = (
     "\nA turn is a run of steps. Each step is one call to your model, which "
     "reads this whole conversation again (the part its server already holds "
-    "is read from the cache); then the calls you made in that step run one "
-    "after another, in the order written, and the next step reads their "
-    "results. A turn ends at a reply in plain text with no tool call.\n"
+    "is read from the cache); then the calls you made in that step run in "
+    "the order written, except that calls next to each other that only "
+    "read (a file, a skill, a web search, a fetch from the internet) run "
+    "side by side, and the next step reads their results, each in its "
+    "call's place. A turn ends at a reply in plain text with no tool call.\n"
 )
 # What a notice is, said once: each one carries only its tag
 # (core/history.py), and each part that sends them names itself. When one is

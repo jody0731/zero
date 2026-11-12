@@ -10,6 +10,7 @@ import copy
 import secrets
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -40,6 +41,9 @@ FALLBACK = (
     "fallback model, {fallback}.]"
 )
 MAIN_AGAIN = "[Harness note: this turn runs on {main} again, the session's model.]"
+# Calls in flight at once among those running side by side; the rest wait
+# for a place (a step's calls are the queue, so it is capped by the reply)
+SIDE_BY_SIDE_MOST = 8
 
 class Parked(Exception):
     """A call waits for the user's reply: the turn stops here, its `ask` record
@@ -423,12 +427,28 @@ class Session:
 
     def run_calls(self, step, calls, first):
         """`first()`, then each call in order, then the step record and step_end's
-        decision. A parked call leaves the step open: no record until it ends."""
+        decision. A parked call leaves the step open: no record until it ends.
+
+        Calls next to each other that may run side by side
+        (tools.runs_side_by_side: a read, a search, a fetch from the
+        internet, none of which asks) are decided one by one, run together,
+        and answered in their order; the same call twice waits for the
+        first, as the repeat guard holds it back. Every other call runs
+        alone, in its place."""
         parked = False
+        together = []
         try:
             first()
             for call in calls:
+                if self.goes_side_by_side(call, together):
+                    # Those before it run first if it parks after all
+                    self.decide(call, before_park=lambda: self.run_together(
+                        together))
+                    together.append(call)
+                    continue
+                self.run_together(together)
                 self.run_call(call)
+            self.run_together(together)
         except Parked:
             parked = True
             raise
@@ -529,35 +549,105 @@ class Session:
         `approved`: a parked call the user said yes to, with the remark for the
         model; approve isn't asked again, but before_tool checks it again.
         """
+        if self.decide(call, approved):
+            if call.turn.control is not None:
+                call.turn.control.check()
+            self.take_answer(call, self.execute(call))
+        self.answer(call)
+
+    def decide(self, call, approved=None, before_park=None):
+        """Whether the call runs: every check, then its approver; a malformed
+        call gets its error and a denied one its reason, and neither runs. A
+        call that asks parks the turn here, `before_park()` first.
+        `approved`: as run_call's."""
         if call.turn.control is not None:
             call.turn.control.check()
         if call.error:
             call.result = call.error
-        else:
-            decision = self.hooks.decide("before_tool", call)
-            # The human is only asked about calls every check let through
-            if not isinstance(decision, Deny) and approved is None:
-                decision = self.hooks.decide("approve", call)
-            if isinstance(decision, Park):
-                self.park(call, decision)
-            if approved is not None and not isinstance(decision, Deny):
-                call.remarks.append(approved)
-            if isinstance(decision, Deny):
-                call.denied, call.result = True, decision.reason
-            else:
-                if call.turn.control is not None:
-                    call.turn.control.check()
-                answer = self.execute(call)
-                call.fields, call.failed = answer.fields, answer.failed
-                # Before the log keeps it: one past its share goes to a file
-                call.result = self.hooks.pipe("tool_result", answer.text, call)
-                # Where its output starts, while the text is the tool's own
-                if answer.head and call.result == answer.text:
-                    call.output_at = len(answer.head)
-                if call.remarks:
-                    call.result += "\n\n" + "\n".join(call.remarks)
+            return False
+        decision = self.hooks.decide("before_tool", call)
+        # The human is only asked about calls every check let through
+        if not isinstance(decision, Deny) and approved is None:
+            decision = self.hooks.decide("approve", call)
+        if isinstance(decision, Park):
+            if before_park is not None:
+                before_park()
+            self.park(call, decision)
+        if isinstance(decision, Deny):
+            call.denied, call.result = True, decision.reason
+            return False
+        if approved is not None:
+            call.remarks.append(approved)
+        return True
+
+    def take_answer(self, call, answer):
+        """The tool's Result as the call's: its fields, and its text as the
+        log keeps it, one past its share in a file (the tool_result pipe),
+        the hooks' remarks below."""
+        call.fields, call.failed = answer.fields, answer.failed
+        call.result = self.hooks.pipe("tool_result", answer.text, call)
+        # Where its output starts, while the text is the tool's own
+        if answer.head and call.result == answer.text:
+            call.output_at = len(answer.head)
+        if call.remarks:
+            call.result += "\n\n" + "\n".join(call.remarks)
+
+    def answer(self, call):
+        """The call's record written, and the hooks told it ended."""
         self.write("tool", **call.record())
         self.hooks.notify("after_tool", call)
+
+    def goes_side_by_side(self, call, together):
+        """Whether the call joins the calls before it that run side by side:
+        well formed, its tool's and its own say it may (tools.
+        runs_side_by_side), and not the same call as one of them."""
+        return (not call.error and tools.runs_side_by_side(call.name, call.args)
+                and all(other.key != call.key for other in together))
+
+    def run_together(self, calls):
+        """Run the calls decided to run side by side, then answer each in
+        their order; the list is emptied. A stop reaches every call in
+        flight (each tool watches the turn's stop, as one running alone
+        does); once all have returned, each is answered, an interrupted one
+        as execute answers it, and the stop goes on."""
+        batch, calls[:] = list(calls), []
+        running = [call for call in batch if not call.denied and not call.error]
+        outcomes = {}
+        if len(running) == 1:
+            call = running[0]
+            if call.turn.control is not None:
+                call.turn.control.check()
+            outcomes[call.id] = self.run_tool(call)
+        elif running:
+            with ThreadPoolExecutor(
+                max_workers=min(len(running), SIDE_BY_SIDE_MOST),
+                thread_name_prefix="side-by-side",
+            ) as pool:
+                futures = {call.id: pool.submit(self.run_tool, call)
+                           for call in running}
+            outcomes = {cid: future.result() for cid, future in futures.items()}
+        stopped = None
+        for call in batch:
+            outcome = outcomes.get(call.id)
+            if isinstance(outcome, KeyboardInterrupt):
+                self.interrupted_call(call, outcome)
+                stopped = stopped or outcome
+                continue
+            if outcome is not None:
+                self.take_answer(call, outcome)
+            self.answer(call)
+        if stopped is not None:
+            raise stopped
+
+    def run_tool(self, call):
+        """The tool run for the call: its Result, or the KeyboardInterrupt a
+        stop raised in it (run_together answers it)."""
+        call.ran = True
+        call.started_at = time.monotonic()
+        try:
+            return tools.run(call.name, call.args, self.call_context(call))
+        except KeyboardInterrupt as error:
+            return error
 
     def park(self, call, decision):
         """Write the call's `ask` record and stop the turn there, its parts
@@ -668,32 +758,40 @@ class Session:
             record["source"] = fields["source"]
         self.write("user", **record)
 
+    def call_context(self, call):
+        """What the call's tool gets besides its arguments: the session's
+        tool context, the call's own notes (where a file tool puts what it
+        changed), the turn's words (which a web search sends along), and the
+        turn's stop and steers."""
+        context = {**self.tool_context, "notes": call.notes}
+        context["request"] = call.turn.question
+        if call.turn.control is not None:
+            context["stop"] = call.turn.control.stop
+            # What has come for the turn and waits for its next step,
+            # for a call that holds the turn until something does
+            context["steers"] = call.turn.control.steers
+        return context
+
     def execute(self, call):
         """The call run: its tool's Result (core/tools.py)."""
-        t0 = time.monotonic()
         call.ran = True
+        call.started_at = time.monotonic()
         try:
-            # The call's own notes, where a file tool puts what it changed
-            context = {**self.tool_context, "notes": call.notes}
-            # The turn's own words, which a web search sends along
-            context["request"] = call.turn.question
-            if call.turn.control is not None:
-                context["stop"] = call.turn.control.stop
-                # What has come for the turn and waits for its next step,
-                # for a call that holds the turn until something does
-                context["steers"] = call.turn.control.steers
-            return tools.run(call.name, call.args, context)
+            return tools.run(call.name, call.args, self.call_context(call))
         except KeyboardInterrupt as error:
-            call.failed = True
-            call.result = (
-                f"Interrupted by the user while running, after "
-                f"{time.monotonic() - t0:.1f} s. It may have partly run, so its "
-                "outcome is unknown."
-            )
-            call.result += getattr(error, "output_detail", "")
-            self.write("tool", **call.record())
-            self.hooks.notify("after_tool", call)
+            self.interrupted_call(call, error)
             raise
+
+    def interrupted_call(self, call, error):
+        """A call a stop cut off while it ran, answered so."""
+        call.failed = True
+        call.result = (
+            f"Interrupted by the user while running, after "
+            f"{time.monotonic() - call.started_at:.1f} s. It may have partly "
+            "run, so its outcome is unknown."
+        )
+        call.result += getattr(error, "output_detail", "")
+        self.answer(call)
 
     def close_dangling_calls(self, result=NOT_STARTED, closed="not_started"):
         """Close calls without results: the API rejects an unmatched tool call.

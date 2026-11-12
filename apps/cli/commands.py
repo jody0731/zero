@@ -17,6 +17,9 @@ A message only a screen needs has no command; NO_COMMAND says why.
         probe NAME · connect NAME --model M [--url URL] [--key-stdin] ·
         disconnect NAME
     zero setting list · setting set NAME VALUE
+    zero mcp list · mcp get NAME · mcp remove NAME · mcp add NAME [--url URL]
+        [--header K=V] [--env K=V] [--cwd DIR] [--tools T,…] [--from AGENT]
+        [-- COMMAND ARGS…] (mcp serve is main.py's)
     zero server hello · server stop (main.py's, with server status and server run)
 
 How a message becomes a command:
@@ -54,7 +57,7 @@ from client.result import CHOICES, Result, still_running_line
 
 NAME = "ZERO"
 # The families main.py hands here; `server` is main.py's own
-FAMILIES = ("session", "job", "rounds", "grant", "model", "setting")
+FAMILIES = ("session", "job", "rounds", "grant", "model", "setting", "mcp")
 # The messages with no command, and why: what only a screen needs
 NO_COMMAND = {
     "session/mark_seen": "a person's read mark, which the full screen sends for what "
@@ -533,6 +536,44 @@ def parser(prog="zero"):
     json_flag(disconnect)
     disconnect.set_defaults(handler=disconnect_command)
 
+    mcp = families.add_parser(
+        "mcp", help="the MCP servers whose tools ZERO uses (mcp serve: ZERO "
+                    "as an MCP server)")
+    actions = mcp.add_subparsers(dest="action", required=True)
+    listing = actions.add_parser("list", help="each server and its state")
+    json_flag(listing)
+    listing.set_defaults(handler=mcp_list_command)
+    get = actions.add_parser("get", help="a server's tools and last words")
+    get.add_argument("name", metavar="NAME")
+    json_flag(get)
+    get.set_defaults(handler=mcp_get_command)
+    add = actions.add_parser(
+        "add", help="list a server, then start it: a command after --, a "
+                    "--url, or --from another agent's list")
+    add.add_argument("name", metavar="NAME",
+                     help="what its tools' names start with")
+    add.add_argument("words", nargs="*", metavar="COMMAND",
+                     help="the command that starts it, and its arguments")
+    add.add_argument("--url", help="a Streamable HTTP server's url")
+    add.add_argument("--header", action="append", default=[], metavar="K=V",
+                     help="an HTTP header (repeat for more)")
+    add.add_argument("--env", action="append", default=[], metavar="K=V",
+                     help="an environment variable for the command")
+    add.add_argument("--cwd", metavar="DIR", help="the command's folder")
+    add.add_argument("--tools", metavar="T,…",
+                     help="only these of its tools (by its names for them)")
+    add.add_argument("--start-seconds", type=float, metavar="S")
+    add.add_argument("--call-seconds", type=float, metavar="S")
+    add.add_argument("--from", dest="agent", choices=("claude", "codex"),
+                     help="copy NAME's entry from Claude Code's or Codex's "
+                          "list")
+    json_flag(add)
+    add.set_defaults(handler=mcp_add_command)
+    remove = actions.add_parser("remove", help="take a server off the list")
+    remove.add_argument("name", metavar="NAME")
+    json_flag(remove)
+    remove.set_defaults(handler=mcp_remove_command)
+
     setting = families.add_parser("setting", help="ZERO's settings")
     actions = setting.add_subparsers(dest="action", required=True)
     listing = actions.add_parser("list", help="every setting and its value")
@@ -891,6 +932,81 @@ def disconnect_command(connection, args, out):
     if reply.get("default_unset"):
         said += " New sessions have no model until one is connected."
     return print_reply(args, out, reply, said)
+
+
+def pairs(items, what):
+    """K=V items as a dict; ValueError for one without its =."""
+    found = {}
+    for item in items:
+        key, equals, value = item.partition("=")
+        if not equals or not key:
+            raise ValueError(f"{what} {item!r} isn't K=V")
+        found[key] = value
+    return found
+
+
+def mcp_row_line(row):
+    """A server in a line: its name, state and tools, or its error."""
+    where = row.get("url") or " ".join([row.get("command") or "",
+                                        *row.get("args", [])])
+    state = row["state"]
+    if row.get("error") and state != "ready":
+        state = f"{state}: {row['error']}"
+    elif state == "ready":
+        state = f"ready, {row['tools']} tools"
+    return f"{row['name']}  {where.strip()}  ({state})"
+
+
+def mcp_list_command(connection, args, out):
+    servers, notes = connection.mcp_servers()
+    lines = [mcp_row_line(row) for row in servers] or [
+        "No MCP server is listed: zero mcp add NAME -- COMMAND, or --url URL"]
+    lines += [f"! {note}" for note in notes]
+    return print_reply(args, out, {"ok": True, "servers": servers,
+                                   "notes": notes}, "\n".join(lines))
+
+
+def mcp_server_text(server):
+    lines = [mcp_row_line(server)]
+    if server.get("protocol_version"):
+        lines.append(f"protocol {server['protocol_version']}")
+    for tool in server.get("tool_list", []):
+        about = tool["description"].splitlines()[0] if tool["description"] else ""
+        lines.append(f"  {tool['name']}  {about[:100]}")
+    lines += [f"! {note}" for note in server.get("notes", [])]
+    if server.get("stderr"):
+        lines.append("stderr: " + server["stderr"][-500:])
+    return "\n".join(lines)
+
+
+def mcp_get_command(connection, args, out):
+    server = connection.mcp_server(args.name)
+    return print_reply(args, out, {"ok": True, "server": server},
+                       mcp_server_text(server))
+
+
+def mcp_add_command(connection, args, out):
+    fields = {"url": args.url, "cwd": args.cwd,
+              "start_seconds": args.start_seconds,
+              "call_seconds": args.call_seconds,
+              "headers": pairs(args.header, "--header") or None,
+              "env": pairs(args.env, "--env") or None,
+              "tools": [t.strip() for t in args.tools.split(",") if t.strip()]
+              if args.tools else None}
+    if args.words:
+        fields["command"], fields["args"] = args.words[0], args.words[1:]
+    if args.agent:
+        # Copied whole, but for the tools it may narrow to
+        fields = {"from": args.agent, "tools": fields["tools"]}
+    reply = connection.mcp_add(args.name, **fields)
+    lines = [mcp_server_text(reply["server"])] if reply.get("server") else []
+    lines += [f"! {note}" for note in reply.get("notes", [])]
+    return print_reply(args, out, reply, "\n".join(lines))
+
+
+def mcp_remove_command(connection, args, out):
+    reply = connection.mcp_remove(args.name)
+    return print_reply(args, out, reply, f"Removed {reply['removed']}.")
 
 
 def setting_list_command(connection, args, out):

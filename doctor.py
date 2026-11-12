@@ -1,7 +1,8 @@
 """`zero doctor`: what ZERO needs from this machine, each need checked by
 trying it (design rule 8; the checks are the components', declared to the
-assembly), then what ZERO's files say that this ZERO doesn't know, and what
-of the skills a session in this folder would find ZERO can't use as it is.
+assembly), then what ZERO's files say that this ZERO doesn't know, what
+of the skills a session in this folder would find ZERO can't use as it is,
+and what of the MCP servers listed it can't (a command not found here).
 The command line runs this in its own place, as it runs the server, so it
 never loads the harness itself; install.sh runs it once ZERO is in place.
 Exit code 0 when ZERO can run here, 1 when a need isn't met.
@@ -40,6 +41,8 @@ def report():
     lines += [(NOTE, note) for note in assembly.home_file_notes()]
     # The skills a session here would find, as the folder it runs in says
     lines += [(NOTE, note) for note in assembly.skill_notes(Path.cwd())]
+    # The MCP servers listed: what ZERO can't use, a command not found
+    lines += [(NOTE, note) for note in assembly.mcp_server_notes()]
     return lines
 
 

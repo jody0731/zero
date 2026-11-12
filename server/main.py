@@ -21,21 +21,22 @@ import assembly  # noqa: E402
 import settings  # noqa: E402
 from server.runtime import Runtime  # noqa: E402
 from server.server import AlreadyRunning, Server  # noqa: E402
-from paths import Paths, permissions_file  # noqa: E402
+from paths import Paths, mcp_servers_file, permissions_file  # noqa: E402
 
 
 def build_runtime(paths, make_session=None, config=None, limits=None,
                   make_consent=None, saved_permissions=permissions_file,
-                  tick=2.0, **options):
+                  tick=2.0, mcp_servers=mcp_servers_file, **options):
     """ZERO's runtime, put together as the server runs it: the assembly's
     sessions, modes and services. `make_session`: in place of the assembly's
     (tests, the evals); `limits` over the config's for the assembly's.
-    `make_consent`, `saved_permissions` and `tick` go to the services
-    (assembly.services); `options` to the Runtime."""
+    `make_consent`, `saved_permissions`, `tick` and `mcp_servers` go to the
+    services (assembly.services); `options` to the Runtime."""
     config = config or (lambda: settings.DEFAULTS)
     if make_session is None:
         make_session = assembly.server_session_maker(paths, config, limits)
-    services = assembly.services(config, make_consent, saved_permissions, tick)
+    services = assembly.services(config, make_consent, saved_permissions, tick,
+                                 mcp_servers)
     return Runtime(paths, make_session, tuple(assembly.MODES), services=services,
                    config=config, **options)
 

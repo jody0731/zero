@@ -5,8 +5,9 @@ At the home's top are the user's files: config.toml (the settings,
 settings.py), keys.toml (API keys), models.toml (the model servers they
 added, model/), SOUL.md (who ZERO is), ZERO.md (the user, their machines,
 their instructions and what ZERO remembers; both written from the templates
-on first use) and permissions.toml (the permissions they saved from an ask);
-all optional. state/ is the server's and lasts: the database, session logs,
+on first use), permissions.toml (the permissions they saved from an ask),
+mcp_servers.toml (the MCP servers whose tools ZERO uses) and skills/ (ZERO's
+own skills); all optional. state/ is the server's and lasts: the database, session logs,
 trajectories, locks, jobs' output, the trash, server.log and crashes.log. run/
 holds the running server's socket and locks. The sandbox hides the whole home
 from commands. Each home's server runs as a systemd unit of its own: zero-server
@@ -199,6 +200,12 @@ def models_file():
 def permissions_file():
     """The permissions the user saved from an ask."""
     return home() / "permissions.toml"
+
+
+def mcp_servers_file():
+    """The MCP servers whose tools ZERO uses, as the user listed them
+    (mcp_servers/)."""
+    return home() / "mcp_servers.toml"
 
 
 def skills_folder():

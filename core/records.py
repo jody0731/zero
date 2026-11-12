@@ -97,6 +97,8 @@ class Call:
         self.args, self.error = tools.check(self.name, self.arguments)
         self.result = None
         self.denied = self.ran = False
+        # When its tool started running (time.monotonic), once it has
+        self.started_at = None
         # What its tool's answer carries beside its text (core/tools.py's
         # Result): its fields, whether it failed, and where its output
         # starts in `result` while that is the tool's own text

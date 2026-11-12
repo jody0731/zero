@@ -3,6 +3,21 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.4.2
+
+ZERO uses the tools of MCP servers, and runs a step's reads side by side.
+
+- **MCP servers.** `zero mcp add NAME -- COMMAND` (or `--url URL`, or `--from claude` / `--from
+  codex` to copy an entry you have) lists a server in `~/.zero/mcp_servers.toml`; `zero mcp list`,
+  `get` and `remove` look after it. ZERO starts the servers in the background with its server,
+  and a session is offered their tools as `mcp__NAME__TOOL`, their descriptions and answers marked
+  as the server's. Each call runs outside the sandbox and asks as a command that leaves it does.
+  A server that goes away is started again at the next call; a call is never sent twice.
+- **A step's reads side by side.** Reads, skills read, web searches and fetches from the internet
+  that the model asks for together run at the same time, and come back in order. Anything that
+  could ask still runs alone.
+- **`zero doctor`** names an MCP server whose command isn't found on the machine.
+
 ## 0.7.4.1
 
 ZERO uses skills: folders of instructions, often with scripts, by the Agent Skills standard that

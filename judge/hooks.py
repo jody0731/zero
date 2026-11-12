@@ -49,7 +49,10 @@ def command_text(call, whole=False):
     core/tools.py), anything else its raw arguments, and what it crosses."""
     command = tools.summary(call.name, call.args, call.arguments, whole)
     crossing = tools.crossing(call.name, call.args)
-    if crossing is not None:
+    if crossing is not None and "why" not in crossing:
+        # A tool with no reason argument (an MCP server's): the fact alone
+        command += PAST_LIMIT.format(tools.as_clause(crossing["fact"]))
+    elif crossing is not None:
         reason = str(crossing["why"] or "").strip() or "none given"
         command += CROSSING.format(tools.as_clause(crossing["fact"]), reason)
     # A call past a soft cap (jobs/hooks.py); the history has no notes

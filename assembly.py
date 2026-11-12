@@ -32,6 +32,7 @@ import contextlib
 import hashlib
 import io
 import json
+import shutil
 from pathlib import Path
 
 import settings
@@ -103,7 +104,11 @@ from prompt.instructions import PROJECT_FILE, read, system_prompt, user_instruct
 from memory.hooks import ZeroFilesGuard
 from skills.found import SkillFolders
 from skills.hooks import Skills
-from paths import permissions_file, skills_folder
+from mcp_servers import SETTINGS as MCP_SERVER_SETTINGS
+from mcp_servers import listed as mcp_servers_listed
+from mcp_servers.hooks import McpServersStarting
+from mcp_servers.service import McpServersService
+from paths import mcp_servers_file, permissions_file, skills_folder
 from permissions.grants import read_saved
 from sandbox.check import check_sandbox
 from sessions.log import Log, fresh_log
@@ -125,7 +130,7 @@ SETTINGS_ORDER = (
     "bash_foreground_seconds", "bash_output_kept_chars", "repeat_after_seconds",
     "max_file_megabytes",
     "web_timeout", "web_fetch_max_megabytes", "web_fetch_max_redirects",
-    "web_search_max_results",
+    "web_search_max_results", "mcp_start_seconds", "mcp_call_seconds",
     "compact_at_tokens", "result_share_percent", "reply_room_tokens",
     "handoff_room_tokens", "context_note_every_tokens",
     "session_search_count", "session_search_each_side",
@@ -142,7 +147,7 @@ settings.add(
     *JOB_SETTINGS, *SUBAGENT_SETTINGS,
     *SHELL_SETTINGS,
     *FILE_SETTINGS, *WEB_SETTINGS, *JUDGE_SETTINGS, *PERMISSION_SETTINGS,
-    *SESSION_SEARCH_SETTINGS, *PROMPT_SETTINGS,
+    *SESSION_SEARCH_SETTINGS, *PROMPT_SETTINGS, *MCP_SERVER_SETTINGS,
     order=SETTINGS_ORDER,
 )
 # The tools, in the order the model reads them (the system message lists
@@ -233,6 +238,8 @@ def session_hooks(
         hooks.append(Skills(skills, line_chars))
     hooks += [
         ModelRetry(limits),
+        # A model call waits a little for MCP servers still starting
+        McpServersStarting(),
         # After Context: a turn's second compaction is told of rounds
         Context(server.context_window, results, limits),
         Rounds(),
@@ -540,6 +547,10 @@ def make_session(
             "own_files_percent": lambda: limits["result_share_percent"],
             # The door to the skills it finds (read_skill), None for none
             "skills": skills,
+            # The session's line in characters, as ZERO's own files count
+            # them: the room found tools' schemas share (an MCP server's)
+            "line_chars": lambda: (room.line(limits, server.context_window)
+                                   * room.BYTES_PER_TOKEN),
         },
         rebuild=rebuild, code_mark=lambda: code_mark(session), fallback=fallback,
     )
@@ -642,12 +653,14 @@ def server_session_maker(paths, config, limits=None):
 
 
 def services(config, make_consent=None, saved_permissions=permissions_file,
-             tick=2.0):
+             tick=2.0, mcp_servers=mcp_servers_file):
     """The components' services in the server (server/services.py).
     `make_consent(model)` builds the consent check for a session's model; by
     default on `config()`'s consent_silence_seconds, read at each check.
     `saved_permissions()`: the user's file of saved permissions; None for
-    none (the evals). `tick`: how often jobs' check-ins are looked for."""
+    none (the evals). `tick`: how often jobs' check-ins are looked for.
+    `mcp_servers()`: the user's list of MCP servers, whose tools the
+    server's sessions are offered; None for none (the evals)."""
     if make_consent is None:
         def silence():
             return LiveSettings(config)["consent_silence_seconds"]
@@ -657,7 +670,8 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
 
     return [JobsService(tick=tick), PermissionsService(make_consent, saved_permissions),
             ModelService(), ContextService(), RoundsService(),
-            SubagentsService(), SessionSearchService()]
+            SubagentsService(), SessionSearchService(),
+            McpServersService(mcp_servers, LiveSettings(config))]
 
 
 # What ZERO needs from the machine, each need's check, declared here once
@@ -673,6 +687,19 @@ def skill_notes(workspace):
     they are, a line each (`zero doctor`): a skill left out, a name found
     twice, a description cut (skills/found.py)."""
     return SkillFolders(workspace, skills_folder()).found().notes
+
+
+def mcp_server_notes():
+    """What the user's list of MCP servers says that ZERO can't use as it
+    is, and each listed command not found on this machine (design rule 8:
+    checked, not assumed), a line each (`zero doctor`)."""
+    found = mcp_servers_listed.read(mcp_servers_file())
+    notes = list(found.notes)
+    for entry in found.entries:
+        if entry.command and shutil.which(entry.command) is None:
+            notes.append(f"MCP server {entry.name}: its command, "
+                         f"{entry.command}, isn't found on this machine")
+    return notes
 
 
 def home_file_notes():

@@ -153,6 +153,10 @@ zero doctor                                        # what ZERO needs from the ma
 
 ZERO uses skills by the [Agent Skills](https://agentskills.io) standard: a folder with a `SKILL.md` that says what the skill is for and how to do it, often with scripts beside it. It finds them in `~/.agents/skills` (shared by the agents on your machine), `~/.zero/skills` (ZERO's own) and a project's `.agents/skills`, nearest first. Its system message lists each one with its description; ZERO reads a skill in full when a task calls for it, and the skill's scripts run as any command does, under the session's mode. `zero doctor` names any skill ZERO can't use as it is.
 
+### MCP servers
+
+ZERO uses the tools of [MCP](https://modelcontextprotocol.io) servers: a command it starts (stdio) or a url (Streamable HTTP). List one with `zero mcp add NAME -- COMMAND ARGS`, or `zero mcp add NAME --url URL`, or copy an entry you already have with `zero mcp add NAME --from claude` (or `--from codex`); `--tools a,b` offers only those tools. `zero mcp list` shows each server and its state, `zero mcp get NAME` its tools and its last words on stderr, `zero mcp remove NAME` takes it off. ZERO starts the servers in the background when its server starts and stops them when it stops; their tools reach a session as `mcp__NAME__TOOL`, marked as the server's own words. A server runs outside the sandbox, so each call asks as a command that leaves it does: you answer in `default` (Yes, this session covers that tool), the judge in `auto` and `auto+`, nobody in `readOnly`. A command gets only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER` and the entry's own `env`.
+
 ## For other agents
 
 `zero mcp serve` serves ZERO as an MCP server on stdio. In Claude Code:
@@ -196,6 +200,7 @@ git -C ~/Applications/zero checkout --detach \
 | --- | --- |
 | `~/Applications/zero/` | the code (this repository) and its `.venv/` |
 | `~/.agents/skills/` | the skills the agents on your machine share, which ZERO reads too |
+| `~/.zero/mcp_servers.toml` | the MCP servers whose tools ZERO uses (`zero mcp add`), mode 600: an entry's `env` and `headers` may hold tokens |
 | `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), its own skills (`skills/`), and in `state/` the sessions and their history (`state/sessions/results/` holds the outputs kept out of a session's context; `state/session_search.sqlite`, the search's index, is made again from the logs whenever it's gone) |
 
 ## Uninstall

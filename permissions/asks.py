@@ -42,11 +42,15 @@ class Asks(Hook):
                 "about": PLAN_ABOUT,
             }
         elif crossing is not None:
-            why = str(crossing["why"] or "").strip() or "no reason given"
+            reason = tools.as_clause(crossing["fact"])
+            # A tool with no reason argument (an MCP server's) gives no
+            # `why`: its fact is the whole reason
+            if "why" in crossing:
+                why = str(crossing["why"] or "").strip() or "no reason given"
+                reason = f"{reason}: {why.rstrip('.')}"
             call.notes["rule"] = {
                 "rule": crossing["rule"], "action": "ask",
-                "reason": f"{tools.as_clause(crossing['fact'])}: {why.rstrip('.')}",
-                "about": crossing["fact"],
+                "reason": reason, "about": crossing["fact"],
             }
         return None
 

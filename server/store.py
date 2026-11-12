@@ -1,9 +1,12 @@
 """The runtime's state in SQLite: what is waiting and what is running.
 
-History lives in the session logs (sessions/log.py); this holds the inbox, the
-session list and the asks waiting for a reply, and the server services' tables
-(jobs/store.py). Every change is one transaction, committed before the caller
-goes on, so a message that got its ack is on disk. The database is born with
+History lives in the session logs (sessions/log.py), the truth (design rule
+9); this holds the inbox, the session list and the asks waiting for a reply,
+and the server services' tables (jobs/store.py). What of it the log says is
+rebuilt from the log (server/rebuild.py): a session's row keeps the newest
+record its rows are in step with (`log_seq`). Every change is one
+transaction, committed before the caller goes on, so a message that got its
+ack is on disk. The database is born with
 its whole schema; a column renamed since a database was made is renamed in
 place when it opens (`RENAMED_COLUMNS`). `on_change` hears each committed
 transaction: the server's live session list.
@@ -22,7 +25,7 @@ from core import history
 
 # The database's format, its user_version: a newer ZERO's database is read for
 # what this one knows of it, and said
-FILE_FORMAT = 1
+FILE_FORMAT = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -51,7 +54,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- any other
     parent TEXT,
     -- Who started it: zero (a subagent), else the user (NULL before 0.6.7)
-    started_by TEXT
+    started_by TEXT,
+    -- The newest log record its rows are in step with: a log past it is
+    -- rebuilt from at start (server/rebuild.py)
+    log_seq INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS inbox (
     -- The order messages arrived in
@@ -80,7 +86,12 @@ CREATE TABLE IF NOT EXISTS asks (
     turn TEXT NOT NULL,
     tool TEXT NOT NULL,
     command TEXT NOT NULL,
+    -- The rule's words with the reason, as the models read them
     why TEXT NOT NULL,
+    -- Its parts: the reason the user reads ('' for none), and what the ask
+    -- is about where the rule says it
+    reason TEXT NOT NULL DEFAULT '',
+    about TEXT,
     -- open, approved, cancelled
     status TEXT NOT NULL,
     created_at REAL NOT NULL,
@@ -100,13 +111,32 @@ RENAMED_COLUMNS = {
 }
 # Columns added since a database was made (0.6.6, 0.6.7): table → {name:
 # its SQL type}, added when the store opens (add_columns)
-ADDED_COLUMNS = {"sessions": {"parent": "TEXT", "started_by": "TEXT"}}
+ADDED_COLUMNS = {
+    "sessions": {"parent": "TEXT", "started_by": "TEXT",
+                 "log_seq": "INTEGER NOT NULL DEFAULT 0"},
+    "asks": {"reason": "TEXT NOT NULL DEFAULT ''", "about": "TEXT"},
+}
 # Beside the database, a copy of it as it was before a rename
 BACKUP_SUFFIX = ".before-renames-"
 # A user message that waits for the turn's answer instead of steering it
 FOLLOW_UP = "json_extract(payload, '$.follow_up') IS NOT NULL"
 # A notice: any message but a user's and a stop (a job's, jobs/service.py)
 NOTICE = "kind NOT IN ('user', 'stop')"
+# The stops not yet done sent to a turn: (session, the turn's message's
+# arrival and its id twice); a stop names its turn, or else is the next one's
+STOP_OF_TURN = (
+    "session = ? AND kind = 'stop' AND status != 'done' AND arrival > ? AND "
+    "COALESCE(json_extract(payload, '$.turn'), ?) = ?"
+)
+
+
+def stops_done(db, session, arrival):
+    """Inside a transaction: the stops sent to the turn of the message that
+    arrived at `arrival` are done with it."""
+    row = db.execute("SELECT id FROM inbox WHERE arrival = ?", (arrival,)).fetchone()
+    if row is not None:
+        db.execute(f"UPDATE inbox SET status = 'done' WHERE {STOP_OF_TURN}",
+                   (session, arrival, row[0], row[0]))
 
 
 class UnknownSession(Exception):
@@ -260,9 +290,11 @@ class Store:
         """A turn started on this message: the row delivered, the session running."""
         self._move(arrival, session, "delivered", "running")
 
-    def finish(self, arrival, session, state):
-        """Its turn ended: the row done, the session idle or failed."""
-        self._move(arrival, session, "done", state)
+    def finish(self, arrival, session, state, log_seq=None):
+        """Its turn ended: the row done, and the stops sent to it; the session
+        idle or failed, its rows in step with the log up to `log_seq` (its
+        turn_end's), when given."""
+        self._move(arrival, session, "done", state, log_seq)
 
     def requeue(self, arrival, session):
         self._move(arrival, session, "queued", "idle")
@@ -280,14 +312,17 @@ class Store:
                 (time.time(), session),
             )
 
-    def _move(self, arrival, session, status, state):
+    def _move(self, arrival, session, status, state, log_seq=None):
         with self.transaction() as db:
             db.execute(
                 "UPDATE inbox SET status = ? WHERE arrival = ?", (status, arrival)
             )
+            if status == "done":
+                stops_done(db, session, arrival)
             db.execute(
-                "UPDATE sessions SET state = ?, updated_at = ? WHERE id = ?",
-                (state, time.time(), session),
+                "UPDATE sessions SET state = ?, updated_at = ?, "
+                "log_seq = COALESCE(?, log_seq) WHERE id = ?",
+                (state, time.time(), log_seq, session),
             )
 
     # A notice starts a turn only while its session isn't parked on an ask (a
@@ -375,18 +410,21 @@ class Store:
 
     def park(self, session, ask, turn):
         """A turn parked on `ask` (its log record): the ask open, the session
-        waiting. Kept once: the boot repair may write it again."""
+        waiting, its rows in step with the log up to the ask. Kept once: the
+        boot repair may write it again."""
         created_at = datetime.fromisoformat(ask["time"]).timestamp()
         with self.transaction() as db:
             db.execute(
                 "INSERT OR IGNORE INTO asks (id, session, call, turn, tool, command, "
-                "why, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+                "why, reason, about, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
                 (ask["ask"], session, ask["call"], turn, ask["tool"],
-                 str(ask["command"]), ask["why"], created_at),
+                 str(ask["command"]), ask["why"], ask["reason"],
+                 ask.get("about"), created_at),
             )
             db.execute(
-                "UPDATE sessions SET state = 'waiting', updated_at = ? WHERE id = ?",
-                (time.time(), session),
+                "UPDATE sessions SET state = 'waiting', updated_at = ?, "
+                "log_seq = ? WHERE id = ?", (time.time(), ask["seq"], session),
             )
 
     def close_ask(self, ask, reply, yes, source):
@@ -444,6 +482,37 @@ class Store:
                 (msg_id,),
             )
 
+    def rebuild(self, session, rows, records, services=()):
+        """The session's rows as its log says (server/rebuild.py's
+        KernelRows), and each service's (`services`: their `rebuild`), in one
+        transaction."""
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE sessions SET state = ?, end_seq = ?, log_seq = ? "
+                "WHERE id = ?", (rows.state, rows.end_seq, rows.log_seq, session),
+            )
+            db.execute("DELETE FROM asks WHERE session = ?", (session,))
+            db.executemany(
+                "INSERT INTO asks (id, session, call, turn, tool, command, why, "
+                "reason, about, status, created_at, closed_at, reply, source) "
+                "VALUES (:id, :session, :call, :turn, :tool, :command, :why, "
+                ":reason, :about, :status, :created_at, :closed_at, :reply, "
+                ":source)",
+                [{**ask, "session": session} for ask in rows.asks],
+            )
+            for id, status in rows.inbox.items():
+                db.execute(
+                    "UPDATE inbox SET status = ? WHERE id = ? AND session = ?",
+                    (status, id, session),
+                )
+                found = db.execute(
+                    "SELECT arrival FROM inbox WHERE id = ?", (id,)
+                ).fetchone()
+                if status == "done" and found is not None:
+                    stops_done(db, session, found[0])
+            for rebuild in services:
+                rebuild(db, session, records)
+
     def unfinished_rows(self):
         """Rows not done, oldest first: what the boot repair looks at."""
         return self.query("SELECT * FROM inbox WHERE status != 'done' ORDER BY arrival")
@@ -490,11 +559,13 @@ class Store:
         )
         return rows[0]["id"] if rows else None
 
-    def add_session(self, session, row):
+    def add_session(self, session, row, rows_beside=None):
         """A session made without a message, idle (a fork, a subagent): its
         title, source, model, mode, workspace, a switch its first turn takes,
         its parent, who started it, and the newest record the user has
-        seen."""
+        seen. `rows_beside(db, session)`: its maker's rows of it (a
+        subagent's row and task), written in the same transaction, so none
+        is ever there without the others."""
         now = time.time()
         with self.transaction() as db:
             db.execute(
@@ -505,6 +576,8 @@ class Store:
                  row["workspace"], row.get("switch"), row.get("parent"),
                  row.get("started_by"), row.get("seen_seq", 0), now, now),
             )
+            if rows_beside is not None:
+                rows_beside(db, session)
 
     def update_session(self, session, **fields):
         names = ", ".join(f"{name} = ?" for name in fields)

@@ -11,7 +11,7 @@ from textual.widgets import Input, Static
 
 from apps.tui import controller
 from apps.tui.widgets import ERRORS, Plain
-from client import render, session_list
+from client import session_list
 
 
 class SessionListView(Screen):
@@ -112,7 +112,7 @@ class SessionListView(Screen):
         ask = row.get("ask")
         if ask is not None:
             parts += [("? ", "bold $text-warning"), ask["command"]]
-            reason = render.reason(ask.get("why"))
+            reason = ask.get("reason")
             if reason:
                 parts.append((f"\n{reason}", "dim"))
         else:

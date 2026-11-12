@@ -16,7 +16,7 @@ from datetime import datetime
 
 from core import tools
 
-LOG_FORMAT = 3
+LOG_FORMAT = 4
 UNKNOWN = (
     "Tool call interrupted before a result was recorded; its outcome is unknown."
 )
@@ -616,6 +616,21 @@ def span(seconds):
             return f"{count} {unit}{'' if count == 1 else 's'}"
     count = seconds // 86400
     return f"{count} day{'' if count == 1 else 's'}"
+
+
+def ended_fresh(records):
+    """A turn's reply before the fresh compaction its end wrote (a round's
+    end): nothing of the turn goes on after one, so a turn cut off past it
+    has ended, with this answer ("" for none). None if it holds none."""
+    for at in range(len(records) - 1, -1, -1):
+        record = records[at]
+        if record["type"] == "compaction" and record.get("fresh"):
+            replies = [r for r in records[:at] if r["type"] == "assistant"]
+            content = replies[-1]["message"].get("content") if replies else None
+            return (content or "").strip()
+        if record["type"] in ("assistant", "tool", "user"):
+            return None
+    return None
 
 
 def final_answer(records):

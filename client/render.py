@@ -109,27 +109,11 @@ def jobs_text(jobs, sessions=False):
     )
 
 
-# What the rules put before an ask's reason; the agent's own words follow
-# The judge's prefix only in an older log, from when the judge could ask
-REASON_PREFIXES = ("rule: ", "it asks to run outside the sandbox: ",
-                   "it fetches from a local address: ",
-                   "the judge wants the user to decide: ")
-
-
-def reason(why):
-    """The agent's own reason in an ask's `why`, without what the rules
-    say before it."""
-    why = why or ""
-    for prefix in REASON_PREFIXES:
-        if why.startswith(prefix):
-            why = why[len(prefix):]
-    return why.strip()
-
-
 def ask_line(ask):
-    """An ask on one line, for plain output: its command and its reason."""
-    why = reason(ask.get("why"))
-    return f"? {ask['tool']}: {ask['command']}" + (f" ({why})" if why else "")
+    """An ask on one line, for plain output: its command and the reason the
+    user reads (its record's or its row's `reason`)."""
+    reason = ask.get("reason") or ""
+    return f"? {ask['tool']}: {ask['command']}" + (f" ({reason})" if reason else "")
 
 
 def main_argument(args, raw):

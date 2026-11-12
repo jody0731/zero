@@ -44,20 +44,20 @@ class SubagentStore:
     def __init__(self, store):
         self.store = store
 
-    def add(self, row, notice):
-        """A subagent's row and its task's notice: (inbox id, session,
-        source, payload), in one transaction."""
-        with self.store.transaction() as db:
-            db.execute(
-                "INSERT INTO subagents (session, parent, start_from, depth, "
-                "started_from_seq, estimate_minutes, estimate_weighted_tokens, "
-                "estimate_dollars, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (row["session"], row["parent"], row["start_from"], row["depth"],
-                 row["started_from_seq"], row["estimate_minutes"],
-                 row["estimate_weighted_tokens"], row["estimate_dollars"],
-                 time.time()),
-            )
-            self.store.queue_notice(db, *notice)
+    def add(self, db, row, notice):
+        """Inside the transaction that makes its session (`db`): a
+        subagent's row and its task's notice, (inbox id, session, source,
+        payload)."""
+        db.execute(
+            "INSERT INTO subagents (session, parent, start_from, depth, "
+            "started_from_seq, estimate_minutes, estimate_weighted_tokens, "
+            "estimate_dollars, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (row["session"], row["parent"], row["start_from"], row["depth"],
+             row["started_from_seq"], row["estimate_minutes"],
+             row["estimate_weighted_tokens"], row["estimate_dollars"],
+             time.time()),
+        )
+        self.store.queue_notice(db, *notice)
 
     def subagent(self, session):
         rows = self.store.query("SELECT * FROM subagents WHERE session = ?",

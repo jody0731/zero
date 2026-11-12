@@ -80,6 +80,12 @@ def running_round(turn):
     return run if started_in(records, run["id"]) else None
 
 
+def round_cut(records):
+    """A turn's round-end compaction, the newest; None if it has none."""
+    return next((r for r in reversed(records) if r["type"] == "compaction"
+                 and r.get("reason") == COMPACTION_REASON), None)
+
+
 class Rounds(Hook):
     """A round's end, the user's ask for rounds told, the offer of rounds to
     a turn compacted twice, and the note when the work passes its
@@ -184,6 +190,11 @@ class Rounds(Hook):
         records = history.unfinished_turn(session.log.branch())
         if not started_in(records, run["id"]) and turn.inbox != run["round_inbox"]:
             return
+        # The row moved on to the next round's message: this round's end was
+        # written whole before the turn was cut off (a turn that resumes past
+        # its fresh compaction)
+        if run["round_inbox"] not in (None, turn.inbox):
+            return
         end = round_end(records, run["id"])
         minutes = turn.agent_seconds() / 60
         price = session.settings.get("price")
@@ -193,11 +204,12 @@ class Rounds(Hook):
         state = rounds.next_state(run, turn.outcome, end)
         fresh = False
         if state == "running" and turn.outcome not in FAILED:
-            session.compact(COMPACTION_REASON, end["handoff"] if end else None,
-                            fresh=True, occasion=ROUND_ENDED)
-            done = history.unfinished_turn(session.log.branch())
-            cut = next((r for r in reversed(done) if r["type"] == "compaction"
-                        and r.get("reason") == COMPACTION_REASON), None)
+            # Its compaction once: a turn cut off after it has it already,
+            # and its row is what is left to write
+            if round_cut(records) is None:
+                session.compact(COMPACTION_REASON, end["handoff"] if end else None,
+                                fresh=True, occasion=ROUND_ENDED)
+            cut = round_cut(history.unfinished_turn(session.log.branch()))
             fresh = cut is not None
             if fresh and end is None:
                 # The handoff the model wrote, kept as the round's own

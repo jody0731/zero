@@ -23,6 +23,9 @@ from pathlib import Path
 
 from core import history
 
+# How much of a log's end is read at a time to find its last record
+TAIL_BYTES = 64 * 1024
+
 
 class Log:
     def __init__(self, path, lock=None, on_append=None):
@@ -90,6 +93,34 @@ class Log:
         if not line.endswith(b"\n"):
             return None
         return json.loads(line.decode("utf-8"))
+
+    def last_record(self):
+        """The log's last whole record, read from its end alone; None while
+        it has none. What the start compares with the database's rows."""
+        try:
+            stream = open(self.path, "rb")
+        except FileNotFoundError:
+            return None
+        with stream:
+            end = stream.seek(0, os.SEEK_END)
+            tail, at = b"", end
+            while at > 0:
+                at = max(0, at - TAIL_BYTES)
+                stream.seek(at)
+                tail = stream.read(end - at)
+                whole = tail[: tail.rfind(b"\n") + 1]
+                # Its last whole line starts after a newline, or at the top
+                start = whole.rfind(b"\n", 0, -1)
+                if whole and (start >= 0 or at == 0):
+                    line = whole[start + 1:]
+                    try:
+                        record = json.loads(line.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        record = None
+                    if not isinstance(record, dict):
+                        raise ValueError(f"broken last record at {self.path}")
+                    return record
+        return None
 
     def branch(self):
         """The records of the conversation's current branch, in order: all of

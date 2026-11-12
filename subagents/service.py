@@ -282,22 +282,27 @@ class SubagentsService(Service):
         estimate is kept in weighted tokens, ZERO's unit, and in dollars at
         the session's price, the user's."""
         parent = self.runtime.store.session(sid)
+        text = subtools.TASK.format(parent=sid, title=parent["title"], task=task)
+        started_from_seq = session.log.last_seq
+
+        def rows_beside(db, child):
+            # Its row and task in the transaction that makes its session
+            self.store.add(db, {
+                "session": child, "parent": sid, "start_from": start_from,
+                "depth": depth, "started_from_seq": started_from_seq,
+                "estimate_minutes": minutes,
+                "estimate_weighted_tokens": weighted_tokens,
+                "estimate_dollars": dollars_of(
+                    weighted_tokens, session.settings.get("price")),
+            }, (f"subagent-task:{child}", child, subtools.ACROSS, {"text": text}))
+
         try:
             if start_from == "fork":
-                child = self.runtime.fork_finished(sid, title, "zero")
+                child = self.runtime.fork_finished(sid, title, "zero", rows_beside)
             else:
-                child = self.runtime.new_child(sid, title, "zero")
+                child = self.runtime.new_child(sid, title, "zero", rows_beside)
         except Refused as error:
             return None, f"Not started: {error}."
-        text = subtools.TASK.format(parent=sid, title=parent["title"], task=task)
-        self.store.add({
-            "session": child, "parent": sid, "start_from": start_from,
-            "depth": depth, "started_from_seq": session.log.last_seq,
-            "estimate_minutes": minutes,
-            "estimate_weighted_tokens": weighted_tokens,
-            "estimate_dollars": dollars_of(
-                weighted_tokens, session.settings.get("price")),
-        }, (f"subagent-task:{child}", child, subtools.ACROSS, {"text": text}))
         self.runtime.wake()
         return child, None
 

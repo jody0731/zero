@@ -54,13 +54,14 @@ from core.asking import NO, PARK, YES
 from sessions import upgrade
 from sessions.log import Log, fresh_log
 from sessions.lock import Busy, SessionLock
+from server import rebuild
+from server.rebuild import FAILED
 from server.services import Refused
 from server.session_actions import (
-    SessionActions, check_thinking_effort, new_id, title,
+    SessionActions, asked, check_thinking_effort, new_id, title,
 )
 from server.store import Store, UnknownSession
 
-FAILED = ("crashed", "cut_off", "failed")
 MAX_RESUMES = 3
 WHEN_BUSY = ("steer", "queue")
 # What a turn begun by `continue` opens with: the user's wish, not their words
@@ -430,9 +431,11 @@ class Runtime(SessionActions):
         )
 
     def start(self):
-        """Finish what a crash or a stop left, then run what is queued."""
-        # The services first: jobs a crash cut off are told, so their notices are
-        # repaired and run like any queued message
+        """Bring the database in step with the logs, finish what a crash or a
+        stop left, then run what is queued."""
+        self.rebuild_ahead()
+        # The services next: jobs a crash cut off are told, so their notices
+        # are repaired and run like any queued message
         for service in self.services.values():
             service.begin()
         sessions = dict.fromkeys(row["session"] for row in self.store.unfinished_rows())
@@ -452,6 +455,43 @@ class Runtime(SessionActions):
                 lock.release()
         self.started = True
         self.dispatch()
+
+    def rebuild_ahead(self):
+        """Design rule 9: rebuild the rows of each session whose log is
+        ahead of them (past its row's `log_seq`), from the log, under the
+        session's lock: the kernel's (server/rebuild.py) and each service's,
+        in one transaction. A session in step is only looked at: its log's
+        last record, read from the end."""
+        services = [service.rebuild for service in self.services.values()]
+        for row in self.store.sessions():
+            sid = row["id"]
+            log = self.log(sid)
+            try:
+                last = log.last_record()
+            except ValueError:
+                # A broken log: its next turn records the failure
+                traceback.print_exc()
+                continue
+            if last is None or last.get("seq", 0) <= row["log_seq"]:
+                continue
+            lock = self.session_lock(sid)
+            try:
+                lock.acquire()
+            except Busy as error:
+                self.blocked.add(sid)
+                print(f"Skipping {sid}: {error}")
+                continue
+            try:
+                records = log.records()
+                # A newer ZERO's log: its rows stay as that ZERO left them
+                if history.log_format(records) <= history.LOG_FORMAT:
+                    records = upgrade.migrate(records, time=upgrade.timestamp())
+                    self.store.rebuild(sid, rebuild.kernel_rows(records), records,
+                                       services)
+            except Exception:
+                traceback.print_exc()
+            finally:
+                lock.release()
 
     def repair(self, row, lock=None):
         own = lock is None
@@ -786,9 +826,8 @@ class Runtime(SessionActions):
             return
         state = "failed" if outcome in FAILED else "idle"
         with self.changed:
-            self.store.finish(row["arrival"], sid, state)
-            for stop in self.store.stops(sid, row):
-                self.store.mark_steer_done(stop["id"])
+            # Its stops done with it; its rows in step up to its turn_end
+            self.store.finish(row["arrival"], sid, state, session.log.last_seq)
         self.turn_ended(sid, outcome)
 
     def take_reply(self, sid, row, ask, turn_id, log, control):
@@ -981,12 +1020,7 @@ class Runtime(SessionActions):
             if sid in self.runners or sid in self.store.waiting_sessions():
                 return None
         ask = self.store.open_ask(sid)
-        left = {
-            "ask": None if ask is None else {
-                "id": ask["id"], "tool": ask["tool"], "command": ask["command"],
-                "why": ask["why"],
-            },
-        }
+        left = {"ask": None if ask is None else asked(ask)}
         for service in self.services.values():
             left.update(service.settled(sid))
         return left

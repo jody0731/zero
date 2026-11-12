@@ -85,6 +85,12 @@ class Service:
         """What is left of it once nothing more happens on its own."""
         return {}
 
+    def rebuild(self, db, sid, records):
+        """Its rows of the session as the session's log says (design rule
+        9), inside the store's transaction `db`: called at start for a
+        session whose log is ahead of the database. `records`: the whole
+        log, in the current format."""
+
     def reply(self, sid, ask, payload):
         """The reply step, when a reply reaches a parked ask: (choice,
         verdict), or None to leave it to the box's choice alone."""

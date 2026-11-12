@@ -299,6 +299,9 @@ class Session:
         if inbox is not None and user.get("inbox") != inbox:
             raise ValueError("the queued message is not the log's open turn")
         answer = history.final_answer(records)
+        past_end = answer is None and history.ended_fresh(records) is not None
+        if past_end:
+            answer = history.ended_fresh(records)
         if answer is None:
             # What the hooks add, before repair writes anything: the files
             # this turn touched that changed while it was cut off, say
@@ -323,6 +326,7 @@ class Session:
         turn.started -= before
         turn.waiting = waited
         turn.answer = answer
+        turn.cut_past_its_end = past_end
         return turn
 
     def run(self, turn):
@@ -335,9 +339,9 @@ class Session:
             stop = None
             if turn.unpark is not None:
                 stop = self.finish_parked(turn)
-            elif turn.answer is not None and not (
+            elif turn.answer is not None and (turn.cut_past_its_end or not (
                 turn.control is not None and turn.control.steers()
-            ):
+            )):
                 turn.outcome = "answered"
                 return turn.outcome
             while stop is None:
@@ -547,20 +551,21 @@ class Session:
         self.hooks.notify("after_tool", call)
 
     def park(self, call, decision):
-        """Write the call's `ask` record and stop the turn there. Beside `why`,
-        what the ask is about and whose reason the user reads: the
-        judge's, else the agent's own `reason` argument."""
+        """Write the call's `ask` record and stop the turn there, its parts
+        kept apart: the reason the user reads (the judge's, else the agent's
+        own `reason` argument; "" for none) and, where the rule says it,
+        what the ask is about. `why`, the rule's words with the reason, is
+        what the models that answer or hear of the ask read."""
         command = tools.summary(call.name, call.args, call.arguments)
         asked = {}
         if decision.about is not None:
             asked["about"] = decision.about
         reason = decision.reason or str(call.args.get("reason") or "").strip()
-        if reason:
-            asked["reason"] = reason
         record = self.write(
             "ask", ask=f"ask-{secrets.token_hex(4)}", step=call.step.number,
             call=call.id, tool=call.name, command=command, why=decision.why,
-            notes=call.notes, choices=choices(call.notes), **asked,
+            reason=reason, notes=call.notes, choices=choices(call.notes),
+            **asked,
         )
         raise Parked(record)
 

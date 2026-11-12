@@ -125,8 +125,9 @@ def history_text(info, records, working=True, runs_with=None, context=None):
             who = "job" if record.get("source") == "job" else "you"
             lines.append(f"{clock}  {who}{mark}  {record['text']}")
         elif record["type"] == "ask":
-            why = render.reason(record["why"])
-            asked = f"asks: {record['command']}" + (f" ({why})" if why else "")
+            reason = record.get("reason") or ""
+            asked = (f"asks: {record['command']}"
+                     + (f" ({reason})" if reason else ""))
             lines.append(f"{clock}  {NAME}  {asked}")
         elif record["type"] == "answer":
             reply = "approved" if record["yes"] else "replied; not run"

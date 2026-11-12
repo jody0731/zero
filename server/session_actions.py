@@ -49,6 +49,14 @@ def title(text):
     return line if len(line) <= TITLE_LENGTH else line[: TITLE_LENGTH - 1] + "…"
 
 
+def asked(ask):
+    """An open ask's row as apps read it: its question, its parts (the
+    reason the user reads, what it is about) and the rule's words with
+    the reason (`why`, which older apps draw)."""
+    return {name: ask[name] for name in (
+        "id", "tool", "command", "why", "reason", "about", "created_at")}
+
+
 class SessionActions:
     def history(self, sid, after=0, limit=None, before=None):
         """The session's records after a seq (and before one, to page back),
@@ -171,10 +179,7 @@ class SessionActions:
             if workspace is not None and row["workspace"] != workspace:
                 continue
             ask = asks.get(row["id"])
-            row["ask"] = None if ask is None else {
-                "id": ask["id"], "tool": ask["tool"], "command": ask["command"],
-                "why": ask["why"], "created_at": ask["created_at"],
-            }
+            row["ask"] = None if ask is None else asked(ask)
             row["archived"] = bool(row["archived"])
             row["unseen"] = row["end_seq"] > row["seen_seq"]
             result.append(row)
@@ -360,12 +365,13 @@ class SessionActions:
                                  "started_by": "user"})
         return {"session": self.store.session(new), "text": text}
 
-    def fork_finished(self, sid, title, source):
+    def fork_finished(self, sid, title, source, rows_beside=None):
         """A new session from this one's finished turns: its current branch
         up to the start of the turn under way (all of it, when none is), as
         `fork` copies; ZERO's, a subagent's fork made mid-turn (DSH's "the
-        parent's completed conversation turns"). Returns the new session's
-        id."""
+        parent's completed conversation turns"). `rows_beside(db, id)`: rows
+        its maker writes in the same transaction as its own (a subagent's).
+        Returns the new session's id."""
         info = self.store.session(sid)
         if info is None:
             raise Refused(f"no session {sid!r}")
@@ -376,9 +382,10 @@ class SessionActions:
         copied = records[: len(records) - len(under_way)]
         return self.copy_session(sid, info, records, copied, None,
                                  {"title": title, "source": source,
-                                  "started_by": "zero"})
+                                  "started_by": "zero"}, rows_beside)
 
-    def copy_session(self, sid, info, records, copied, went_on, row):
+    def copy_session(self, sid, info, records, copied, went_on, row,
+                     rows_beside=None):
         """Write a fork: `copied` (the start of branch `records`) into a new
         log, its header naming where it came from and what the parent did
         past it (`went_on`), and its row: `row`'s title, source and who
@@ -403,14 +410,15 @@ class SessionActions:
             "workspace": info["workspace"],
             "switch": json.dumps(switch) if switch else None, "parent": sid,
             "seen_seq": copied[-1]["seq"],
-        })
+        }, rows_beside)
         return new
 
-    def new_child(self, sid, title, source):
+    def new_child(self, sid, title, source, rows_beside=None):
         """A new session under this one, its log empty: the same workspace,
         mode and model, and the thinking effort the parent runs with, which
         its first turn takes as a switch; ZERO's, a subagent's handoff.
-        Returns its id."""
+        `rows_beside(db, id)`: rows its maker writes in the same transaction
+        as its own. Returns its id."""
         info = self.store.session(sid)
         if info is None:
             raise Refused(f"no session {sid!r}")
@@ -421,7 +429,7 @@ class SessionActions:
             "mode": info["mode"], "workspace": info["workspace"],
             "switch": json.dumps({"thinking_effort": effort}) if effort else None,
             "parent": sid, "started_by": "zero",
-        })
+        }, rows_beside)
         return new
 
     def delete(self, sid):

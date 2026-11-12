@@ -223,7 +223,21 @@ class JobsService(Service):
         return id
 
     def ended(self, job, code):
-        """Runs in the job's thread once its process is gone."""
+        """Runs in the job's thread once its process is gone. Its end is
+        settled whatever fails here: else the row stays running for a job
+        that is gone, and keeps the server up until the next start."""
+        try:
+            self.settle_end(job, code)
+        except Exception:
+            traceback.print_exc()
+            try:
+                self.store.settle_job(job.id, state="lost", exit_code=code,
+                                      ended_at=self.clock())
+            except Exception:
+                # The store itself failed: the next start's repair reports it
+                traceback.print_exc()
+
+    def settle_end(self, job, code):
         with self.lock:
             known = self.live.pop(job.id, None) is not None
         # A clean stop wrote its loss before stopping it; a forgotten job is
@@ -242,12 +256,22 @@ class JobsService(Service):
         state = "stopped" if job.stopped_by else "ended"
         settled = {**row, "state": state, "exit_code": code, "ended_at": now,
                    "stopped_by": job.stopped_by}
-        text, summary = jobtools.ended_notice(settled, self.last_output(row), now)
+        text, summary = self.end_notice(settled, row, now)
         self.store.settle_job(
             job.id, notice=(f"job:{job.id}:end", text, summary), state=state,
             exit_code=code, ended_at=now, stopped_by=job.stopped_by,
         )
         self.wake()
+
+    def end_notice(self, settled, row, now):
+        """A job's end as its notice says it, (text, summary): with the
+        output the model hasn't looked at, or none if that can't be read."""
+        try:
+            last = self.last_output(row)
+        except OSError:
+            traceback.print_exc()
+            last = ""
+        return jobtools.ended_notice(settled, last, now)
 
     def stop_job(self, id, by):
         """Stop a running job: True if it was running."""

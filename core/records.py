@@ -23,6 +23,9 @@ class Turn:
         self.waiting = 0.0
         # A parked turn coming back: (step, call, later calls, the reply)
         self.unpark = None
+        # A turn cut off after its end's fresh compaction: it had ended, and
+        # a message that came since starts the next turn, not this one
+        self.cut_past_its_end = False
         self.outcome = self.detail = self.answer = self.error = None
         self.errors = []
 

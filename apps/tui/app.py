@@ -1095,9 +1095,7 @@ class ZeroApp(SafeClicks, App):
         # The command, the agent's reason, what the ask is about, then the one
         # question every ask ends with
         parts = [(f"$ {ask.get('command', '')}", "bold")]
-        # An older ask has only its `why`
-        reason = (ask.get("reason") if "about" in ask
-                  else render.reason(ask.get("why", "")))
+        reason = ask.get("reason")
         if reason:
             parts.append((f"\n{reason}", "dim"))
         if ask.get("about"):

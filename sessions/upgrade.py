@@ -10,6 +10,11 @@ job's notice without the output it quotes; a round's end. Its upgrade reads
 those words once, here, and leaves every text as it was, so the model reads
 the same.
 
+Format 3 kept an ask's parts in its `why`, the rule's words before the
+agent's reason; format 4 keeps the reason apart (an ask's `reason`, "" for
+none), beside what the ask is `about`. Its upgrade cuts the rule's words off
+an older ask's `why` once, here, and keeps the `why`, which the models read.
+
 Only a runner upgrades files. Readers use migrate() in memory. A failed upgrade
 leaves the old bytes in place, apart from the runtime's appended crash record.
 """
@@ -182,7 +187,41 @@ def from_2(records, header, time):
     return result
 
 
-MIGRATIONS = {1: from_1, 2: from_2}
+# Format 3's words before an ask's reason in its `why` (permissions'
+# approval and asks, the judge's from when it could ask)
+REASON_PREFIXES = ("rule: ", "it asks to run outside the sandbox: ",
+                   "it fetches from a local address: ",
+                   "the judge wants the user to decide: ")
+
+
+def ask_reason(ask):
+    """A format 3 ask's own reason: the one beside its `why`; else none
+    where it says what it is about (a newer ZERO wrote any reason beside
+    it); else its `why` without the rules' words before the reason."""
+    if "reason" in ask:
+        return ask["reason"]
+    if "about" in ask:
+        return ""
+    why = ask.get("why") or ""
+    for prefix in REASON_PREFIXES:
+        if why.startswith(prefix):
+            why = why[len(prefix):]
+    return why.strip()
+
+
+def from_3(records, header, time):
+    """Give each ask its reason apart from its `why`; every text stays."""
+    first = records[0]
+    result = [{**first, "format": 4,
+               "upgraded_from": first.get("upgraded_from", 3)}]
+    for record in records[1:]:
+        if record["type"] == "ask" and not isinstance(record.get("reason"), str):
+            record = {**record, "reason": ask_reason(record)}
+        result.append(record)
+    return result
+
+
+MIGRATIONS = {1: from_1, 2: from_2, 3: from_3}
 
 
 def migrate(records, header=None, *, time):

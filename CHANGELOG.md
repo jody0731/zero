@@ -3,6 +3,25 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.3
+
+The log is the truth: what ZERO keeps of a session's state is rebuilt from the session's own
+log, so a server killed at any moment comes back right.
+
+- **A crash anywhere comes back right.** Each session's log is written first; the database
+  beside it records how far it has followed, and at start a session whose log is ahead is
+  brought back in step from the log. Tried by killing ZERO at each write it makes in a turn,
+  an ask, rounds of work, a subagent and a fork: every message answered once, nothing left
+  waiting.
+- **A subagent is started whole**, its session, its record and its task together; **a round
+  of work ends once**, even when ZERO stopped in the middle of its end; **a background job's
+  end is always recorded**, so a job that is gone no longer keeps the server up.
+- **An ask keeps its reason apart.** The plain transcript, `zero -p` and the session list show
+  the agent's own reason for asking, never the rule's words before it.
+- **Your sessions come along.** The database upgrades when the server starts; a session's log
+  moves to format 4 the next time it runs, its original kept beside it. What ZERO reads in
+  your sessions stays word for word the same.
+
 ## 0.7.2
 
 Data, not words: ZERO's parts now hand each other data where they used to read each other's

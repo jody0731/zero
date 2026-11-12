@@ -36,8 +36,8 @@ SETTINGS = (
     # tokens, a server's progress through the prompt counting as life where
     # the model honours it (features.py). A backstop for a server stuck
     # silent: Codex waits 300 s, opencode 900 (DeepSeek asks for 15
-    # minutes), Hermes 180 and 900 for a local server (8 Nov); 45 s failed
-    # LT-21's healthy reading of 143k tokens
+    # minutes), Hermes 180 and 900 for a local server; 45 s failed
+    # a local server's healthy reading of 143k tokens
     Setting("model_silence_seconds", "Limits", "Seconds the model may stay silent", 300,
             "number"),
     Setting("model_retries", "Limits", "Retries after a model error", 3, "int",

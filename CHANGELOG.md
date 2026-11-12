@@ -3,6 +3,16 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.0
+
+The first release of ZERO's seventh generation: the sixth carried over as it was, ahead of the
+redesigns and new features to come.
+
+- **The instruction files' room holds on every path.** SOUL.md, your ZERO.md and a project's
+  ZERO.md files share one room in ZERO's system message; when one was cut to fit, the blank line
+  after it could take the room one or two characters past its size, depending on the folders'
+  names. That line is now counted.
+
 ## 0.6.9
 
 The last release of ZERO's sixth generation (memory and long work): fixes, and ZERO's version.

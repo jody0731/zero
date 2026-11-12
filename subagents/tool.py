@@ -33,7 +33,7 @@ DEFAULT_DEPTH = {s.name: s.default for s in SETTINGS}["max_subagent_depth"]
 # A subagent's first message, the assignment of the session that started
 # it: an instruction, as the parent's words, not a fact of the harness's.
 # The report line comes last, after the parent's task, so nothing the parent
-# writes follows it (DSH's order: in a trial, a parent's "Prefer: your final
+# writes follows it (DSH's order: in one run, a parent's "Prefer: your final
 # turn ends with the full report text" below the line won over it)
 TASK = (
     "You are a subagent of session {parent} (\"{title}\").\n\nYour task:\n"
@@ -189,7 +189,7 @@ def start_summary(args):
 # (prompt/instructions.py, MEANS_FACTS). Keeping a part of the work out of
 # this context comes first: it needs no second subagent. Its cost stands
 # beside what it gives: six subagents moved a task's reading to their own
-# contexts and didn't cut it (1.8 times the weighted tokens, 0.6.8's runs)
+# contexts and didn't cut it (1.8 times the weighted tokens, measured)
 MEANS = (
     "subagents (`start_subagent`): a part of the work done outside this "
     "conversation. What a subagent reads and runs stays in its own context "

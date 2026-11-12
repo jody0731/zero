@@ -9,7 +9,7 @@ when the work passes ZERO's estimate). service.py: what rounds are in the
 server (their row, the next round's message, rounds/list and rounds/stop).
 store.py: their table.
 
-The estimate is ZERO's own yardstick (6.7, principle 3): nothing stops at
+The estimate is ZERO's own yardstick (principle 3): nothing stops at
 it, and no limit on a turn's spend is left (the standing amount went). No
 settings of its own since then.
 """

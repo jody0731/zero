@@ -260,7 +260,9 @@ def read(instructions, workspace, most_chars):
 
     def add(label, body, path):
         nonlocal room
-        block = label + cut(body, room - len(label), path, most_chars)
+        # The room keeps two characters for the blank line that joins the
+        # next file to this one
+        block = label + cut(body, room - len(label) - 2, path, most_chars)
         parts.append(block)
         room -= len(block) + 2
 

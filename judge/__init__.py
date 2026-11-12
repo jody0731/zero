@@ -36,7 +36,7 @@ SETTINGS = (
             1, "int", minimum=0),
     # What the judge sees of each command's output, cut in the middle; every
     # command's stays, so each call's view starts with the last one's and the
-    # server's cache serves it (6.3)
+    # server's cache serves it
     Setting("judge_output_chars", "Limits",
             "Characters of a command's output the judge sees", 1000, "int",
             minimum=100),

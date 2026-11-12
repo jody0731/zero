@@ -55,7 +55,7 @@ def estimate_text(rounds, minutes, weighted_tokens):
 # (prompt/instructions.py, MEANS_FACTS)
 # That it starts mid-turn is said here: the pick is made again when the
 # work turns out other than thought, and a turn grown long never weighed
-# rounds (0.6.8's runs)
+# rounds when that was unsaid
 MEANS = (
     "rounds (`start_rounds`): long work seen through from end to end. Each "
     "round is a turn whose context starts fresh from the last round's "

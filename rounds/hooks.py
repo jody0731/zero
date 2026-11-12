@@ -6,7 +6,7 @@ rounds queue the next round's message (service.py). A turn compacted twice
 is told that work can go on in rounds. Nobody watches work in rounds: in
 default mode the judge answers what would have asked the user
 (permissions/approval.py's DefaultApproval, which asks `running_round`).
-ZERO's estimate is its own yardstick (6.7): past it, one note says so and
+ZERO's estimate is its own yardstick: past it, one note says so and
 the work goes on; nothing stops at it.
 """
 

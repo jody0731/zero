@@ -12,7 +12,7 @@ server/main.py hands the server kernel: how it makes a session
 A mode (permissions/modes.py) picks the sandbox and who decides an ask. The
 judge never asks the user. With nobody there to ask (evals, tests: ask=None)
 the user's asks are refused. Work nobody watches raises the approver, never
-the sandbox (6.7): a subagent ZERO started runs default as auto
+the sandbox: a subagent ZERO started runs default as auto
 (`unattended`), and in default a round's asks go to the judge
 (DefaultApproval); readOnly is never raised. The evals' server (dev/evalkit/)
 hands each session its own box, the shipped SOUL.md and no saved

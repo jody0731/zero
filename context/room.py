@@ -5,8 +5,8 @@ What came since (the reply, the results, the user's next message) is
 counted by the server where it can (llama.cpp's /tokenize), else taken as a
 token for every byte of UTF-8. A byte-level tokenizer gives no byte two
 tokens, so that never counts low: digits, hex and rare characters come to a
-token a byte, where a token every three bytes counted them a third (LT-21's
-tokenizer, measured on 23 kinds of text, 8 Nov). It counts English three or
+token a byte, where a token every three bytes counted them a third (a local
+model's tokenizer, measured on 23 kinds of text). It counts English three or
 four times high, until the next call counts it.
 
 The line is `compact_at_tokens`, or the model's window when it is unset, and

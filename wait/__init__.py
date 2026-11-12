@@ -1,4 +1,4 @@
-"""Waiting: a turn held open until something comes for it (6.8.1).
+"""Waiting: a turn held open until something comes for it.
 
 tool.py: `wait`, which holds the turn until a notice or a message from the
 user comes, or its minutes pass. Without it a turn that had started

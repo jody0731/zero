@@ -1,4 +1,4 @@
-"""Subagents (6.7): a session ZERO starts under the one it works in, a means
+"""Subagents: a session ZERO starts under the one it works in, a means
 it picks (principle 3), which reports back through the inbox.
 
 tool.py: `start_subagent`, `send_message`, `subagents`, and the texts the

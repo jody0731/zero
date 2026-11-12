@@ -5,7 +5,7 @@ and what its verdict does to a call. The judge itself is verdict.py.
 The proposed call comes whole (a write's content, an edit's strings), the
 commands that ran as an ask shows them, each with its output cut in the
 middle. The view only grows, so each call starts with the one before and
-the server's cache serves it (6.3: 95% of each call's history in real
+the server's cache serves it (95% of each call's history in long
 sessions, against 42% when only the latest outputs showed). A long session's
 view keeps every user message and notice; past the judge's room, its oldest
 commands are left out, and one line says how many.

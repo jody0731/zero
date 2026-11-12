@@ -7,7 +7,7 @@ nobody there), auto and auto+ (the judge, judge/), bypassPermissions
 (none: no rules are loaded). auto+ has no rules either: Permissions marks each
 call that needs permission, and the judge answers.
 
-Work nobody watches (6.7) raises default's approver to the judge, never the
+Work nobody watches raises default's approver to the judge, never the
 sandbox: a subagent ZERO started runs default as auto (the assembly), and in
 a session of the user's own a round's asks go to the judge (DefaultApproval).
 readOnly is never raised.

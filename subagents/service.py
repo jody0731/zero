@@ -6,7 +6,7 @@ subagent didn't send.
 A subagent is a session of its own under the one that started it (the
 kernel's `parent`, `started_by` zero), as every harness read in source has
 it (Codex, OpenCode, DSH, OpenClaw): a fork of the parent's finished turns
-(6.6's fork, mid-turn) or a new session with its task alone. Its task is its
+(a fork, mid-turn) or a new session with its task alone. Its task is its
 first message, a notice from "session", which asks it, last, to report back
 with send_message when it has finished: the subagent writes its own report,
 since it alone knows all of its results. The harness passes up what it
@@ -305,7 +305,7 @@ class SubagentsService(Service):
         """A message to any other session, by its id, as a notice. A
         subagent's message to its parent carries the record the parent
         started it from, so one reaching a part a rewind left behind is
-        marked (6.6)."""
+        marked."""
         if to == sid:
             return "Error: that is this session."
         if self.runtime.store.session(to) is None:
@@ -466,7 +466,7 @@ def sent_last(records, end, parent):
 def answer_was_sent(records, end, parent):
     """Whether every line of the answer `end` holds, its marks aside, is in a
     message the same turn sent `parent` that went through: a report sent,
-    a call after it, then the report again as the answer (seen at 6.8)."""
+    a call after it, then the report again as the answer."""
     sent = [text for call in turn_calls(records, end)
             if (text := sent_text(call, parent)) is not None]
     if not sent:

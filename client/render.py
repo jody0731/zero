@@ -42,12 +42,20 @@ COMPACTED_BY = {"line": "at its line", "zero": "asked by ZERO",
                 "a request as too long"}
 
 
+# The records a compaction leaves: one, a failed one, or one with nothing
+# older than the newest step to hand off
+COMPACTION_RECORDS = ("compaction", "compaction_failed", "nothing_to_compact")
+
+
 def compaction_text(record):
-    """A compaction, or a failed one, in a line: why, and the tokens before
-    and after."""
+    """A compaction's record in a line: why, and the tokens before and
+    after."""
     why = COMPACTED_BY.get(record.get("reason"), record.get("reason"))
     if record["type"] == "compaction_failed":
         return f"compaction {why} failed: {record.get('error')}"
+    if record["type"] == "nothing_to_compact":
+        return (f"compaction {why}: nothing to hand off, as the context holds "
+                "only its newest step")
     before = short_tokens(record.get("tokens_before") or 0)
     after = short_tokens(record.get("tokens_after") or 0)
     how = "handed off" if record.get("summary") else "old outputs cleared"
@@ -241,7 +249,7 @@ class Renderer:
             return [record["text"]]
         if kind == "switch":
             return [f"({switch_text(record)})"]
-        if kind in ("compaction", "compaction_failed"):
+        if kind in COMPACTION_RECORDS:
             return [f"({compaction_text(record)})"]
         if kind == "rewind":
             return [f"({rewind_text(record)})"]

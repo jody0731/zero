@@ -274,7 +274,7 @@ class Transcript(VerticalScroll):
         if kind == "switch":
             # The judge's: the model doesn't read it, the user sees it
             return [Plain(f"◈ {render.switch_text(record)}", classes="note")]
-        if kind in ("compaction", "compaction_failed"):
+        if kind in render.COMPACTION_RECORDS:
             return [Plain(f"◈ {render.compaction_text(record)}", classes="note")]
         if kind == "rewind":
             return [Plain(f"↶ {render.rewind_text(record)}", classes="note")]

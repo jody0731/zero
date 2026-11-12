@@ -3,7 +3,8 @@
 Before every model call, mid-turn too, the context's size plus the
 headroom is checked against the line, and a compaction comes first when it
 doesn't fit; ZERO's `compact` call and the user's request do the same at the
-next call, or at once when the session is idle (`compact`). A server that
+next call, or at once when the session is idle (`compact`), always with a
+handoff, and say so plainly when there is nothing to hand off. A server that
 still refuses a request as too long gets one compaction and the call again:
 a net, never the plan. Each result and notice ZERO didn't size itself gets a
 share of the room left, never less than its share of the room a compaction
@@ -219,8 +220,8 @@ class Context(Hook):
             if text:
                 words["user"] = text
         for record in reversed(session.log.branch()):
-            if record["type"] in ("compaction", "compaction_failed", "system",
-                                  "session"):
+            if record["type"] in ("compaction", "compaction_failed",
+                                  "nothing_to_compact", "system", "session"):
                 break
             notes = record.get("notes") or {}
             if record["type"] == "tool" and notes.get("compact"):
@@ -232,11 +233,12 @@ class Context(Hook):
 
     def _compact(self, session, reason, control=None, instructions=None):
         """The compaction record, or None when it failed (written down in the
-        log as `compaction_failed`). At the line, one that can't make room
-        isn't a failure: right after a compaction the whole context is
-        estimated, with its margin, so a big newest step can still read as
-        past the line, and the call goes ahead (a server's refusal is
-        still caught by the net)."""
+        log as `compaction_failed`). One with nothing older than the newest
+        step to hand off isn't a failure: asked for, the log says so
+        (`nothing_to_compact`); at the line, right after a compaction the
+        whole context is estimated, with its margin, so a big newest step can
+        still read as past the line, and the call goes ahead (a server's
+        refusal is still caught by the net)."""
         check = control.check if control is not None else None
         try:
             return compaction.compact(session, reason, self._line(session),
@@ -244,7 +246,9 @@ class Context(Hook):
                                       limits=self.limits,
                                       instructions=instructions)
         except (CompactionFailed, *MODEL_ERRORS) as error:
-            if reason == "line" and isinstance(error, NothingToCompact):
+            if isinstance(error, NothingToCompact) and reason != "refused":
+                if reason in history.ASKERS:
+                    session.write("nothing_to_compact", reason=reason)
                 return None
             self._failed = True
             session.write("compaction_failed", reason=reason,

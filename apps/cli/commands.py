@@ -132,7 +132,7 @@ def history_text(info, records, working=True, runs_with=None, context=None):
         elif record["type"] == "answer":
             reply = "approved" if record["yes"] else "replied; not run"
             lines.append(f"{clock}  you  {reply}")
-        elif record["type"] in ("compaction", "compaction_failed"):
+        elif record["type"] in render.COMPACTION_RECORDS:
             lines.append(f"--- {render.compaction_text(record)} ---")
         elif record["type"] == "rewind":
             lines.append(f"--- {render.rewind_text(record)} ---")

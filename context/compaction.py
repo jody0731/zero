@@ -4,16 +4,19 @@ model call, then a handoff for the older steps when that isn't enough.
 The log keeps everything; a compaction is one record appended to it, and
 the context becomes a view from there (core/history.py, replay): a system
 message written again as things stand, the handoff, the steps kept as they
-are, and what comes after. The newest steps stay whole (a share of the line,
-never fewer than the newest step), and a tool call never loses its result.
+are, and what comes after. At the line the newest steps stay whole (a share
+of the line, never fewer than the newest step); a compaction the user or
+ZERO asks for keeps the newest step alone (a user's is often meant to drop a
+wrong turn). A tool call never loses its result.
 
 Clearing: each older output is saved whole in the session's results folder
-and left in the context as a line naming the file. If the context is then
-under half the line, that is the compaction (never after a server refused
-the request: its count was higher than the estimate, nor when its asker gave
-words on what the handoff keeps); otherwise the steps before
-the kept ones get a handoff, written by the model from the conversation as
-it stands: the call is a prefix of the last request with the instructions
+and left in the context as a line naming the file. At the line, if that
+leaves room for the next few steps at the session's own pace, it is the
+compaction: clearing can be undone and a handoff can't. Otherwise, and
+always when the user or ZERO asks (best effort) or a server refused the
+request (its count was higher than the estimate), the steps before the kept
+ones get a handoff, written by the model from the conversation as it
+stands: the call is a prefix of the last request with the instructions
 after it, so the server's cache serves it (DSH's way), and its older
 outputs are saved first so the handoff can name their files. The user's or
 ZERO's words on what it keeps follow the fixed form, marked with whose they
@@ -29,11 +32,10 @@ from core import history, tools
 # What the handoff call reads after the conversation. It states what the
 # handoff is for and what goes in it, as the other harnesses' do (Codex,
 # opencode, hermes, openclaw, DSH: goal, state, decisions, next step), as a
-# template to fill (opencode's), so the headings come back bare
-INSTRUCTIONS = """[Compaction: this conversation's context is near its line, so \
-everything before the newest steps is about to be replaced by a handoff that \
-you write now. The newest steps stay as they are after it. You will read the \
-handoff in place of the conversation so far; the session's log keeps all of \
+# template to fill (opencode's), so the headings come back bare; first why
+# it comes and what it replaces (handoff_instructions)
+INSTRUCTIONS = """[Compaction: {occasion}, so {replaced}{answered} You will \
+read the handoff in place of the conversation so far; the session's log keeps all of \
 it.
 
 The handoff takes this form, each [bracket] replaced by what it describes, or \
@@ -59,33 +61,82 @@ and why]
 {saved}{asked}
 Paths, commands, error text, numbers and names in the handoff are copied \
 exactly. Write only the handoff.]"""
+# Why a compaction comes, by its reason, as the handoff call reads it
+OCCASIONS = {
+    "line": "this conversation's context is near its line",
+    "refused": "the model server refused this conversation's context as too "
+               "long",
+    "user": "the user asked for a compaction",
+    "zero": "you asked for a compaction",
+}
+# What the handoff replaces: at the line, everything before the newest steps;
+# asked for, everything before the newest step
+REPLACED_BEFORE_STEPS = (
+    "everything before the newest steps is about to be replaced by a handoff "
+    "that you write now. The newest steps stay as they are after it."
+)
+REPLACED_BEFORE_STEP = (
+    "everything before the newest step is about to be replaced by a handoff "
+    "that you write now. The newest step stays as it is after it."
+)
+# Where what stays begins with an answer: the handoff's writer doesn't see
+# it, and took the request before it for one still open (7.3.1's eval)
+ANSWER_KEPT = (
+    " What stays begins with your answer to the last request before it: that "
+    "request is answered."
+)
 SAVED = (
     "\n## Saved outputs\n- [a saved output that matters]: [its path]\n\n"
     "These outputs are saved whole:\n{lines}\n"
 )
-# Who asked for a compaction with words of their own on what the handoff
-# keeps (a compaction record's `instructions`; who, as history.ASKERS names
-# them), as the handoff call reads it; the words follow, each line quoted,
-# after the fixed form (OpenClaw's and Pi's "Additional focus", after
-# theirs), so they add to it, never replace it
+# The words the user or ZERO gave on what the handoff keeps (a compaction
+# record's `instructions`; whose, as history.ASKERS names them), as the
+# handoff call reads them, each line quoted, after the fixed form (OpenClaw's
+# and Pi's "Additional focus", after theirs), so they add to it, never
+# replace it
 ASKED = (
-    "\n{whose} asked for this compaction, with these words on what the "
-    "handoff keeps:\n{words}\n"
+    "\n{whose} gave these words on what the handoff keeps:\n{words}\n"
     "What they name is kept in the handoff in full detail, in the part of "
     "the form it belongs to.\n"
 )
 CLEARED = "[Output cleared from view: {tokens:,} tokens, saved whole in {path}.]"
-# The newest steps kept as they are: this share of the line
+# The newest steps kept as they are at the line: this share of it
 TAIL_SHARE = 0.2
 # An older output this many tokens or fewer stays as it is
 CLEAR_FROM_TOKENS = 100
-# Clearing alone is the compaction when it leaves the context under this
-# share of the line. Measured at 7.3 (evals/compaction_replay.py: 83 real
-# sessions replayed at lines of 32k to 262k): a lower target hands off more
-# often, a higher one compacts more often and reads more anew after each;
-# half the line cost least at 64k and was within 3% at the others
-CLEARED_ENOUGH = 0.5
-INSTRUCTION_TOKENS = room.tokens(INSTRUCTIONS.format(saved=SAVED, asked=""))
+# At the line, clearing alone is the compaction when it leaves room for this
+# many steps at the session's own pace (room.tokens_a_step), in its own
+# counted tokens: clearing can be undone and a handoff can't (the line is
+# the budget, where it sits the place for a model's cost and speed).
+# Measured at 7.3.1 (evals/compaction_replay.py: 83 real sessions at lines
+# of 32k to 262k): three steps hand off 30% to 56% less than 7.3's half the
+# line, for 11% to 32% more read anew; two hand off little less again, for
+# more compactions
+CLEARED_ENOUGH_STEPS = 3
+
+
+def handoff_instructions(reason, saved="", asked="", keeps_answer=False):
+    """What the handoff call reads after the conversation, for a compaction
+    for `reason` ("line", "refused", "user" or "zero"): why it comes, what the
+    handoff replaces and whether what stays `keeps_answer` (begins with an
+    answer), its form, then `saved` (SAVED, filled) and `asked` (asked())."""
+    replaced = (REPLACED_BEFORE_STEP if reason in history.ASKERS
+                else REPLACED_BEFORE_STEPS)
+    return INSTRUCTIONS.format(occasion=OCCASIONS[reason], replaced=replaced,
+                               answered=ANSWER_KEPT if keeps_answer else "",
+                               saved=saved, asked=asked)
+
+
+# The room kept for them: the longest
+INSTRUCTION_TOKENS = max(
+    room.tokens(handoff_instructions(reason, saved=SAVED, keeps_answer=True))
+    for reason in OCCASIONS)
+
+
+def is_answer(record):
+    """Whether `record` is a reply with no calls: an answer."""
+    return record["type"] == "assistant" and not (
+        (record.get("message") or {}).get("tool_calls"))
 
 
 def asked(instructions):
@@ -105,6 +156,14 @@ class CompactionFailed(Exception):
 
 class NothingToCompact(CompactionFailed):
     """Nothing older than the newest step: a compaction can't make room."""
+
+
+def leaves_room_for_steps(records, at, after, limits):
+    """Whether a context of `after` tokens leaves room below the line `at`,
+    past the headroom, for CLEARED_ENOUGH_STEPS steps at the pace `records`
+    show (room.tokens_a_step); with no pace counted yet, any room."""
+    left = at - room.headroom(at, INSTRUCTION_TOKENS, limits) - after
+    return left >= CLEARED_ENOUGH_STEPS * (room.tokens_a_step(records) or 0)
 
 
 def cut_points(body):
@@ -190,8 +249,8 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     record. `reason`: "line", "zero", "user" or "refused"; `tokens`: text's
     tokens (the server's count where there is one); `limits`: the session's,
     for the handoff's room; `instructions`: the askers' words on what the
-    handoff keeps ({"user" or "zero": their words}), which always get a
-    handoff, as the asker wants one written with them. Raises
+    handoff keeps ({"user" or "zero": their words}). One the user or ZERO
+    asks for always gets a handoff, keeping the newest step alone. Raises
     CompactionFailed when no handoff comes back, NothingToCompact when there
     is nothing to hand off."""
     records = session.log.branch()
@@ -200,7 +259,8 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     body = history.in_context(records)
     previous = history.latest_compaction(records)
     cleared = dict(previous.get("cleared") or {}) if previous else {}
-    start = kept_from(body, int(at * TAIL_SHARE))
+    asked_for = reason in history.ASKERS
+    start = kept_from(body, 0 if asked_for else int(at * TAIL_SHARE))
     if start is None:
         raise NothingToCompact("nothing older than the newest step to hand off")
     instructions = {whose: words.strip() for whose, words in
@@ -221,12 +281,12 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
         if seq in lines:
             found = {**found, "content": lines[seq]}
         after += room.message_tokens(found, tokens)
-    # Enough when it cleared something and leaves half the line; a clearing
-    # of nothing that looks enough means the estimate is off from the
-    # server's count, which the handoff trusts
+    # At the line, enough when it cleared something and leaves room for the
+    # next steps; a clearing of nothing that looks enough means the estimate
+    # is off from the server's count, which the handoff trusts
     cleared_some = len(lines) > len(cleared)
-    if (cleared_some and after <= at * CLEARED_ENOUGH and reason != "refused"
-            and not instructions):
+    if (reason == "line" and cleared_some
+            and leaves_room_for_steps(records, at, after, limits)):
         summary = previous.get("summary") if previous else None
         if summary:
             # The handoff stays, with the time it was written
@@ -242,8 +302,9 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
         f"- {described(r)}: {path_in(lines[str(r['seq'])])}"
         for r in body[:start] if str(r.get("seq")) in lines
     )
-    ask = INSTRUCTIONS.format(saved=SAVED.format(lines=saved) if saved else "",
-                              asked=asked(instructions))
+    ask = handoff_instructions(
+        reason, saved=SAVED.format(lines=saved) if saved else "",
+        asked=asked(instructions), keeps_answer=is_answer(body[start]))
     messages = session.messages[:upto] + [{"role": "user", "content": ask}]
     t0 = time.monotonic()
     reply = handoff_call(session, messages, room.handoff_room(at, limits), check)
@@ -276,13 +337,11 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
 
 # What a round's handoff call reads after the conversation, when the round
 # ended without one of its own (rounds/): nothing of it stays
-ROUND = INSTRUCTIONS.replace(
-    "this conversation's context is near its line, so everything before the "
-    "newest steps is about to be replaced by a handoff that you write now. The "
-    "newest steps stay as they are after it.",
-    "this round of the work in rounds has ended, so the whole conversation is "
-    "about to be replaced by a handoff that you write now; the next round "
-    "starts from it.",
+ROUND = INSTRUCTIONS.format(
+    occasion="this round of the work in rounds has ended",
+    replaced="the whole conversation is about to be replaced by a handoff that "
+             "you write now; the next round starts from it.",
+    answered="", saved="", asked="",
 )
 
 
@@ -300,7 +359,7 @@ def fresh(session, handoff, at, tokens=room.tokens, check=None, *, limits,
     fields = {"reason": reason, "tokens_before": before.tokens, "line": at,
               "fresh": True, "occasion": occasion}
     if not (handoff or "").strip():
-        ask = ROUND.format(saved="", asked="")
+        ask = ROUND
         t0 = time.monotonic()
         reply = handoff_call(session, session.messages + [
             {"role": "user", "content": ask}], room.handoff_room(at, limits),

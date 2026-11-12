@@ -5,9 +5,9 @@ from core.tools import tool
 
 DESCRIPTION = (
     "Compact this session's context before your next step: older outputs are "
-    "saved to files and cleared from view, and when that isn't enough, the "
-    "steps before the newest ones are replaced by a handoff you write. The "
-    "session's log keeps everything. It gives room, and every later step "
+    "saved to files and cleared from view, and everything before the step "
+    "that calls it is replaced by a handoff you write. The session's log "
+    "keeps everything. It gives room, and every later step "
     "reads a smaller context; the step after it reads the changed context "
     "as new input, not from the cache, and what was cleared is read again "
     "from its file. A compaction also comes on its own when the context "
@@ -18,8 +18,7 @@ DESCRIPTION = (
 INSTRUCTIONS = (
     "What the handoff keeps, in your words, beside its usual parts (the "
     "user's requests, their constraints, what was done, the state, the next "
-    "step): what the work ahead needs from the steps it replaces. With them, "
-    "a handoff is written even where clearing outputs would make room."
+    "step): what the work ahead needs from the steps it replaces."
 )
 DONE = "A compaction comes before your next step."
 

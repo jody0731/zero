@@ -3,6 +3,20 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.5
+
+Compacting when you ask is now a clean break, and the automatic compaction keeps more.
+
+- **`/compact` always writes a handoff**, with words or without, and keeps only the newest
+  step as it is, so a wrong turn you want gone is summed up rather than kept whole. ZERO's
+  own `compact` does the same. With nothing older than the newest step, the transcript says
+  so plainly instead of reporting a failure.
+- **The automatic compaction prefers clearing.** Near its line, ZERO first moves old command
+  outputs to files; that alone is now the compaction whenever it leaves room for the next few
+  steps at the session's own pace, measured from the model server's own counts. A handoff,
+  which can't be undone, comes less often.
+- **Fix.** A handoff no longer takes an answer ZERO already gave for one still to give.
+
 ## 0.7.4
 
 A compaction told what to keep: you, or ZERO itself, can say what a handoff must hold when

@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from core import history
 
 BYTES_PER_TOKEN = 1
+# The steps a session's pace is measured over: its newest
+PACE_STEPS = 20
 
 
 def tokens(text):
@@ -94,6 +96,24 @@ def fixed_tokens(records, messages, schemas, tokens=tokens):
         elif record["type"] == "assistant" and record.get("prompt_tokens"):
             found = min(found, record["prompt_tokens"])
     return found
+
+
+def tokens_a_step(records):
+    """The tokens a step adds to the context at the session's own pace: the
+    mean growth of its server's count from one call to the next, over its
+    newest PACE_STEPS steps, each pair of calls on one context (no
+    compaction, model switch or new system message between); None before
+    two calls have counted."""
+    grown, last = [], None
+    for record in records:
+        if record["type"] in history.SYSTEM_RECORDS:
+            last = None
+        elif record["type"] == "assistant" and record.get("prompt_tokens"):
+            if last is not None and record["prompt_tokens"] >= last:
+                grown.append(record["prompt_tokens"] - last)
+            last = record["prompt_tokens"]
+    grown = grown[-PACE_STEPS:]
+    return sum(grown) / len(grown) if grown else None
 
 
 def line(limits, window):

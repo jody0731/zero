@@ -42,7 +42,7 @@ from server.services import Refused, Service
 from subagents import tool as subtools
 from subagents.store import ADDED_COLUMNS, SCHEMA, WORKFLOW, SubagentStore
 from usage.spend import (
-    describe, dollars_of, log_use, passed_text, past_estimate,
+    describe, dollars_of, forget_log, log_use, passed_text, past_estimate,
 )
 
 # What send_message returns when a message went through
@@ -206,6 +206,10 @@ class SubagentsService(Service):
 
     def path(self, sid):
         return self.runtime.paths.sessions / f"{sid}.jsonl"
+
+    def session_deleted(self, sid):
+        """Its log's reader of what it used, let go of."""
+        forget_log(self.path(sid))
 
     def subtree_use(self, sid):
         """The use of the session and every subagent under it."""

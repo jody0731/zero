@@ -30,7 +30,8 @@ each time it changes). Each ends with a `bye` and its reason when the server
 closes it ("stopped": stay down until the user types; "restart": a newer
 build, reconnect at once; "behind": the client read too slowly and the
 events waiting for it passed their cap, so it watches again from its last
-seq, the log holding them all).
+seq, the log holding them all; "deleted", a session's watch only: the
+session was deleted).
 
 A component's messages (job/…, grant/…, model/…) are described here and
 handled in the component's own server part, as a tool is described in core's

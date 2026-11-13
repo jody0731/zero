@@ -24,7 +24,6 @@ import json
 import re
 import sqlite3
 import threading
-from collections import Counter
 from pathlib import Path
 
 from core import history
@@ -66,6 +65,9 @@ MARKS = ("«", "»")
 # its answer sixth, behind five commands; first at half; the rest unchanged
 CALL_WEIGHT = 0.5
 RANK = f"bm25(records) * (CASE kind WHEN 'call' THEN {CALL_WEIGHT} ELSE 1.0 END)"
+# The most matches a search's first look ranks (7.5.2: a common word across
+# thousands of sessions); the rest are counted by session, not ranked
+FIRST_LOOK_RECORDS = 5000
 # A query's pieces: "a phrase" (maybe a prefix) or a run of anything else
 QUERY_PIECE = re.compile(r'"[^"]*"\*?|[^\s"]+')
 OPERATORS = ("OR", "AND", "NOT")
@@ -291,16 +293,23 @@ class Index:
 
     def sessions_matching(self, query):
         """[(session, its matching records' count, its best record's rowid)],
-        best first, for an FTS5 query."""
+        best first, for an FTS5 query. Only the best FIRST_LOOK_RECORDS
+        matches are ranked; a session whose matches all rank below them
+        comes last, its count kept and its best rowid None."""
         rows = self._match(
             "SELECT rowid, session FROM records WHERE records MATCH ? "
-            f"ORDER BY {RANK}", query,
+            f"ORDER BY {RANK} LIMIT ?", query, FIRST_LOOK_RECORDS,
         )
-        counts = Counter(row["session"] for row in rows)
+        counts = {row["session"]: row["n"] for row in self._match(
+            "SELECT session, count(*) AS n FROM records WHERE records MATCH ? "
+            "GROUP BY session", query,
+        )}
         best = {}
         for row in rows:
             best.setdefault(row["session"], row["rowid"])
-        return [(sid, counts[sid], rowid) for sid, rowid in best.items()]
+        ranked = [(sid, counts.get(sid, 1), rowid) for sid, rowid in best.items()]
+        return ranked + [(sid, n, None) for sid, n in counts.items()
+                         if sid not in best]
 
     def hits(self, query, rowids, snippet_words):
         """The records with these rowids, each with its snippet

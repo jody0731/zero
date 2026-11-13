@@ -644,19 +644,32 @@ def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options)
 def server_session_maker(paths, config, limits=None):
     """How the server makes a session (its `make_session`): server_session on
     `config()`, read as it stands at each use; `limits` over the config's."""
-    options = {"limits": limits} if limits else {}
-    # Each session's scratch folder, kept while the server runs: a session
-    # built again (a switch of mode, model or workspace) finds its files
-    scratches = {}
+    return ServerSessionMaker(paths, config, {"limits": limits} if limits else {})
 
-    def make(sid, info, log=None, ask=PARK):
-        scratch = scratches.setdefault(sid, Scratch())
+
+class ServerSessionMaker:
+    """How the server makes a session (its `make_session`), and what it
+    keeps of each: its scratch folder, kept while the server runs, so a
+    session built again (a switch of mode, model or workspace) finds its
+    files; let go of when the session is deleted (`forget`)."""
+
+    def __init__(self, paths, config, options):
+        self.paths = paths
+        self.config = config
+        self.options = options
+        self.scratches = {}
+
+    def __call__(self, sid, info, log=None, ask=PARK):
+        scratch = self.scratches.setdefault(sid, Scratch())
         return server_session(
-            paths, sid, info, log, ask, config=config, scratch=scratch,
-            **options,
+            self.paths, sid, info, log, ask, config=self.config, scratch=scratch,
+            **self.options,
         )
 
-    return make
+    def forget(self, sid):
+        """A deleted session's scratch folder, let go of: removed once no
+        harness of it holds it."""
+        self.scratches.pop(sid, None)
 
 
 def services(config, make_consent=None, saved_permissions=permissions_file,

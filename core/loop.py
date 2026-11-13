@@ -91,6 +91,10 @@ class Session:
         # (take_wanted_compaction)
         self.compaction_wanted_by = None
         self.compaction_instructions = None
+        # What its maker adds to its log's first record, its header (a
+        # server's: the session's row, so a log with no row is listed again
+        # from it)
+        self.header_fields = {}
         if records:
             self.restore(log)
         else:
@@ -228,6 +232,7 @@ class Session:
             "hooks": [repr(p) for p in self.hooks.hooks],
             "system_prompt": self.messages[0]["content"],
             **self.marked(),
+            **self.header_fields,
         }
 
     def write(self, type, **fields):

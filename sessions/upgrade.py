@@ -224,6 +224,18 @@ def from_3(records, header, time):
 MIGRATIONS = {1: from_1, 2: from_2, 3: from_3}
 
 
+def backup_path(path, source):
+    """Where an upgraded log's original is kept: beside it, its format in
+    its name."""
+    return path.with_name(f"{path.stem}.format-{source}.jsonl")
+
+
+def is_backup(path):
+    """Whether a file in the sessions' folder is an upgraded log's original
+    (backup_path), not a session's log."""
+    return ".format-" in Path(path).name
+
+
 def migrate(records, header=None, *, time):
     """Pure in-memory upgrades, one step at a time; no file or clock access."""
     if not records:
@@ -288,7 +300,7 @@ def upgrade_file(log, header):
     data = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in upgraded).encode()
     temp = _temp(log.path.parent, log.path.name, data)
     try:
-        backup = log.path.with_name(f"{log.path.stem}.format-{source}.jsonl")
+        backup = backup_path(log.path, source)
         _backup(backup, original)
         os.replace(temp, log.path)
         log.last_seq = None

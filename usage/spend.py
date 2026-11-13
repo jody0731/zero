@@ -246,6 +246,12 @@ def log_use(path, now=None):
     return reader.read(now)
 
 
+def forget_log(path):
+    """The log at `path` is gone (its session deleted): its reader too."""
+    with READERS_LOCK:
+        READERS.pop(str(path), None)
+
+
 def dollars_text(amount):
     """Dollars as the user's screens show them: to the cent, and an amount
     under a cent to its first two figures ($0.0017), so a small use isn't

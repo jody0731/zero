@@ -22,6 +22,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import threading
 import weakref
 from pathlib import Path
 
@@ -411,7 +412,54 @@ def cover_vanished(exit_code, output_head):
     return match is not None and not os.path.lexists(match.group(1))
 
 
-def tmp_socket_holders():
+class OneLookForAll:
+    """A look many threads want at once, made once for all who asked
+    before it began (7.5.2: one look through /tmp a moment, however many
+    sessions start a command). An ask waits for a look begun after it, so
+    no answer is older than its ask: one arriving while a look runs waits
+    for the next, which starts as soon as that one ends and answers every
+    ask made meanwhile."""
+
+    def __init__(self, look):
+        self.look = look
+        self.changed = threading.Condition()
+        # Asks numbered as they come; the newest ask a finished look answers
+        self.asked = 0
+        self.answered = 0
+        self.running = False
+        self.answer = None
+        self.error = None
+
+    def __call__(self):
+        with self.changed:
+            self.asked += 1
+            mine = self.asked
+            while self.answered < mine:
+                if not self.running:
+                    break
+                self.changed.wait()
+            else:
+                return self.result()
+            self.running = True
+            covers = self.asked
+        try:
+            answer, error = self.look(), None
+        except Exception as failure:
+            answer, error = None, failure
+        with self.changed:
+            self.answer, self.error = answer, error
+            self.answered = covers
+            self.running = False
+            self.changed.notify_all()
+            return self.result()
+
+    def result(self):
+        if self.error is not None:
+            raise self.error
+        return self.answer
+
+
+def look_through_tmp():
     """The entries at /tmp's top that are sockets or hold one within
     SOCKET_DEPTH folders, looked for a level at a time across all of them,
     so a socket near the top (X11's, tmux's, an ssh agent's) is found however
@@ -468,6 +516,15 @@ def tmp_socket_holders():
             break
         level = deeper
     return [top for top in tops if top in found]
+
+
+TMP_LOOK = OneLookForAll(look_through_tmp)
+
+
+def tmp_socket_holders():
+    """What the look through /tmp found (look_through_tmp), from a look
+    begun after this ask, shared with every ask made meanwhile."""
+    return list(TMP_LOOK())
 
 
 def inner_gits(workspace):

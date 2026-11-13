@@ -54,14 +54,13 @@ class JobStore:
 
     def add_job(self, id, session, command, pid, started_at, due_at,
                 next_checkin_at, pid_start=None, started_from_seq=None):
-        with self.store.transaction() as db:
-            db.execute(
-                "INSERT INTO jobs (id, session, command, pid, pid_start, state, "
-                "started_at, due_at, next_checkin_at, started_from_seq) "
-                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
-                (id, session, command, pid, pid_start, started_at, due_at,
-                 next_checkin_at, started_from_seq),
-            )
+        self.store.write(lambda db: db.execute(
+            "INSERT INTO jobs (id, session, command, pid, pid_start, state, "
+            "started_at, due_at, next_checkin_at, started_from_seq) "
+            "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
+            (id, session, command, pid, pid_start, started_at, due_at,
+             next_checkin_at, started_from_seq),
+        ))
 
     def job(self, id):
         rows = self.store.query("SELECT * FROM jobs WHERE id = ?", id)
@@ -80,8 +79,8 @@ class JobStore:
 
     def update_job(self, id, **fields):
         names = ", ".join(f"{name} = ?" for name in fields)
-        with self.store.transaction() as db:
-            db.execute(f"UPDATE jobs SET {names} WHERE id = ?", (*fields.values(), id))
+        self.store.write(lambda db: db.execute(
+            f"UPDATE jobs SET {names} WHERE id = ?", (*fields.values(), id)))
 
     def settle_job(self, id, notice=None, **fields):
         """A running job's change of state and its notice in one transaction, so
@@ -89,7 +88,8 @@ class JobStore:
         its summary without the output, which the judge reads).
         Returns False if the job had already settled."""
         names = ", ".join(f"{name} = ?" for name in fields)
-        with self.store.transaction() as db:
+
+        def change(db):
             changed = db.execute(
                 f"UPDATE jobs SET {names} WHERE id = ? AND state = 'running'",
                 (*fields.values(), id),
@@ -106,7 +106,9 @@ class JobStore:
                     # Where it started, for a notice from a part left behind
                     payload["started_from_seq"] = row["started_from_seq"]
                 self.store.queue_notice(db, msg_id, row["session"], SOURCE, payload)
-        return True
+            return True
+
+        return self.store.write(change)
 
     def withdraw(self, msg_id):
         """A notice the model no longer needs: done, if no turn took it yet."""

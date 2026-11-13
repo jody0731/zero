@@ -19,6 +19,48 @@ from core import history
 
 # A turn's outcomes that leave its session failed
 FAILED = ("crashed", "cut_off", "failed")
+# What a session's row holds that its log's header carries, under "row"
+# (7.5.2), so a log with no row is listed again from it; what it runs with
+# (model, mode, workspace) the log already says
+HEADER_ROW_FIELDS = ("title", "source", "parent", "started_by", "created_at")
+# Who a log from before 7.5.2 is listed as from, with no row in its header
+# and no message of the user's (its title is then its id)
+ADOPTED_SOURCE = "found"
+
+
+def header_row(row):
+    """What of a session's row its log's header carries."""
+    return {name: row[name] for name in HEADER_ROW_FIELDS if row.get(name) is not None}
+
+
+def adopted_row(sid, records, title):
+    """The row of session `sid`, whose log has none (design rule 9), from
+    its records in the current format: its header's row, else (a log from
+    before 7.5.2) its first message's words and sender, `title(text)` its
+    title (its id, with no message); what it runs with as the log says.
+    None for a log with no header, not a session's."""
+    if not records or records[0].get("type") != "session":
+        return None
+    header = records[0]
+    row = dict(header.get("row") or {})
+    if "title" not in row or "source" not in row:
+        first = next((r for r in records if r["type"] == "user"
+                      and not r.get("steer")), None)
+        text = (first or {}).get("text", "").strip()
+        row.setdefault("title", title(text) if text else sid)
+        row.setdefault("source", (first or {}).get("source") or ADOPTED_SOURCE)
+    forked = header.get("forked_from") or {}
+    if forked:
+        row.setdefault("parent", forked.get("session"))
+        row.setdefault("started_by", forked.get("started_by"))
+    settings = header.get("settings") or {}
+    now = history.running_with(records)
+    row["model"] = now.get("model") or header.get("model")
+    row["mode"] = now.get("mode") or header.get("mode") or settings.get("mode")
+    row["workspace"] = (now.get("workspace") or settings.get("workspace") or "/")
+    row.setdefault("created_at", timestamp(header.get("time")))
+    row["updated_at"] = timestamp(records[-1].get("time"))
+    return row
 
 
 @dataclass

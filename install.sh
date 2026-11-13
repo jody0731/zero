@@ -32,17 +32,29 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# The Python ZERO runs on: $ZERO_PYTHON, else a free-threaded one on the PATH
+# (its sessions then run side by side on every core), else python3
+PYTHON=${ZERO_PYTHON:-}
+if [ -z "$PYTHON" ]; then
+    for candidate in python3.16t python3.15t python3.14t python3; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PYTHON=$candidate
+            break
+        fi
+    done
+fi
+
 # What ZERO needs, all of it said at once; the package names are Debian's and
 # Ubuntu's
 missing=""
 command -v git >/dev/null 2>&1 || missing="$missing git"
 command -v bwrap >/dev/null 2>&1 || missing="$missing bubblewrap"
-if ! command -v python3 >/dev/null 2>&1; then
+if [ -z "$PYTHON" ] || ! command -v "$PYTHON" >/dev/null 2>&1; then
     missing="$missing python3"
-elif ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
-    echo "ZERO needs Python 3.11 or newer; python3 is $(python3 -V 2>&1)." >&2
+elif ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
+    echo "ZERO needs Python 3.11 or newer; $PYTHON is $("$PYTHON" -V 2>&1)." >&2
     exit 1
-elif ! python3 -c 'import ensurepip, venv' >/dev/null 2>&1; then
+elif ! "$PYTHON" -c 'import ensurepip, venv' >/dev/null 2>&1; then
     missing="$missing python3-venv"
 fi
 if [ -n "$missing" ]; then
@@ -60,8 +72,21 @@ if [ -d "$ROOT/.git" ]; then
     fi
 fi
 
+# The environment made again when it was made with another Python (a
+# free-threaded one found since, or ZERO_PYTHON set)
+# A Python's version and whether it is free-threaded
+kind='import sys, sysconfig
+print(sys.version_info[:2], sysconfig.get_config_var("Py_GIL_DISABLED"))'
+want=$("$PYTHON" -c "$kind")
+if [ -x "$ROOT/.venv/bin/python" ]; then
+    have=$("$ROOT/.venv/bin/python" -c "$kind" 2>/dev/null || echo none)
+    if [ "$have" != "$want" ]; then
+        echo "ZERO's environment is made again with $PYTHON ($("$PYTHON" -V 2>&1))."
+        rm -rf "$ROOT/.venv"
+    fi
+fi
 if [ ! -x "$ROOT/.venv/bin/python" ]; then
-    python3 -m venv "$ROOT/.venv"
+    "$PYTHON" -m venv "$ROOT/.venv"
 fi
 "$ROOT/.venv/bin/python" -m pip install --quiet --disable-pip-version-check \
     -r "$ROOT/requirements.txt"

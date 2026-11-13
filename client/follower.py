@@ -2,8 +2,9 @@
 
 The server's `bye` says what to do when it closes the watch: "stopped" (by
 the user) leaves the server down until the user sends something; "restart" (a
-newer build) follows again at once. A watch that ends with no `bye` was a
-crash: following again starts a server, which resumes the cut-off turn.
+newer build) follows again at once; "deleted" (the session was) ends the
+follow. A watch that ends with no `bye` was a crash: following again starts a
+server, which resumes the cut-off turn.
 """
 
 import threading
@@ -65,6 +66,10 @@ class Follower:
                 return
             finally:
                 self.close_stream()
+            if stream.bye == "deleted":
+                if not self.leaving.is_set():
+                    self.emit(f"({self.state.session} was deleted)")
+                return
             if stream.bye == "stopped":
                 self.stopped = True
                 if not self.leaving.is_set():

@@ -79,13 +79,12 @@ class SubagentStore:
         )
 
     def mark_past(self, session, at):
-        with self.store.transaction() as db:
-            db.execute(
-                "UPDATE subagents SET past_estimate_at = ? WHERE session = ?",
-                (at, session),
-            )
+        self.store.write(lambda db: db.execute(
+            "UPDATE subagents SET past_estimate_at = ? WHERE session = ?",
+            (at, session),
+        ))
 
     def notice(self, msg_id, session, source, payload):
         """A notice into a session's inbox, kept once by its id."""
-        with self.store.transaction() as db:
-            self.store.queue_notice(db, msg_id, session, source, payload)
+        self.store.write(lambda db: self.store.queue_notice(
+            db, msg_id, session, source, payload))

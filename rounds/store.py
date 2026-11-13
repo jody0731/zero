@@ -75,15 +75,15 @@ class RoundStore:
         """`estimate`: (rounds, minutes, weighted tokens); `dollars`: the
         estimate in the user's unit."""
         rounds, minutes, weighted_tokens = estimate
-        with self.store.transaction() as db:
-            db.execute(
-                "INSERT INTO rounds (id, session, objective, done_check, state, "
-                "estimate_rounds, estimate_minutes, estimate_weighted_tokens, "
-                "estimate_dollars, round_inbox, started_at) "
-                "VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)",
-                (id, session, objective, done_check, rounds, minutes,
-                 weighted_tokens, dollars, inbox, time.time()),
-            )
+        now = time.time()
+        self.store.write(lambda db: db.execute(
+            "INSERT INTO rounds (id, session, objective, done_check, state, "
+            "estimate_rounds, estimate_minutes, estimate_weighted_tokens, "
+            "estimate_dollars, round_inbox, started_at) "
+            "VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)",
+            (id, session, objective, done_check, rounds, minutes,
+             weighted_tokens, dollars, inbox, now),
+        ))
 
     def run(self, id):
         rows = self.store.query("SELECT * FROM rounds WHERE id = ?", id)
@@ -109,7 +109,8 @@ class RoundStore:
         """A run's change, and the next round's message with it in one
         transaction. `notice`: (inbox id, text)."""
         names = ", ".join(f"{name} = ?" for name in fields)
-        with self.store.transaction() as db:
+
+        def change(db):
             if fields:
                 db.execute(f"UPDATE rounds SET {names} WHERE id = ?",
                            (*fields.values(), id))
@@ -122,30 +123,35 @@ class RoundStore:
                     db, msg_id, session, SOURCE, {"text": text, "run": id}
                 )
 
+        self.store.write(change)
+
     def finish(self, id, notice=None, **fields):
         """A round's end, as `update`, unless the run was stopped meanwhile
         (its handoff is a model call): then what the round used is kept, and
         the run stays stopped, no next round queued. Whether it went on."""
-        names = ", ".join(f"{name} = ?" for name in fields)
-        with self.store.transaction() as db:
+
+        def change(db):
+            kept, said = fields, notice
             row = db.execute("SELECT state, session FROM rounds WHERE id = ?",
                              (id,)).fetchone()
             if row["state"] == "stopped":
-                fields = {name: value for name, value in fields.items()
-                          if name.startswith("spent_") or name in (
-                              "failed_count", "last_status", "check_exit_code",
-                              "check_output_path")}
-                names = ", ".join(f"{name} = ?" for name in fields)
-                notice = None
-            if fields:
+                kept = {name: value for name, value in fields.items()
+                        if name.startswith("spent_") or name in (
+                            "failed_count", "last_status", "check_exit_code",
+                            "check_output_path")}
+                said = None
+            if kept:
+                names = ", ".join(f"{name} = ?" for name in kept)
                 db.execute(f"UPDATE rounds SET {names} WHERE id = ?",
-                           (*fields.values(), id))
-            if notice is not None:
-                msg_id, text = notice
+                           (*kept.values(), id))
+            if said is not None:
+                msg_id, text = said
                 self.store.queue_notice(
                     db, msg_id, row["session"], SOURCE, {"text": text, "run": id}
                 )
-        return notice is not None
+            return said is not None
+
+        return self.store.write(change)
 
     def withdraw(self, msg_id):
         """A round's message no turn took yet, withdrawn (a stop)."""

@@ -168,7 +168,8 @@ def matching_sessions(index, listed, words, count, asking, snippet_words):
              if sid in listed]
     found.sort(key=lambda item: item[0] == asking)
     first = found[:count]
-    hits = index.hits(words, [rowid for _, _, rowid in first], snippet_words)
+    hits = index.hits(words, [rowid for _, _, rowid in first if rowid is not None],
+                      snippet_words)
     rows = [{**listed[sid], "record_count": n, "best": hits.get(rowid)}
             for sid, n, rowid in first]
     return {"session_count": len(found),

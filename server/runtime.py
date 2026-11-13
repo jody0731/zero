@@ -37,10 +37,21 @@ listeners hear each change to it (session_actions.py).
 The runtime names no component: the assembly hands in how a session is
 made, the modes, and the services (server/services.py), which add their
 tables, messages, reply step and share of each session.
+
+Parallel by design (7.5.2): each session owns its state, behind its own lock
+(server/session_state.py): admission, its runner's next message, its turn's
+end, a stop. A message to one session never waits on another's. The runtime
+keeps the table of them behind one door (`door`), held only for a lookup or
+a count (what runs, what is leaving, what is being admitted), never for a
+query, a commit, a thread's start or a service; a session's lock is taken
+before the door, never after. Dispatch starts the runner of the session a
+message came to, not a look through every session's inbox.
 """
 
 import json
+import sqlite3
 import threading
+import time
 import traceback
 from collections import deque
 from dataclasses import dataclass, field
@@ -58,8 +69,9 @@ from server import rebuild
 from server.rebuild import FAILED
 from server.services import Refused
 from server.session_actions import (
-    SessionActions, asked, check_thinking_effort, new_id, title,
+    ID_TRIES, SessionActions, asked, check_thinking_effort, new_id, title,
 )
+from server.session_state import SessionState
 from server.store import Store, UnknownSession
 
 MAX_RESUMES = 3
@@ -69,8 +81,12 @@ CONTINUE = "[The user asked you to go on with the task.]"
 # Events a watch may have waiting; a watcher further behind is let go with
 # a `bye` "behind", and follows again from the log, which holds them all
 WATCH_QUEUE_MAX = 2000
-# Why a watch the runtime lets go ends (protocol/messages.py)
+# Why a watch the runtime lets go ends (protocol/messages.py): too far
+# behind, or its session deleted
 BEHIND = "behind"
+DELETED = "deleted"
+# How often `wait` looks again at a message no runner has taken yet
+WAIT_LOOK_SECONDS = 0.05
 
 
 @dataclass
@@ -184,30 +200,26 @@ class Runtime(SessionActions):
         self._model = model
         self.default_model = default_model
         self._mode = mode
-        # Harness sessions in memory, while the server runs: id → session
-        self.live = {}
-        # One runner thread per session with work: id → thread
-        self.runners = {}
-        # How many runners were ever held (hold_runner)
+        # Each session's own state while the server runs: id → SessionState
+        self.states = {}
+        # How a session's lock is made (a probe times them)
+        self.make_lock = threading.Lock
+        # The door to the table and the counts below; `activity` hears each
+        # count change
+        self.door = threading.Lock()
+        self.activity = threading.Condition(self.door)
+        # Sessions held by a runner now, and threads of theirs past their
+        # last turn still to say their last word (settled, then a dispatch
+        # that may start a turn on a message admitted meanwhile): nothing is
+        # at rest until both are none
+        self.runner_count = 0
+        self.leaving_count = 0
+        # Admissions under way, and how many runners and admissions there
+        # ever were: a look at what is busy made in two steps sees one that
+        # came between (close_if_idle)
+        self.admitting = 0
         self.runners_held = 0
-        # Sessions whose runner has left `runners` and still has its last word
-        # to say (settled, then dispatch), as id → how many: that dispatch may
-        # start a turn on a message admitted meanwhile, so nothing is at rest
-        # until it has
-        self.leaving = {}
-        self.running = {}
-        self.blocked = set()
-        # Watching connections: session id → {token: Watcher}
-        self.watchers = {}
-        # The reply streaming in, per session: its latest draft event
-        self.drafts = {}
-        # Each session's context meter, as its watchers last got it, and the
-        # line it was measured under (meter_line)
-        self.meters = {}
-        self.meter_lines = {}
-        self.watch_lock = threading.Lock()
-        self.lock = threading.Lock()
-        self.changed = threading.Condition(self.lock)
+        self.admissions = 0
         self.accepting = True
         self.started = False
         # The session list's listeners wait for its version to move
@@ -242,6 +254,88 @@ class Runtime(SessionActions):
             raise Refused(f"unknown mode {mode!r}; modes: {self.modes}")
         return mode
 
+    def state(self, sid):
+        """The session's own state, made on its first use."""
+        found = self.states.get(sid)
+        if found is not None:
+            return found
+        with self.door:
+            found = self.states.get(sid)
+            if found is None:
+                found = self.states[sid] = SessionState(self.make_lock())
+            return found
+
+    def all_states(self):
+        """(id, state) for every session the server keeps, as they are now."""
+        with self.door:
+            return list(self.states.items())
+
+    # What runs and what is kept, as one look across the sessions: for the
+    # tests, the evals and the probes; the runtime reads each session's own
+
+    @property
+    def runners(self):
+        return {sid: s.runner for sid, s in self.all_states() if s.runner is not None}
+
+    @property
+    def running(self):
+        return {sid: s.running for sid, s in self.all_states()
+                if s.running is not None}
+
+    @property
+    def live(self):
+        return {sid: s.harness for sid, s in self.all_states()
+                if s.harness is not None}
+
+    @property
+    def watchers(self):
+        return {sid: dict(s.watchers) for sid, s in self.all_states() if s.watchers}
+
+    @property
+    def blocked(self):
+        return {sid for sid, s in self.all_states() if s.blocked}
+
+    @property
+    def leaving(self):
+        return {sid: s.leaving for sid, s in self.all_states() if s.leaving}
+
+    def hold_runner(self, state, thread, while_accepting=False):
+        """`state.lock` held: `thread` is the session's runner, so no other
+        turn of it starts; counted, so a look at what is busy made in two
+        steps sees one that came between (close_if_idle). `while_accepting`:
+        not once the idle close has begun (False then)."""
+        with self.activity:
+            if while_accepting and not self.accepting:
+                return False
+            self.runner_count += 1
+            self.runners_held += 1
+        state.runner = thread
+        return True
+
+    def let_go(self, state, leaving):
+        """`state.lock` held: its runner lets go of the session; `leaving`,
+        with its last word still to say (said_last_word)."""
+        state.runner = None
+        if leaving:
+            state.leaving += 1
+        with self.activity:
+            self.runner_count -= 1
+            if leaving:
+                self.leaving_count += 1
+            self.activity.notify_all()
+
+    def said_last_word(self, state):
+        with state.lock:
+            state.leaving -= 1
+        with self.activity:
+            self.leaving_count -= 1
+            self.activity.notify_all()
+
+    def busy_now(self):
+        """`door` held: a runner holds a session, says its last word, or a
+        message is being admitted."""
+        return bool(self.runner_count or self.leaving_count or self.admitting)
+
     def notify_list_changed(self):
         with self.list_changed:
             self.list_version += 1
@@ -271,7 +365,7 @@ class Runtime(SessionActions):
         if record["type"] == "turn_end":
             self.store.mark_ended(sid, record["seq"])
         # Any record ends the draft: the reply's own, a retry, a stop's note
-        self.drafts.pop(sid, None)
+        self.state(sid).draft = None
         self.publish(sid, {"record": record})
         self.meter(sid, record)
 
@@ -281,15 +375,16 @@ class Runtime(SessionActions):
         session or when the line's setting has changed since, then record by
         record (core/history.py)."""
         compact_at = self.meter_line()
-        before = self.meters.get(sid)
-        if before is None or self.meter_lines.get(sid) != compact_at:
+        state = self.state(sid)
+        before = state.meter
+        if before is None or state.meter_line != compact_at:
             now = None
             for each in self.log(sid).branch():
                 now = history.metered(now, each, compact_at)
         else:
             now = history.metered(before, record, compact_at)
-        self.meters[sid] = now
-        self.meter_lines[sid] = compact_at
+        state.meter = now
+        state.meter_line = compact_at
         if now != before and now["tokens"]:
             self.publish(sid, {"context": now})
 
@@ -304,12 +399,13 @@ class Runtime(SessionActions):
             "reasoning": len(draft.reasoning),
             "calls": [call["name"] for _, call in sorted(draft.calls.items())],
         }}
-        self.drafts[sid] = event
+        self.state(sid).draft = event
         self.publish(sid, event)
 
     def current_draft(self, sid):
         """The draft event of the reply streaming in now, or None."""
-        return self.drafts.get(sid)
+        state = self.states.get(sid)
+        return None if state is None else state.draft
 
     def session_lock(self, sid):
         return SessionLock(self.paths.locks / f"{sid}.lock")
@@ -359,7 +455,6 @@ class Runtime(SessionActions):
                     "(Connect a model; later /settings, Models and keys), or "
                     "--model names one"
                 )
-            sid = new_id()
             new = {
                 "title": title(message.text),
                 "source": message.source,
@@ -378,31 +473,59 @@ class Runtime(SessionActions):
             payload["reply_to"] = message.reply_to
             if message.choice is not None:
                 payload["choice"] = message.choice
-        with self.lock:
-            handled_as = "started" if new else self.handled_as(sid, message)
-            if handled_as == "queued":
-                payload["follow_up"] = True
-            try:
-                admitted, sid = self.store.admit(
-                    message.id, sid, "user", message.source, payload,
-                    new_session=new,
-                )
-            except UnknownSession:
-                raise Refused(f"no session {sid!r}") from None
-        if admitted and self.started:
-            self.dispatch()
+        with self.door:
+            if not self.accepting:
+                raise Refused("the server is shutting down; send it again once "
+                              "it's back")
+            self.admitting += 1
+            self.admissions += 1
+        try:
+            admitted, sid, handled_as = self.admit_to_session(
+                message, sid, new, payload)
+            if admitted and self.started:
+                self.dispatch(sid)
+        finally:
+            with self.activity:
+                self.admitting -= 1
+                self.activity.notify_all()
         return {"admitted": admitted, "session": sid, "handled_as": handled_as}
 
-    def handled_as(self, sid, message):
-        """What becomes of a message to this session, decided under the lock:
-        `reply` to its open ask, `steered` or `queued` (a follow-up) while a
-        turn runs or waits to, `started` otherwise."""
+    def admit_to_session(self, message, sid, new, payload):
+        """(admitted, session id, handled_as): what becomes of the message
+        decided and its row committed under the session's own lock. A new
+        session takes a new id, and another when one is taken."""
+        for tries in range(1, ID_TRIES + 1):
+            if new:
+                sid = new_id()
+            state = self.state(sid)
+            with state.lock:
+                handled_as = "started" if new else self.handled_as(sid, state, message)
+                said = dict(payload)
+                if handled_as == "queued":
+                    said["follow_up"] = True
+                try:
+                    admitted, sid = self.store.admit(
+                        message.id, sid, "user", message.source, said,
+                        new_session=new,
+                    )
+                except UnknownSession:
+                    raise Refused(f"no session {sid!r}") from None
+                except sqlite3.IntegrityError:
+                    if not new or tries == ID_TRIES:
+                        raise
+                    continue
+                return admitted, sid, handled_as
+
+    def handled_as(self, sid, state, message):
+        """What becomes of a message to this session, decided under its
+        lock: `reply` to its open ask, `steered` or `queued` (a follow-up)
+        while a turn runs or waits to, `started` otherwise."""
         info = self.store.session(sid)
         if info is None:
             raise Refused(f"no session {sid!r}")
         if info["state"] == "waiting" and self.store.open_ask(sid) is not None:
             return "reply"
-        busy = sid in self.runners or sid in self.store.waiting_sessions()
+        busy = state.runner is not None or self.store.has_queued(sid)
         if not busy:
             return "started"
         return "queued" if message.when_busy == "queue" else "steered"
@@ -417,8 +540,9 @@ class Runtime(SessionActions):
         seen = self.store.query("SELECT session FROM inbox WHERE id = ?", msg_id)
         if seen:
             return {"admitted": False, "session": sid}
-        with self.lock:
-            if sid in self.runners or sid in self.store.waiting_sessions():
+        state = self.state(sid)
+        with state.lock:
+            if state.runner is not None or self.store.has_queued(sid):
                 raise Refused("a turn is running in this session; nothing to continue")
             if self.store.open_ask(sid) is not None:
                 raise Refused("a question is waiting in this session: answer it")
@@ -446,7 +570,7 @@ class Runtime(SessionActions):
             try:
                 lock.acquire()
             except Busy as error:
-                self.blocked.add(sid)
+                self.state(sid).blocked = True
                 print(f"Skipping {sid}: {error}")
                 continue
             try:
@@ -458,12 +582,40 @@ class Runtime(SessionActions):
         self.started = True
         self.dispatch()
 
+    def adopt_logs(self):
+        """Design rule 9: a log with no row (its database lost or replaced,
+        a fork cut off between its log and its row, a log copied in) is
+        listed again, its row made from its header (rebuild.adopted_row),
+        its other rows then rebuilt from it as any log ahead of its rows
+        is. A file that isn't a session's log is left alone."""
+        known = self.store.session_ids()
+        for path in sorted(self.paths.sessions.glob("*.jsonl")):
+            sid = path.stem
+            # An upgraded log's original beside it starts as a log does
+            if sid in known or upgrade.is_backup(path):
+                continue
+            try:
+                records = self.log(sid).records()
+                if not records or records[0].get("type") != "session":
+                    # Not a session's log
+                    continue
+                records = upgrade.migrate(records, time=upgrade.timestamp())
+                row = rebuild.adopted_row(sid, records, title)
+                if row is None:
+                    continue
+                self.store.add_session(sid, row)
+                print(f"ZERO's server: listed {sid} again from its log "
+                      "(it had no row)", flush=True)
+            except Exception:
+                traceback.print_exc()
+
     def rebuild_ahead(self):
         """Design rule 9: rebuild the rows of each session whose log is
         ahead of them (past its row's `log_seq`), from the log, under the
         session's lock: the kernel's (server/rebuild.py) and each service's,
         in one transaction. A session in step is only looked at: its log's
-        last record, read from the end."""
+        last record, read from the end. A log with no row is adopted first."""
+        self.adopt_logs()
         services = [service.rebuild for service in self.services.values()]
         for row in self.store.sessions():
             sid = row["id"]
@@ -480,7 +632,7 @@ class Runtime(SessionActions):
             try:
                 lock.acquire()
             except Busy as error:
-                self.blocked.add(sid)
+                self.state(sid).blocked = True
                 print(f"Skipping {sid}: {error}")
                 continue
             try:
@@ -588,7 +740,7 @@ class Runtime(SessionActions):
     def repair_end(self, log, pending, row, outcome, detail, stopped=False):
         """Close a cut-off turn without calling either model."""
         if history.log_format(log.branch()) == history.LOG_FORMAT:
-            writer = self.live.get(row["session"])
+            writer = self.state(row["session"]).harness
             if writer is None:
                 writer = Session(None, [], "", log, {})
             else:
@@ -606,29 +758,34 @@ class Runtime(SessionActions):
         write("turn_end", inbox=row["id"], outcome=outcome, detail=detail,
               seconds=0.0, agent_seconds=0.0, wait_seconds=0.0)
 
-    def dispatch(self):
-        """Start a runner for each session with queued messages and none running."""
-        with self.lock:
-            if not self.accepting:
+    def dispatch(self, sid=None):
+        """Start a runner for the session `sid`, if a message of it can
+        start a turn and none runs; for every such session when `sid` is
+        None (the start, a service's notice)."""
+        if not self.accepting:
+            return
+        for each in ([sid] if sid is not None else self.store.waiting_sessions()):
+            self.start_runner(each)
+
+    def start_runner(self, sid):
+        # Looked at first, so a session gone (deleted) gets no state again
+        if not self.store.has_queued(sid):
+            return
+        state = self.state(sid)
+        with state.lock:
+            if (state.runner is not None or state.blocked
+                    or not self.store.has_queued(sid)):
                 return
-            for sid in self.store.waiting_sessions():
-                if sid not in self.runners and sid not in self.blocked:
-                    thread = threading.Thread(
-                        target=self.runner, args=(sid,), name=f"session-{sid}"
-                    )
-                    # A stop doesn't wait on a thread past the drain
-                    thread.daemon = True
-                    self.hold_runner(sid, thread)
-                    thread.start()
+            thread = threading.Thread(
+                target=self.runner, args=(sid, state), name=f"session-{sid}",
+                # A stop doesn't wait on a thread past the drain
+                daemon=True,
+            )
+            # The idle close come first: the message waits for the next start
+            if self.hold_runner(state, thread, while_accepting=True):
+                thread.start()
 
-    def hold_runner(self, sid, thread):
-        """`self.lock` held: `thread` is the session's runner, so no other
-        turn of it starts; counted, so a look at what is busy made in two
-        steps sees one that came between (close_if_idle)."""
-        self.runners[sid] = thread
-        self.runners_held += 1
-
-    def runner(self, sid):
+    def runner(self, sid, state):
         """Run a session's queued messages one at a time, then leave."""
         drained = False
         lock = self.session_lock(sid)
@@ -636,54 +793,37 @@ class Runtime(SessionActions):
             lock.acquire()
         except Busy as error:
             print(f"Skipping {sid}: {error}")
-            with self.changed:
-                self.blocked.add(sid)
-                del self.runners[sid]
-                self.changed.notify_all()
+            with state.lock:
+                state.blocked = True
+                self.let_go(state, leaving=False)
             return
         try:
-            drained = self.run_queued(sid, lock)
+            drained = self.run_queued(sid, state, lock)
         finally:
-            with self.changed:
+            with state.lock:
                 lock.release()
-                del self.runners[sid]
-                # Past its last turn, the runner still has its last word to
-                # say: `settled`, then a dispatch that starts a turn on a
-                # message admitted meanwhile
-                self.begin_leaving(sid)
                 if not drained:
                     # Left to the next start's repair: its queued message no
                     # longer keeps this server up
-                    self.blocked.add(sid)
-                self.changed.notify_all()
+                    state.blocked = True
+                # Past its last turn, the runner still has its last word to
+                # say: `settled`, then a dispatch that starts a turn on a
+                # message admitted meanwhile
+                self.let_go(state, leaving=True)
         try:
             if drained:
                 settled = self.settled(sid)
                 if settled is not None:
                     self.publish(sid, {"settled": settled})
-                self.dispatch()
+                self.dispatch(sid)
         finally:
-            with self.changed:
-                self.end_leaving(sid)
-                self.changed.notify_all()
+            self.said_last_word(state)
 
-    def begin_leaving(self, sid):
-        """`self.changed` held: a thread of the session's has left `runners`
-        with its last word still to say (`settled`, then a dispatch that may
-        start a turn on a message admitted meanwhile)."""
-        self.leaving[sid] = self.leaving.get(sid, 0) + 1
-
-    def end_leaving(self, sid):
-        """`self.changed` held: that thread has said it."""
-        self.leaving[sid] -= 1
-        if not self.leaving[sid]:
-            del self.leaving[sid]
-
-    def run_queued(self, sid, lock):
+    def run_queued(self, sid, state, lock):
         while True:
             # Checking for work and leaving are one step, so a message admitted
             # meanwhile either is seen here or finds no runner and starts one
-            with self.lock:
+            with state.lock:
                 row = self.store.next_queued(sid) if self.accepting else None
                 if row is None:
                     return True
@@ -709,14 +849,14 @@ class Runtime(SessionActions):
             delivered=lambda steer: self.store.mark_steer_done(steer["inbox"]),
             draft=lambda step, draft: self.draft(sid, step, draft),
         )
-        with self.changed:
-            self.running[sid] = (control, row)
+        state = self.state(sid)
+        with state.lock:
+            state.running = (control, row)
         try:
             self._run_turn(sid, row, lock, control)
         finally:
-            with self.changed:
-                self.running.pop(sid, None)
-                self.changed.notify_all()
+            with state.lock:
+                state.running = None
             if own:
                 lock.release()
 
@@ -826,10 +966,10 @@ class Runtime(SessionActions):
             self.store.park(sid, history.parked_ask(session.log.branch()), row["id"])
             self.turn_ended(sid, outcome)
             return
-        state = "failed" if outcome in FAILED else "idle"
-        with self.changed:
+        ended = "failed" if outcome in FAILED else "idle"
+        with self.state(sid).lock:
             # Its stops done with it; its rows in step up to its turn_end
-            self.store.finish(row["arrival"], sid, state, session.log.last_seq)
+            self.store.finish(row["arrival"], sid, ended, session.log.last_seq)
         self.turn_ended(sid, outcome)
 
     def take_reply(self, sid, row, ask, turn_id, log, control):
@@ -853,9 +993,10 @@ class Runtime(SessionActions):
         turn = session.reply(fields, control=control)
         self.store.close_ask(ask["ask"], row["id"], yes, row["source"])
         turn_row = self.store.query("SELECT * FROM inbox WHERE id = ?", turn_id)[0]
-        with self.changed:
+        state = self.state(sid)
+        with state.lock:
             # A stop now belongs to the parked turn, not to the reply
-            self.running[sid] = (control, turn_row)
+            state.running = (control, turn_row)
         self.finish_turn(sid, session, turn, turn_row)
 
     def reply_step(self, sid, ask, payload):
@@ -871,10 +1012,11 @@ class Runtime(SessionActions):
         info = self.store.session(sid)
         fresh = fresh_log(self.paths.sessions, info["model"])
         session = self.make_session(sid, info, log=fresh, ask=PARK)
+        session.header_fields = {"row": rebuild.header_row(info)}
         upgrade.upgrade_file(log, session.session_record())
         session.restore(log)
         self.session_built(sid, session)
-        self.live[sid] = session
+        self.state(sid).harness = session
 
     def harness_for_turn(self, sid, log, records, begun):
         """The harness a turn runs on. A new turn takes what the user set
@@ -891,7 +1033,7 @@ class Runtime(SessionActions):
             return self.harness(sid, log, info={**info, **before})
         if not switch:
             return self.harness(sid, log)
-        self.live.pop(sid, None)
+        self.state(sid).harness = None
         # The effort and the judge have no column of their own: the switch
         # carries them
         session = self.harness(sid, log, info={**info, **switch})
@@ -924,19 +1066,22 @@ class Runtime(SessionActions):
     def harness(self, sid, log=None, info=None):
         """Build once per runtime; the harness owns its history on disk.
         `info`: the session's row, or what its log runs with (a begun turn)."""
-        if sid not in self.live:
-            self.live[sid] = self.make_session(
-                sid, info or self.store.session(sid), log=log or self.log(sid),
-                ask=PARK,
-            )
-            self.session_built(sid, self.live[sid])
+        state = self.state(sid)
+        if state.harness is None:
+            info = info or self.store.session(sid)
+            session = self.make_session(sid, info, log=log or self.log(sid),
+                                        ask=PARK)
+            # Its header, when its first turn writes it, carries its row
+            session.header_fields = {"row": rebuild.header_row(info)}
+            state.harness = session
+            self.session_built(sid, session)
         elif log is not None:
-            session = self.live[sid]
+            session = state.harness
             session.log.lock = log.lock
             session.log.last_seq = None
             if session.log.branch():
                 session.restore(session.log)
-        return self.live[sid]
+        return state.harness
 
     def session_built(self, sid, session):
         """Each service's share of a harness built for this session (the jobs:
@@ -957,12 +1102,14 @@ class Runtime(SessionActions):
     def turn_busy(self, sid):
         """Whether a turn of the session runs, or a queued message would
         start one."""
-        with self.lock:
-            return sid in self.runners or sid in self.store.waiting_sessions()
+        state = self.state(sid)
+        with state.lock:
+            return state.runner is not None or self.store.has_queued(sid)
 
     def stop_turn(self, sid, msg_id, source):
         """Commit the stop before setting its flag or sending the ack."""
-        with self.changed:
+        state = self.state(sid)
+        with state.lock:
             if not self.accepting:
                 raise Refused("the server is shutting down")
             seen = self.store.query("SELECT * FROM inbox WHERE id = ?", msg_id)
@@ -970,7 +1117,7 @@ class Runtime(SessionActions):
                 if seen[0]["kind"] != "stop" or seen[0]["session"] != sid:
                     raise Refused("message id already used")
                 return {"stopped": True, "withdrawn": []}
-            running = self.running.get(sid)
+            running = state.running
             if running is None or not history.unfinished_turn(self.log(sid).branch()):
                 return {"stopped": False, "withdrawn": []}
             control, row = running
@@ -979,7 +1126,6 @@ class Runtime(SessionActions):
             control.stop.set()
             # What the turn hasn't taken goes back to its sender's input (Pi)
             withdrawn = self.store.withdraw_messages(sid, row["arrival"])
-            self.changed.notify_all()
         if withdrawn:
             self.publish(sid, {"withdrawn": withdrawn})
         return {"stopped": True, "withdrawn": withdrawn}
@@ -990,29 +1136,40 @@ class Runtime(SessionActions):
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
         token, watcher = object(), Watcher()
-        with self.watch_lock:
-            self.watchers.setdefault(sid, {})[token] = watcher
+        state = self.state(sid)
+        with state.lock:
+            state.watchers = {**state.watchers, token: watcher}
         return token, watcher
 
     def unsubscribe(self, sid, token):
-        with self.watch_lock:
-            watchers = self.watchers.get(sid, {})
-            watchers.pop(token, None)
-            if not watchers:
-                self.watchers.pop(sid, None)
+        state = self.states.get(sid)
+        if state is None:
+            return
+        with state.lock:
+            state.watchers = {k: w for k, w in state.watchers.items() if k is not token}
 
     def publish(self, sid, event):
-        with self.watch_lock:
-            watchers = list(self.watchers.get(sid, {}).values())
-        for watcher in watchers:
+        state = self.states.get(sid)
+        if state is None:
+            return
+        for watcher in state.watchers.values():
             watcher.put(event)
 
     def close_watchers(self, reason):
         """Every watch ends with a `bye` and its reason."""
-        with self.watch_lock:
-            watchers = [w for ws in self.watchers.values() for w in ws.values()]
-        for watcher in watchers:
-            watcher.close(reason)
+        for _, state in self.all_states():
+            for watcher in state.watchers.values():
+                watcher.close(reason)
+
+    def forget_state(self, sid):
+        """A deleted session's state let go of: its watches end with a `bye`
+        "deleted", its harness and draft go with it."""
+        with self.door:
+            state = self.states.pop(sid, None)
+        if state is None:
+            return
+        for watcher in state.watchers.values():
+            watcher.close(DELETED)
 
     def command_session(self, unix_session):
         """The session whose command leads the Unix session `unix_session`,
@@ -1029,8 +1186,9 @@ class Runtime(SessionActions):
         """None while a turn runs or a queued message would start one; else
         what is left: the open ask's question, if any, and what the services
         leave (running jobs) (Pi's `agent_settled`)."""
-        with self.lock:
-            if sid in self.runners or sid in self.store.waiting_sessions():
+        state = self.state(sid)
+        with state.lock:
+            if state.runner is not None or self.store.has_queued(sid):
                 return None
         ask = self.store.open_ask(sid)
         left = {"ask": None if ask is None else asked(ask)}
@@ -1042,9 +1200,10 @@ class Runtime(SessionActions):
         """Append a record to a session's log while no turn runs or waits for
         an answer (a grant taken back, permissions/service.py); else Refused,
         with `refused`."""
-        with self.lock:
+        state = self.state(sid)
+        with state.lock:
             row = self.store.session(sid)
-            if (sid in self.runners or sid in self.store.waiting_sessions()
+            if (state.runner is not None or self.store.has_queued(sid)
                     or row["state"] in ("running", "waiting")):
                 raise Refused(refused)
             lock = self.session_lock(sid)
@@ -1066,16 +1225,17 @@ class Runtime(SessionActions):
         Its record (or `compaction_failed`) reaches the watchers as any
         record does."""
         instructions = (instructions or "").strip() or None
-        with self.lock:
+        if self.store.session(sid) is None:
+            raise Refused(f"no session {sid!r}")
+        state = self.state(sid)
+        with state.lock:
             if not self.accepting:
                 raise Refused("the server is shutting down")
             row = self.store.session(sid)
-            if row is None:
-                raise Refused(f"no session {sid!r}")
-            busy = (sid in self.runners or sid in self.store.waiting_sessions()
+            busy = (state.runner is not None or self.store.has_queued(sid)
                     or row["state"] in ("running", "waiting"))
             if busy:
-                session = self.live.get(sid)
+                session = state.harness
                 if session is None:
                     raise Refused("its turn waits for an answer; a compaction "
                                   "can be asked for once it runs again")
@@ -1084,13 +1244,13 @@ class Runtime(SessionActions):
             if not any(r["type"] == "user" for r in self.log(sid).branch()):
                 raise Refused("the session has no conversation yet")
             thread = threading.Thread(target=self._compact,
-                                      args=(sid, instructions),
+                                      args=(sid, state, instructions),
                                       name=f"compact-{sid}", daemon=True)
-            self.hold_runner(sid, thread)
+            self.hold_runner(state, thread)
         thread.start()
         return {"compacting": "now"}
 
-    def _compact(self, sid, instructions):
+    def _compact(self, sid, state, instructions):
         lock = self.session_lock(sid)
         try:
             lock.acquire()
@@ -1102,68 +1262,86 @@ class Runtime(SessionActions):
         except Exception:
             traceback.print_exc()
         finally:
-            with self.changed:
-                del self.runners[sid]
+            with state.lock:
                 # Its last word is still to say, as a turn runner's is
-                self.begin_leaving(sid)
-                self.changed.notify_all()
+                self.let_go(state, leaving=True)
         try:
             settled = self.settled(sid)
             if settled is not None:
                 self.publish(sid, {"settled": settled})
-            self.dispatch()
+            self.dispatch(sid)
         finally:
-            with self.changed:
-                self.end_leaving(sid)
-                self.changed.notify_all()
+            self.said_last_word(state)
 
     def busy_with(self):
         """What keeps the server up besides its clients: turns running, resuming
         or saying their last word, messages that can start one, running jobs. A
         parked ask waits on disk and keeps nothing up."""
-        with self.lock:
-            turns = sorted(set(self.runners) | set(self.leaving))
-            queued = [s for s in self.store.waiting_sessions() if s not in self.blocked]
+        states = self.all_states()
+        turns = sorted(sid for sid, s in states if s.runner is not None or s.leaving)
+        blocked = {sid for sid, s in states if s.blocked}
+        queued = [s for s in self.store.waiting_sessions() if s not in blocked]
         reasons = {"turns": turns, "queued": sorted(set(queued) - set(turns))}
         for service in self.services.values():
             reasons.update(service.busy_with())
         return {name: value for name, value in reasons.items() if value}
 
+    def queued_unblocked(self):
+        """Sessions with a message that can start a turn, less those left to
+        the next start's repair."""
+        return set(self.store.waiting_sessions()) - self.blocked
+
     def wait(self, timeout=None):
         """True once no turn is running or about to start and nothing is queued
         (or stopping)."""
+        deadline = None if timeout is None else time.monotonic() + timeout
 
-        def idle():
-            waiting = set(self.store.waiting_sessions()) - self.blocked
-            return (not self.runners and not self.leaving
-                    and (not self.accepting or not waiting))
+        def left():
+            return None if deadline is None else max(0.0, deadline - time.monotonic())
 
-        with self.changed:
-            return self.changed.wait_for(idle, timeout)
+        while True:
+            with self.activity:
+                if not self.activity.wait_for(
+                        lambda: not (self.runner_count or self.leaving_count),
+                        left()):
+                    return False
+            if not self.accepting or not self.queued_unblocked():
+                return True
+            # A message no runner has taken yet: one is on its way, or none
+            # comes before the deadline
+            with self.activity:
+                pause = WAIT_LOOK_SECONDS if deadline is None else min(
+                    WAIT_LOOK_SECONDS, left())
+                if not pause:
+                    return False
+                self.activity.wait(pause)
 
     def close_if_idle(self):
         """Take no new messages, but only if nothing is busy: True if the
-        server may go. The services are asked outside the lock that starting
-        a turn takes (design rule 12), between two looks under it: what a
-        service has at work is started by a turn, which the second look
-        sees, running or come and gone."""
-        with self.lock:
-            if self.turns_busy():
+        server may go. The inbox and the services are looked at outside the
+        door (design rule 12), between two looks at what runs: what a
+        service has at work is started by a turn or a message, which the
+        second look sees by its counts, running or come and gone. The inbox
+        is read once more under the door, at rest, for a notice a service
+        committed between the two."""
+        with self.door:
+            if self.busy_now():
                 return False
-            held = self.runners_held
+            held, admitted = self.runners_held, self.admissions
+        if self.queued_unblocked():
+            return False
         if any(v for service in self.services.values()
                for v in service.busy_with().values()):
             return False
-        with self.lock:
-            if self.turns_busy() or self.runners_held != held:
+        blocked = self.blocked
+        with self.door:
+            if (self.busy_now() or self.runners_held != held
+                    or self.admissions != admitted):
+                return False
+            if set(self.store.waiting_sessions()) - blocked:
                 return False
             self.accepting = False
             return True
-
-    def turns_busy(self):
-        """`self.lock` held: a turn runs, says its last word or can start."""
-        queued = [s for s in self.store.waiting_sessions() if s not in self.blocked]
-        return bool(self.runners or self.leaving or queued)
 
     def stop(self, timeout=10):
         """Take no new messages; give running turns up to `timeout` to end.
@@ -1171,12 +1349,14 @@ class Runtime(SessionActions):
         True if they did. A turn still running resumes at the next start,
         without using a try: this is a clean stop, not a crash.
         """
-        with self.lock:
+        with self.door:
             self.accepting = False
-        with self.changed:
-            drained = self.changed.wait_for(lambda: not self.runners, timeout)
-            for _, row in self.running.values():
-                self.store.mark_clean_stop(row["id"])
+        with self.activity:
+            drained = self.activity.wait_for(lambda: not self.runner_count, timeout)
+        for _, state in self.all_states():
+            running = state.running
+            if running is not None:
+                self.store.mark_clean_stop(running[1]["id"])
         # Then the services: each job's loss is written before it is killed
         for service in self.services.values():
             service.shutdown()

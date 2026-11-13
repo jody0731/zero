@@ -51,12 +51,13 @@ git clone https://github.com/jody0731/zero.git ~/Applications/zero
 ~/Applications/zero/install.sh
 ```
 
-The installer checks what ZERO needs, checks out the newest release, makes a Python environment in the clone (`.venv/`), installs the requirements and puts the `zero` command in `~/.local/bin` (`--bin DIR` puts it elsewhere). Then it runs `zero doctor`, which tries what ZERO needs from the machine (a command in the sandbox, its home) and lists what ZERO's files hold that it doesn't know; run it again any time. Nothing starts at login.
+The installer checks what ZERO needs, checks out the newest release, makes a Python environment in the clone (`.venv/`) with a free-threaded Python when one is on the PATH (`python3.14t` or newer; `ZERO_PYTHON` names another), installs the requirements and puts the `zero` command in `~/.local/bin` (`--bin DIR` puts it elsewhere). Then it runs `zero doctor`, which tries what ZERO needs from the machine (a command in the sandbox, its home) and lists what ZERO's files hold that it doesn't know; run it again any time. Nothing starts at login.
 
 <details>
 <summary><b>What it needs</b></summary>
 
 - Linux, with `git`, Python 3.11 or newer (made and tested on 3.14) and its `venv` module
+- for many sessions at once, a free-threaded Python (3.14t or newer), so they run side by side on every core: `uv python install 3.14t` puts one on the PATH, no root needed; with the usual Python they take turns on one core, which works, and `zero doctor` says so
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`): ZERO's sandbox for the commands it runs
 - a model: an API key for a server ZERO knows (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter), or a server of your own that speaks OpenAI's Chat Completions API, such as Ollama or llama-server
 

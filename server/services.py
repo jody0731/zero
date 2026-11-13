@@ -83,6 +83,9 @@ class Service:
         """Its files of the session, to the trash with the session's log."""
         return []
 
+    def session_deleted(self, sid):
+        """The session was deleted: what it kept of it, let go of."""
+
     def meter_line(self):
         """The line the user's context meter shows a session's context kept
         under (the context component's setting), or None to say nothing."""

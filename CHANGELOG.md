@@ -3,6 +3,32 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.5.2
+
+ZERO's sessions run side by side on every core.
+
+- **Free-threaded Python.** On Python 3.14t (the free-threaded build) ZERO's sessions run truly
+  in parallel; on Python with the GIL, ZERO works as before. `zero doctor` says which one ZERO
+  runs on.
+- **To move an install to free-threaded Python, once, by hand:** `zero update` brings this
+  release on the Python the install already has, and nothing else is needed for it to work.
+  To run on 3.14t: stop ZERO's server (`zero server stop`), then run `install.sh` in ZERO's
+  folder (where it was cloned); it finds `python3.14t` on the PATH and makes ZERO's environment
+  again with it. No `python3.14t`? `uv python install 3.14t` puts one in `~/.local/bin` with no
+  sudo; or set `ZERO_PYTHON` to the Python you want before running `install.sh`.
+- **Many sessions at once.** Each session keeps its own state behind its own lock, and the
+  database has one writer that commits many writes together while reads never wait. On the
+  stress test at 200 sessions a message is acked in under 0.2 s (5.6 s before) and ZERO
+  finishes about four times as many turns a second.
+- **Session ids** carry 8 random hex digits: two sessions made in the same second no longer
+  collide.
+- **A session found without its row is listed again.** A session's log carries what its row
+  says; a log the database lost (a crash between the two) is listed again at the next start.
+- **A deleted session lets go** of everything the server kept of it: its open watches end
+  (`bye` "deleted"), its usage reader and its scratch folder go.
+- **Session search over thousands of sessions** stays quick: a search ranks its best 5,000
+  matches and lists the sessions past them after.
+
 ## 0.7.4.4
 
 ZERO writes skills of its own, and a script it writes can call ZERO.

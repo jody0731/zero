@@ -29,10 +29,23 @@ def home_line():
     return MET, f"ZERO's home: {home}"
 
 
+def python_lines():
+    """The Python ZERO runs on, and whether its threads run side by side:
+    a free-threaded build runs sessions on every core; with the GIL they
+    take turns on one, which works, slower under many sessions."""
+    version = ".".join(str(n) for n in sys.version_info[:3])
+    if not getattr(sys, "_is_gil_enabled", lambda: True)():
+        return [(MET, f"Python {version}, free-threaded: sessions run side by side")]
+    return [(MET, f"Python {version}"),
+            (NOTE, "Python's GIL is on: ZERO's sessions take turns on one core; "
+                   "a free-threaded Python (3.14t or newer) runs them side by "
+                   "side: install.sh again with one on the PATH (README, What "
+                   "it needs)")]
+
+
 def report():
     """[(mark, line)]: the machine's needs, ZERO's home, its files' notes."""
-    version = ".".join(str(n) for n in sys.version_info[:3])
-    lines = [(MET, f"Python {version}")]
+    lines = python_lines()
     for need, check in assembly.MACHINE_CHECKS.items():
         found = check()
         lines.append((MET, need) if found is None

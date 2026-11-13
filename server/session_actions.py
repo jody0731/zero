@@ -11,6 +11,7 @@ session. A service of the runtime's own class, over its store, locks and logs.
 
 import json
 import secrets
+import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -20,12 +21,15 @@ import settings
 from core import history
 from core.loop import Session
 from server import trash
+from server.rebuild import header_row
 from server.services import Refused
 from sessions import upgrade
 from sessions.lock import Busy
 from sessions.log import write_copy
 
 TITLE_LENGTH = 60
+# How many new ids a new session tries when one is taken
+ID_TRIES = 5
 # What a session's row holds of what it runs with; the rest is in its log
 COLUMNS = ("mode", "model", "workspace")
 
@@ -40,8 +44,11 @@ def check_thinking_effort(name, effort):
 
 
 def new_id():
-    """Sortable by creation time and short enough to type."""
-    return f"{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
+    """Sortable by creation time and short enough to type; 8 random hex
+    digits, so sessions made in the same second don't collide (4 did at 200
+    sessions made at once, 7.5.1); one that does is made again (its
+    callers)."""
+    return f"{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(4)}"
 
 
 def title(text):
@@ -120,7 +127,7 @@ class SessionActions:
         # The session's row has no effort or judge: its switch and its log
         # hold them
         columns = {k: v for k, v in fields.items() if k in COLUMNS}
-        with self.lock:
+        with self.state(sid).lock:
             switch = json.loads(self.store.session(sid)["switch"] or "{}")
             self.store.update_session(
                 sid, **columns, switch=json.dumps({**switch, **fields})
@@ -158,7 +165,9 @@ class SessionActions:
         """What a running or waiting turn holds from before a `set`: those
         values change when its next turn starts."""
         row = row or self.store.session(sid)
-        busy = sid in self.runners or row["state"] in ("running", "waiting")
+        state = self.states.get(sid)
+        busy = ((state is not None and state.runner is not None)
+                or row["state"] in ("running", "waiting"))
         if not busy or not row["switch"]:
             return []
         switch = json.loads(row["switch"])
@@ -169,25 +178,40 @@ class SessionActions:
         news the user hasn't seen, and what the services add (the jobs: its
         running ones). `archived`: None for all, or only those archived (True)
         or not (False); `workspace`: only the sessions in exactly that
-        folder."""
-        rows = self.store.sessions()
-        asks = {a["session"]: a for a in self.store.open_asks()}
+        folder. Built whole once for each change the database commits (the
+        list's version), whoever asks for it meanwhile."""
         result = []
-        for row in rows:
-            if archived is not None and bool(row["archived"]) != archived:
+        for row in self.listed_rows():
+            if archived is not None and row["archived"] != archived:
                 continue
             if workspace is not None and row["workspace"] != workspace:
                 continue
+            row = dict(row)
+            # Whether a turn holds a switch is the server's, not the database's
+            row["pending"] = self.pending_switches(row["id"], row)
+            result.append(row)
+        return result
+
+    def listed_rows(self):
+        """Every session's row as the list shows it, built once for each
+        version of the list: kept, never changed, by every reader of it."""
+        version = self.list_version
+        kept = getattr(self, "listed", None)
+        if kept is not None and kept[0] == version:
+            return kept[1]
+        rows = self.store.sessions()
+        asks = {a["session"]: a for a in self.store.open_asks()}
+        for row in rows:
             ask = asks.get(row["id"])
             row["ask"] = None if ask is None else asked(ask)
             row["archived"] = bool(row["archived"])
             row["unseen"] = row["end_seq"] > row["seen_seq"]
-            result.append(row)
         for service in self.services.values():
-            service.annotate(result)
-        for row in result:
-            row["pending"] = self.pending_switches(row["id"], row)
-        return result
+            service.annotate(rows)
+        # A change committed while it was built moved the version on: the
+        # next reader builds it again
+        self.listed = (version, rows)
+        return rows
 
     def mark_seen(self, sid, seq):
         """The user has seen the session up to `seq`: it is the one they last
@@ -262,22 +286,24 @@ class SessionActions:
         asked outside it too (design rule 12). Refused with `busy` while a
         turn of it runs or waits to start, or its row is in `states`; a
         message admitted meanwhile starts its turn after."""
-        with self.lock:
+        if self.store.session(sid) is None:
+            raise Refused(f"no session {sid!r}")
+        state = self.state(sid)
+        with state.lock:
             row = self.store.session(sid)
             if row is None:
                 raise Refused(f"no session {sid!r}")
-            if (sid in self.runners or sid in self.store.waiting_sessions()
+            if (state.runner is not None or self.store.has_queued(sid)
                     or row["state"] in states):
                 raise Refused(busy)
-            self.hold_runner(sid, threading.current_thread())
+            self.hold_runner(state, threading.current_thread())
         try:
             yield row
         finally:
-            with self.changed:
-                del self.runners[sid]
-                self.changed.notify_all()
+            with state.lock:
+                self.let_go(state, leaving=False)
             if self.started:
-                self.dispatch()
+                self.dispatch(sid)
 
     def rewind(self, sid, seq):
         """Go back to before the user's message `seq` on the current branch
@@ -310,7 +336,7 @@ class SessionActions:
                     # built now (its server gone, no key) rewinds with no
                     # hooks, its note without their lines; a harness kept
                     # from before is built again from the log at its next use
-                    self.live.pop(sid, None)
+                    self.state(sid).harness = None
                     session = Session(None, [], "", log, {})
                 self.refuse_copied(sid, seq)
                 try:
@@ -343,7 +369,9 @@ class SessionActions:
             raise Refused("this session's log is from an older ZERO; "
                           "send it a message first")
         if seq is None:
-            if (sid in self.runners or info["state"] in ("running", "waiting")
+            state = self.states.get(sid)
+            if ((state is not None and state.runner is not None)
+                    or info["state"] in ("running", "waiting")
                     or history.unfinished_turn(records)):
                 raise Refused("its last turn hasn't ended; fork from one of the "
                               "user's messages, or once it ends")
@@ -390,28 +418,42 @@ class SessionActions:
         log, its header naming where it came from and what the parent did
         past it (`went_on`), and its row: `row`'s title, source and who
         started it, the parent's workspace, mode and model, what the copied
-        part lacks of what the parent runs with as a switch. Its id."""
-        new = new_id()
-        made = datetime.now().astimezone().isoformat(timespec="seconds")
+        part lacks of what the parent runs with as a switch. Its id; one
+        taken (a log or a row) is made again."""
+        made = datetime.now().astimezone()
+        switch = self.carried_switch(sid, records, copied)
+        full = {
+            **row, "model": info["model"], "mode": info["mode"],
+            "workspace": info["workspace"],
+            "switch": json.dumps(switch) if switch else None, "parent": sid,
+            "seen_seq": copied[-1]["seq"], "created_at": made.timestamp(),
+        }
         earlier = copied[0].get("forked_from") or {}
         header = {**copied[0], "forked_from": {
             "session": sid, "seq": copied[-1]["seq"], "title": info["title"],
-            "time": made,
+            "time": made.isoformat(timespec="seconds"),
             # Every session it came from, the parent first: their saved
             # outputs, which its copied context names, stay readable
             "ancestors": [sid, *earlier.get("ancestors", [])],
             "started_by": row["started_by"],
             **({"went_on": went_on} if went_on else {}),
-        }}
-        write_copy(self.paths.sessions / f"{new}.jsonl", [header, *copied[1:]])
-        switch = self.carried_switch(sid, records, copied)
-        self.store.add_session(new, {
-            **row, "model": info["model"], "mode": info["mode"],
-            "workspace": info["workspace"],
-            "switch": json.dumps(switch) if switch else None, "parent": sid,
-            "seen_seq": copied[-1]["seq"],
-        }, rows_beside)
-        return new
+        }, "row": header_row(full)}
+        for tries in range(1, ID_TRIES + 1):
+            new = new_id()
+            path = self.paths.sessions / f"{new}.jsonl"
+            try:
+                write_copy(path, [header, *copied[1:]])
+            except FileExistsError:
+                continue
+            try:
+                self.store.add_session(new, full, rows_beside)
+            except sqlite3.IntegrityError:
+                path.unlink(missing_ok=True)
+                if tries == ID_TRIES:
+                    raise
+                continue
+            return new
+        raise FileExistsError(f"{ID_TRIES} new session ids were all taken")
 
     def new_child(self, sid, title, source, rows_beside=None):
         """A new session under this one, its log empty: the same workspace,
@@ -423,14 +465,21 @@ class SessionActions:
         if info is None:
             raise Refused(f"no session {sid!r}")
         effort = history.running_with(self.log(sid).branch()).get("thinking_effort")
-        new = new_id()
-        self.store.add_session(new, {
+        row = {
             "title": title, "source": source, "model": info["model"],
             "mode": info["mode"], "workspace": info["workspace"],
             "switch": json.dumps({"thinking_effort": effort}) if effort else None,
             "parent": sid, "started_by": "zero",
-        }, rows_beside)
-        return new
+        }
+        for tries in range(1, ID_TRIES + 1):
+            new = new_id()
+            try:
+                self.store.add_session(new, row, rows_beside)
+            except sqlite3.IntegrityError:
+                if tries == ID_TRIES:
+                    raise
+                continue
+            return new
 
     def delete(self, sid):
         """Move the session's log and its services' files (the jobs' output) to
@@ -454,10 +503,15 @@ class SessionActions:
                 where = trash.move(self.paths, files)
                 tables = [table for service in services for table in service.tables]
                 self.store.forget(sid, tables)
-                with self.lock:
-                    self.live.pop(sid, None)
-                    self.blocked.discard(sid)
             finally:
                 lock.release()
+        # What the server kept of it goes: its state (its watches told), its
+        # scratch folder, and what each service kept (a reader of its log)
+        self.forget_state(sid)
+        forget = getattr(self.make_session, "forget", None)
+        if forget is not None:
+            forget(sid)
+        for service in services:
+            service.session_deleted(sid)
         (self.paths.locks / f"{sid}.lock").unlink(missing_ok=True)
         return where

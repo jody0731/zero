@@ -53,7 +53,7 @@ from pathlib import Path
 from client import render, session_list
 from client.connection import NotRunning, ProtocolError, command_session
 from client.render import duration, jobs_text
-from client.result import CHOICES, Result, still_running_line
+from client.result import Result, still_running_line
 
 NAME = "ZERO"
 # The families main.py hands here; `server` is main.py's own
@@ -244,8 +244,9 @@ def follow(connection, sid, after, args, out, user_answers=True):
                 if result.ask is not None:
                     out(render.ask_line(result.ask))
                     if user_answers:
-                        out(f"Answer with: zero -p [TEXT] --session {sid}, "
-                            f"or --choice {'|'.join(CHOICES)}")
+                        offered = "|".join(result.ask.get("choices") or ())
+                        out(f"Answer with: zero -p [TEXT] --session {sid}"
+                            + (f", or --choice {offered}" if offered else ""))
                     else:
                         out(WORKFLOW_ASK)
                 elif result.last is None:
@@ -366,9 +367,9 @@ def send_flags(parser):
     parser.add_argument("--when-busy", choices=("steer", "queue"),
                         help="while a turn runs: steer it (the default) or "
                              "queue a follow-up")
-    parser.add_argument("--choice", choices=CHOICES,
+    parser.add_argument("--choice", metavar="CHOICE",
                         help="answer the waiting question with one of its "
-                             "choices")
+                             "choices, as its line names them")
     parser.add_argument("--rounds", action="store_true",
                         help="work on it in rounds")
     parser.add_argument("--for-session", metavar="ID", default=command_session(),

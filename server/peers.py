@@ -21,12 +21,22 @@ messages a service names in `workflow_messages`, for the session whose
 command it is: each command leads a Unix session of its own (jobs/ starts it
 so), which every process it starts keeps, so a peer's Unix session names the
 command, and the service that started it names the session.
+
+Where the socket can't tell who connects (`SO_PEERCRED` gives nothing: a
+system without it, a connection that isn't a Unix socket's), the request
+proves the user with the app token, the text of a file only the user reads
+(paths.app_token), made on first use and kept across restarts (Jupyter's
+and Tailscale's way). A wrong token is refused wherever it comes; a right
+one never lifts a ZERO command's limits, which the process tree decides.
 """
 
+import hmac
 import os
+import secrets
 import socket
 import struct
 
+import paths as home_paths
 from protocol.messages import SESSION_ID_ENV
 
 # Where client/launcher.py names the server's unit to it
@@ -76,16 +86,81 @@ def unix_session(pid):
     return int(fields[3]) if len(fields) > 3 else None
 
 
-def peer_pid(conn):
-    """The process on the other end of a Unix socket, or None."""
+def peer_of(conn):
+    """(pid, uid) of the process on the other end of a Unix socket, or
+    (None, None) where the socket can't tell."""
     try:
         data = conn.getsockopt(
             socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
         )
-    except OSError:
-        return None
-    pid, _, _ = struct.unpack("3i", data)
-    return pid or None
+    except (OSError, AttributeError):
+        return None, None
+    pid, uid, _ = struct.unpack("3i", data)
+    return (pid or None), (uid if pid else None)
+
+
+def peer_pid(conn):
+    """The process on the other end of a Unix socket, or None."""
+    return peer_of(conn)[0]
+
+
+# The no for a request whose sender isn't proven
+UNPROVEN = ("the socket can't tell who connects here, so a request proves the "
+            "user with `token`, the text of the token file ({path})")
+WRONG_TOKEN = "wrong token: it isn't the text of the token file ({path})"
+OTHER_USER = "this server is another user's"
+TOKEN_BYTES = 32
+
+
+class AppToken:
+    """The token file: made on first use (whole, the user's alone), read
+    again when it changes, so removing it and starting the server again
+    makes a new one."""
+
+    def __init__(self, path):
+        self.path = path
+        self.seen = None
+        self.text = None
+
+    def make(self):
+        """The file, made now if missing."""
+        if not self.path.exists():
+            home_paths.write_whole(self.path, secrets.token_urlsafe(TOKEN_BYTES)
+                                   + "\n", mode=0o600)
+        return self.path
+
+    def current(self):
+        try:
+            stat = self.path.stat()
+        except FileNotFoundError:
+            self.make()
+            stat = self.path.stat()
+        if (stat.st_mtime_ns, stat.st_ino) != self.seen:
+            self.text = self.path.read_text().strip()
+            self.seen = (stat.st_mtime_ns, stat.st_ino)
+        return self.text
+
+    def matches(self, given):
+        """Whether `given` is the token, compared in constant time."""
+        if not isinstance(given, str) or not given:
+            return False
+        return hmac.compare_digest(given.encode(), self.current().encode())
+
+
+def proven(conn, token, app_token):
+    """The peer's pid where the socket proves it (a Unix socket's process of
+    this user), or None where the token does; PermissionError, with why,
+    for a peer neither proves or a wrong token."""
+    pid, uid = peer_of(conn)
+    if token is not None and not app_token.matches(token):
+        raise PermissionError(WRONG_TOKEN.format(path=app_token.path))
+    if pid is not None:
+        if uid != os.getuid():
+            raise PermissionError(OTHER_USER)
+        return pid
+    if token is None:
+        raise PermissionError(UNPROVEN.format(path=app_token.path))
+    return None
 
 
 def parent(pid):

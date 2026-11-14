@@ -16,15 +16,22 @@ class Mode:
     # (the judge reviews each call that needs permission), or None (nothing
     # asks)
     decides: str | None
+    # What it is, in a line, for the user (apps show it: the server sends it)
+    about: str = ""
 
 
 # Least to most permissive
 MODES = {
-    "readOnly": Mode("read-only", True, "nobody"),
-    "default": Mode("workspace", True, "user"),
-    "auto": Mode("workspace", True, "judge"),
-    "auto+": Mode(None, False, "every call"),
-    "bypassPermissions": Mode(None, False, None),
+    "readOnly": Mode("read-only", True, "nobody",
+                     "nothing writable; asks refused"),
+    "default": Mode("workspace", True, "user",
+                    "the workspace writable in the sandbox; you answer asks"),
+    "auto": Mode("workspace", True, "judge",
+                 "the workspace writable in the sandbox; a judge answers asks"),
+    "auto+": Mode(None, False, "every call",
+                  "no sandbox; the judge reviews every call that needs "
+                  "permission"),
+    "bypassPermissions": Mode(None, False, None, "no sandbox; nothing asked"),
 }
 # Who answers a mode's asks, as the session's environment says it
 ANSWERS = {
@@ -60,3 +67,13 @@ def answers_line(mode, runs_as=None):
     the mode whose approver answers, where nobody watches (raised)."""
     decides = MODES[canonical(runs_as or mode)].decides
     return f"mode: {mode}; {ANSWERS[decides]}"
+
+
+def mode_rows():
+    """Every mode as apps read it (protocol/messages.py's row.mode), least to
+    most permissive. A key that steps through them skips the one where
+    nothing asks: it is chosen by its name, so no key lands on it by
+    accident."""
+    return [{"name": name, "about": mode.about,
+             "in_cycle": mode.decides is not None}
+            for name, mode in MODES.items()]

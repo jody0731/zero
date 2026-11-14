@@ -12,10 +12,11 @@ that are rebuilt (server/runtime.py), each in one transaction
 (Store.rebuild).
 """
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from core import history
+from core import asking, history
 
 # A turn's outcomes that leave its session failed
 FAILED = ("crashed", "cut_off", "failed")
@@ -74,6 +75,14 @@ class KernelRows:
     asks: list = field(default_factory=list)
     # Each inbox message the log names: id → delivered or done
     inbox: dict = field(default_factory=dict)
+
+
+def labels_of(ask):
+    """An `ask` record's answers with their words, as the asks table keeps
+    them (JSON)."""
+    labels = asking.choice_labels(ask.get("choices") or asking.PLAIN_CHOICES,
+                                  (ask.get("notes") or {}).get("offer_text"))
+    return json.dumps(labels)
 
 
 def timestamp(iso):
@@ -148,4 +157,5 @@ def ask_row(ask, turn, answer, parked):
         "closed_at": timestamp(answer.get("time")) if answer else None,
         "reply": answer.get("inbox") if answer else None,
         "source": answer.get("source") if answer else None,
+        "choice_labels": labels_of(ask),
     }

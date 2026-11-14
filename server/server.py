@@ -5,7 +5,12 @@ It holds server.lock for its whole life, so whoever holds it owns the socket: it
 removes any socket left behind and listens on a Unix socket only the user can
 open (0600 in a 0700 folder): no port, no password. A client sends one JSON
 object on one line and gets one line back: the messages and their replies
-are protocol/messages.py's.
+are protocol/messages.py's. Each request goes through the same steps, the app
+layer: who sends it (the socket's peer, else the app token: server/peers.py),
+the protocol it is written in (its reply walked back to it:
+protocol/older.py), its fields the message lacks (reported), its id run once
+if it changes something (server/idempotency.py), then the kernel or a
+service, its reply built from the store in one place (server/replies.py).
 
 ZERO's own commands (a child of the server, or in its unit: server/peers.py) get
 the looking messages only, never a send, a stop or a change: who may answer an ask
@@ -33,10 +38,11 @@ import traceback
 
 import settings
 from core import history
-from server import peers
+from server import peers, replies
+from server.idempotency import MessageReplies
 from server.services import Refused
 from server.runtime import Message
-from protocol import messages, version
+from protocol import messages, older, version
 
 # How long a stop waits for running turns
 DRAIN_SECONDS = 10
@@ -64,6 +70,12 @@ LOOKING_MESSAGES = ("server/hello", "session/list", "session/read", "session/wat
                     "session/user_messages")
 SESSION_EDITS = ("session/mark_seen", "session/rename", "session/archive",
                  "session/unarchive", "session/delete", "session/set")
+# The messages that change something whose id the inbox keeps, committed
+# with the change itself (server/runtime.py); every other one's is
+# message_replies' (server/idempotency.py)
+INBOX_KEPT = ("session/send", "session/continue", "session/stop")
+# What every request carries besides its message's own fields
+ENVELOPE = ("message", "protocol")
 
 
 class AlreadyRunning(Exception):
@@ -89,6 +101,12 @@ class Server:
         self.connection_lock = threading.Lock()
         # Tells the user's clients from ZERO's own commands
         self.peers = peers.Peers()
+        # Proves the user where the socket can't
+        self.app_token = peers.AppToken(paths.app_token)
+        # Each message that changes something, run once by its id
+        self.message_replies = MessageReplies(runtime.store)
+        # The release it runs, for hello and a restart's check
+        self.release = version.release()
 
     def serve(self, ready=None):
         """Run until stop(), SIGTERM or the idle exit. `ready` is set once the
@@ -99,6 +117,8 @@ class Server:
             listener = self.listen()
             try:
                 self.runtime.start()
+                self.app_token.make()
+                self.message_replies.start()
                 # Signals reach the main thread only; tests serve from another
                 if threading.current_thread() is threading.main_thread():
                     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -245,25 +265,39 @@ class Server:
             with self.connection_lock:
                 self.connections -= 1
 
+    # A check every reply and event passes before it goes out, with its
+    # message's name and kind ("reply", "event"): the tests hold each to
+    # the schema (None: no check)
+    reply_check = None
+
     def serve_connection(self, conn):
         conn.settimeout(10)
+        name, protocol = None, version.PROTOCOL
         try:
             request = json.loads(read_line(conn))
-            name = request.get("message") if isinstance(request, dict) else None
+            if not isinstance(request, dict):
+                raise ValueError("a request is a JSON object")
+            name = request.get("message")
+            protocol = self.protocol_of(request)
+            # The token proves, and goes no further
+            token = request.pop("token", None)
+            try:
+                pid = peers.proven(conn, token, self.app_token)
+            except PermissionError as why:
+                raise Refused(str(why)) from None
             # ZERO's own commands may look, never act; a workflow sends for
             # its own session alone
             looking = (*LOOKING_MESSAGES, *self.runtime.looking_messages)
-            if name not in looking:
-                pid = peers.peer_pid(conn)
+            if name not in looking and pid is not None:
                 if self.peers.is_zero_command(pid):
                     self.check_workflow(name, request, pid, looking)
             if name == "session/watch":
-                self.watch(conn, request)
+                self.watch(conn, request, protocol)
                 return
             if name == "session/list" and request.get("watch"):
-                self.watch_list(conn, request)
+                self.watch_list(conn, request, protocol)
                 return
-            reply = self.answer(request)
+            reply = self.reply_to(name, request, protocol)
         except Refused as e:
             reply = error(str(e))
         except (OSError, ValueError) as e:
@@ -272,9 +306,77 @@ class Server:
             traceback.print_exc()
             reply = {"ok": False, "error": f"internal error: {type(e).__name__}"}
         try:
-            conn.sendall((json.dumps(reply, ensure_ascii=False) + "\n").encode())
+            self.send_out(conn, name, reply, protocol)
         except OSError:
             pass
+
+    @staticmethod
+    def protocol_of(request):
+        """The protocol a request is written in (none named: 4), as its
+        reply goes out in it; Refused for one older than the oldest."""
+        asked = request.get("protocol", version.OLDEST)
+        if type(asked) is not int:
+            raise Refused("protocol is a whole number")
+        protocol = older.answered_in(asked)
+        if protocol is None:
+            raise Refused(f"this server reads protocols {version.OLDEST} to "
+                          f"{version.PROTOCOL}, not {asked}")
+        return protocol
+
+    def send_out(self, conn, name, reply, protocol, kind="reply"):
+        """A reply or event as this protocol writes it, walked back to the
+        sender's."""
+        if self.reply_check is not None:
+            self.reply_check(name, reply, kind)
+        reply = older.reply_in(protocol, name, reply)
+        conn.sendall((json.dumps(reply, ensure_ascii=False) + "\n").encode())
+
+    def send_event(self, conn, name, event, protocol):
+        """One event of a watch (`name`'s), as apps read it: a record's
+        parts an app shows added (replies.event)."""
+        if name == "session/watch":
+            event = replies.event(event)
+        self.send_out(conn, name, event, protocol, "event")
+
+    def reply_to(self, name, request, protocol):
+        """The reply to one request: its id run once when it changes
+        something, its fields the message lacks reported."""
+        spec = messages.MESSAGES.get(name)
+        unknown = []
+        if spec is not None:
+            known = {*ENVELOPE, *spec["fields"]}
+            unknown = sorted(field for field in request if field not in known)
+        if spec is not None and spec["changes"] and name not in INBOX_KEPT:
+            msg_id = request.get("id")
+            if msg_id is None and protocol >= 5:
+                reply = error(f"{name} changes something, so it carries an "
+                              "id: a string the sender picks, new for each "
+                              "message")
+            elif msg_id is None:
+                reply = self.answered(request, protocol)
+            elif not isinstance(msg_id, str) or not 0 < len(msg_id) <= 200:
+                reply = error("a message's id is a string of 1 to 200 "
+                              "characters")
+            else:
+                reply = self.message_replies.run(
+                    name, request, lambda r: self.answered(r, protocol))
+        else:
+            reply = self.answered(request, protocol)
+        if unknown:
+            reply = {**reply, "unknown_fields": unknown}
+        return reply
+
+    def answered(self, request, protocol):
+        """answer()'s reply, every failure a reply too."""
+        try:
+            return self.answer(request, protocol)
+        except Refused as e:
+            return error(str(e))
+        except (OSError, ValueError) as e:
+            return {"ok": False, "error": f"bad request: {e}"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"ok": False, "error": f"internal error: {type(e).__name__}"}
 
     def check_workflow(self, name, request, pid, looking):
         """Refused unless one of ZERO's own commands sends a workflow's
@@ -302,7 +404,8 @@ class Server:
                 if seq is None:
                     return error("session/rewind needs the seq of one of the "
                                  "user's messages")
-                return {"ok": True, **self.runtime.rewind(sid, seq)}
+                done = self.runtime.rewind(sid, seq)
+                return {"ok": True, **done, "rewind": replies.record(done["rewind"])}
             source = request.get("source")
             return {"ok": True, **self.runtime.fork(
                 sid, seq, source if isinstance(source, str) else "user"
@@ -310,12 +413,12 @@ class Server:
         except Refused as exc:
             return error(str(exc))
 
-    def answer(self, request):
+    def answer(self, request, protocol=version.PROTOCOL):
         if not isinstance(request, dict):
             return error("a request is a JSON object")
         name = request.get("message")
         if name == "server/hello":
-            return self.hello(request)
+            return self.hello(protocol)
         if name == "session/send":
             return self.send(request)
         if name == "session/stop":
@@ -360,7 +463,8 @@ class Server:
                 return error("before must be an integer")
             sid, after, limit = read_range(request)
             records, earlier_count = self.runtime.history(sid, after, limit, before)
-            return {"ok": True, "records": records, "earlier_count": earlier_count,
+            return {"ok": True, "records": replies.records(records),
+                    "earlier_count": earlier_count,
                     "runs_with": self.runtime.runs_with(sid),
                     "context": self.runtime.context_meter(sid)}
         if name in SESSION_EDITS:
@@ -383,29 +487,24 @@ class Server:
                 return error(problem)
             return {"ok": True, "set": {setting: config.values[setting]}}
         if name == "server/stop":
-            return self.shutdown(request)
+            return self.shutdown(request, protocol)
         served = {*SERVED, *self.runtime.messages}
         known = ", ".join(m for m in messages.MESSAGES if m in served)
         return error(f"unknown message {name!r}; messages: {known}")
 
-    def hello(self, request):
-        theirs = request.get("protocol")
-        if theirs is not None and theirs != version.PROTOCOL:
-            return {
-                **error(
-                    f"this server speaks protocol {version.PROTOCOL}, the client "
-                    f"{theirs}: restart the server with the client's code"
-                ),
-                "protocol": version.PROTOCOL,
-            }
+    def hello(self, protocol):
+        """The server's versions and what keeps it busy, in the client's
+        protocol (older.py walks it back)."""
         return {
-            "ok": True, "protocol": version.PROTOCOL, "build": self.build,
+            "ok": True, "protocol": protocol,
+            "server_protocol": version.PROTOCOL, "version": self.release,
+            "build": self.build,
             "pid": os.getpid(), "started_at": self.started,
             "busy_with": self.runtime.busy_with(),
             "last_session": self.runtime.last(),
             "mode": self.runtime.mode, "model": self.runtime.model,
             # What a client offers and shows without loading the harness
-            "modes": list(self.runtime.modes),
+            "modes": [dict(row) for row in self.runtime.mode_rows],
             "default_model": self.runtime.default_model,
         }
 
@@ -449,18 +548,32 @@ class Server:
             return {"ok": True, "trash": self.runtime.delete(sid)}
         return {"ok": True}
 
-    def shutdown(self, request):
+    def shutdown(self, request, protocol=version.PROTOCOL):
         """Stop, or say what runs: `force` stops anyway. A restart for a newer
-        build is never forced."""
+        build is never forced, and never done for a client of an older
+        protocol or release: it would put older code in this one's place
+        (an older client then goes on with this server)."""
         force = request.get("force", False)
         reason = request.get("reason", "stopped")
         if not isinstance(force, bool) or reason not in STOP_REASONS:
             return error(f"server/stop takes force (boolean) and reason {STOP_REASONS}")
         busy = self.runtime.busy_with()
+        if reason == "restart" and self.newer_than(request, protocol):
+            return {"ok": True, "stopping": False, "busy_with": busy}
         if busy and (not force or reason == "restart"):
             return {"ok": True, "stopping": False, "busy_with": busy}
         self.stop(reason)
         return {"ok": True, "stopping": True}
+
+    def newer_than(self, request, protocol):
+        """Whether this server is newer than the client asking it to stop:
+        an older protocol, or an older release named in `version`."""
+        if protocol < version.PROTOCOL:
+            return True
+        theirs = request.get("version")
+        if not isinstance(theirs, str):
+            return False
+        return version.release_order(theirs) < version.release_order(self.release)
 
     def send(self, request):
         msg_id, text = request.get("id"), request.get("text")
@@ -498,14 +611,18 @@ class Server:
             return error(str(e))
         return {"ok": True, **ack}
 
-    def watch(self, conn, request):
+    def watch(self, conn, request, protocol=version.PROTOCOL):
         """The records after a seq, then each new one as it is appended: an ask
         is its `ask` record. Ends with a `bye` when the server stops."""
         sid, after, limit = read_range(request, limit=None)
+
+        def emit(event):
+            self.send_event(conn, "session/watch", event, protocol)
+
         try:
             token, watcher = self.runtime.subscribe(sid)
         except Refused as exc:
-            self.emit(conn, error(str(exc)))
+            emit(error(str(exc)))
             return
         conn.settimeout(WATCH_SEND_SECONDS)
         try:
@@ -513,21 +630,21 @@ class Server:
             # and the seq check drops the copy
             records, earlier_count = self.runtime.history(sid, after, limit)
             if earlier_count:
-                self.emit(conn, {"earlier_count": earlier_count})
+                emit({"earlier_count": earlier_count})
             # The meter as the whole log has it, for a watch that starts late
             meter = self.runtime.context_meter(sid)
             if meter is not None:
-                self.emit(conn, {"context": meter})
+                emit({"context": meter})
             for record in records:
-                self.emit(conn, {"record": record})
+                emit({"record": record})
                 after = record["seq"]
             settled = self.runtime.settled(sid)
             if settled is not None:
-                self.emit(conn, {"settled": settled})
+                emit({"settled": settled})
             # A watch that starts mid-reply gets the reply so far
             draft = self.runtime.current_draft(sid)
             if draft is not None:
-                self.emit(conn, draft)
+                emit(draft)
             while True:
                 drafted = False
                 for event in watcher.take(0.2):
@@ -537,13 +654,13 @@ class Server:
                             continue
                         after = record["seq"]
                     drafted = drafted or "draft" in event
-                    self.emit(conn, event)
+                    emit(event)
                 if drafted:
                     # At most DRAFT_EVERY_SECONDS a draft: the newest replaces what
                     # queues meanwhile (Watcher.put)
                     time.sleep(DRAFT_EVERY_SECONDS)
                 if watcher.bye:
-                    self.emit(conn, {"bye": watcher.bye})
+                    emit({"bye": watcher.bye})
                     return
                 readable, _, _ = select.select([conn], [], [], 0)
                 if readable:
@@ -555,13 +672,17 @@ class Server:
         finally:
             self.runtime.unsubscribe(sid, token)
 
-    def watch_list(self, conn, request):
+    def watch_list(self, conn, request, protocol=version.PROTOCOL):
         """The list, then the whole list again whenever it changed, its changes
         gathered for a moment; it ends with a `bye` when the server stops."""
+
+        def emit(event):
+            self.send_event(conn, "session/list", event, protocol)
+
         try:
             archived, workspace = list_filters(request)
         except Refused as exc:
-            self.emit(conn, error(str(exc)))
+            emit(error(str(exc)))
             return
         conn.settimeout(WATCH_SEND_SECONDS)
         sent = None
@@ -570,11 +691,11 @@ class Server:
             while True:
                 sessions = self.runtime.sessions(archived, workspace)
                 if sessions != sent:
-                    self.emit(conn, {"sessions": sessions})
+                    emit({"sessions": sessions})
                     sent = sessions
                 while True:
                     if self.stopping.is_set():
-                        self.emit(conn, {"bye": self.reason})
+                        emit({"bye": self.reason})
                         return
                     readable, _, _ = select.select([conn], [], [], 0)
                     if readable:
@@ -588,11 +709,6 @@ class Server:
                         break
         except (OSError, ValueError):
             return
-
-    @staticmethod
-    def emit(conn, event):
-        conn.sendall((json.dumps(event, ensure_ascii=False) + "\n").encode())
-
 
 def list_filters(request):
     """session/list's `archived` (False when left out) and `workspace`."""

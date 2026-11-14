@@ -1,9 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "zero-protocol-4",
-  "title": "Z.E.R.O. protocol 4",
-  "description": "One JSON object a line over the server's Unix socket (~/.zero/run/zero.sock): a request, then its reply; session/watch and session/list with watch stream events. Each request names its message in `message`.",
-  "x-protocol": 4,
+  "$id": "zero-protocol-5",
+  "title": "Z.E.R.O. protocol 5",
+  "description": "One JSON object a line over the server's Unix socket (~/.zero/run/zero.sock; `zero server start --json` names it, starting the server when none answers): a request, then its reply; session/watch and session/list with watch stream events. Each request names its message in `message` and its protocol in `protocol`; a message marked x-changes carries an `id` the sender picks, run once. Where the socket can't tell who connects, `token` carries the token file's text.",
+  "x-protocol": 5,
+  "x-oldest-protocol": 4,
   "oneOf": [
     {
       "$ref": "#/$defs/server.hello"
@@ -129,6 +130,17 @@
         },
         "error": {
           "type": "string"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -145,13 +157,18 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the client's protocol; the server refuses another"
+          "description": "the client's protocol; the server answers in it, from the oldest it reads to its own"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         }
       },
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "server.hello.reply": {
       "type": "object",
@@ -160,7 +177,16 @@
           "const": true
         },
         "protocol": {
-          "type": "integer"
+          "type": "integer",
+          "description": "the protocol this reply is in: the client's, or the server's own when the client's is newer"
+        },
+        "server_protocol": {
+          "type": "integer",
+          "description": "the newest protocol the server speaks"
+        },
+        "version": {
+          "type": "string",
+          "description": "ZERO's release the server runs"
         },
         "build": {
           "type": "string"
@@ -172,7 +198,14 @@
           "type": "number"
         },
         "busy_with": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "what keeps the server up, by kind (turns, queued, jobs), each the ids it names"
         },
         "last_session": {
           "anyOf": [
@@ -201,8 +234,9 @@
         "modes": {
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "$ref": "#/$defs/row.mode"
+          },
+          "description": "the modes, least to most permissive"
         },
         "default_model": {
           "anyOf": [
@@ -213,6 +247,13 @@
               "type": "null"
             }
           ]
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -221,10 +262,24 @@
     },
     "server.stop": {
       "type": "object",
-      "description": "Stop the server; while anything runs it says what, unless forced.",
+      "description": "Stop the server; while anything runs it says what, unless forced. A restart is refused to a client of an older protocol or release.",
       "properties": {
         "message": {
           "const": "server/stop"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "force": {
           "type": "boolean"
@@ -234,12 +289,18 @@
             "stopped",
             "restart"
           ]
+        },
+        "version": {
+          "type": "string",
+          "description": "the client's release: a restart asked by an older one is refused"
         }
       },
       "required": [
-        "message"
+        "message",
+        "id"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "server.stop.reply": {
       "type": "object",
@@ -251,7 +312,25 @@
           "type": "boolean"
         },
         "busy_with": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "what keeps the server up, by kind (turns, queued, jobs), each the ids it names"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -265,10 +344,19 @@
         "message": {
           "const": "session/send"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 200
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "text": {
           "type": "string"
@@ -348,13 +436,8 @@
           ]
         },
         "choice": {
-          "enum": [
-            "yes",
-            "session",
-            "saved",
-            "no"
-          ],
-          "description": "one of the open ask's choices, as picked at its box"
+          "type": "string",
+          "description": "one of the open ask's `choices`, as picked at its box"
         },
         "rounds": {
           "type": "boolean",
@@ -367,7 +450,8 @@
         "text",
         "source"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.send.reply": {
       "type": "object",
@@ -376,7 +460,8 @@
           "const": true
         },
         "admitted": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "false: this id was sent before and its message is already in"
         },
         "session": {
           "type": "string",
@@ -389,6 +474,17 @@
             "queued",
             "reply"
           ]
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -402,10 +498,19 @@
         "message": {
           "const": "session/continue"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 200
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "session": {
           "type": "string",
@@ -422,7 +527,8 @@
         "session",
         "source"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.continue.reply": {
       "type": "object",
@@ -431,7 +537,8 @@
           "const": true
         },
         "admitted": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "false: this id was sent before and its message is already in"
         },
         "session": {
           "type": "string",
@@ -444,6 +551,17 @@
             "queued",
             "reply"
           ]
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -457,10 +575,19 @@
         "message": {
           "const": "session/stop"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 200
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "session": {
           "type": "string",
@@ -477,7 +604,8 @@
         "session",
         "source"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.stop.reply": {
       "type": "object",
@@ -489,7 +617,34 @@
           "type": "boolean"
         },
         "withdrawn": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "a message the turn hadn't taken",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -502,6 +657,14 @@
       "properties": {
         "message": {
           "const": "session/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
         "archived": {
           "anyOf": [
@@ -532,7 +695,8 @@
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "session.list.reply": {
       "type": "object",
@@ -543,9 +707,16 @@
         "sessions": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/row.session"
           },
           "description": "one row a session"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -559,7 +730,7 @@
         "sessions": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/row.session"
           },
           "description": "the whole list"
         },
@@ -574,6 +745,14 @@
       "properties": {
         "message": {
           "const": "session/read"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
         "session": {
           "type": "string",
@@ -607,7 +786,8 @@
         "message",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "session.read.reply": {
       "type": "object",
@@ -618,7 +798,26 @@
         "records": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "description": "a record of a session's log: what an app reads of each kind is record.<type>",
+            "properties": {
+              "seq": {
+                "type": "integer",
+                "description": "its place in the session's log"
+              },
+              "type": {
+                "type": "string"
+              },
+              "time": {
+                "type": "string",
+                "description": "when it was written (ISO 8601, with its offset)"
+              }
+            },
+            "required": [
+              "seq",
+              "type"
+            ],
+            "additionalProperties": true
           },
           "description": "the log's records"
         },
@@ -627,7 +826,35 @@
         },
         "runs_with": {
           "type": "object",
-          "description": "what its next turn runs with: mode, model, workspace, thinking_effort, judge_model (null: the session's model) and judge_thinking_effort"
+          "description": "what a session's next turn runs with",
+          "properties": {
+            "mode": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "workspace": {
+              "type": "string"
+            },
+            "thinking_effort": {
+              "type": "string"
+            },
+            "judge_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "null: the session's own model"
+            },
+            "judge_thinking_effort": {
+              "type": "string"
+            }
+          }
         },
         "context": {
           "anyOf": [
@@ -664,6 +891,13 @@
               "type": "null"
             }
           ]
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -676,6 +910,14 @@
       "properties": {
         "message": {
           "const": "session/watch"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
         "session": {
           "type": "string",
@@ -699,13 +941,21 @@
         "message",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "session.watch.reply": {
       "type": "object",
       "properties": {
         "ok": {
           "const": true
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -717,10 +967,58 @@
       "description": "one event a line, until a bye",
       "properties": {
         "record": {
-          "type": "object"
+          "type": "object",
+          "description": "a record of a session's log: what an app reads of each kind is record.<type>",
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "description": "its place in the session's log"
+            },
+            "type": {
+              "type": "string"
+            },
+            "time": {
+              "type": "string",
+              "description": "when it was written (ISO 8601, with its offset)"
+            }
+          },
+          "required": [
+            "seq",
+            "type"
+          ],
+          "additionalProperties": true
         },
         "settled": {
-          "type": "object"
+          "type": "object",
+          "properties": {
+            "ask": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/row.ask"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": "nothing more happens on its own: the open ask, and what still runs on its own by kind, as each part names it (the jobs' and the subagents' ids, work in rounds in a line)"
         },
         "draft": {
           "type": "object"
@@ -779,6 +1077,20 @@
         "message": {
           "const": "session/mark_seen"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -790,16 +1102,29 @@
       },
       "required": [
         "message",
+        "id",
         "session",
         "seq"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.mark_seen.reply": {
       "type": "object",
       "properties": {
         "ok": {
           "const": true
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -813,6 +1138,20 @@
         "message": {
           "const": "session/rename"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -823,16 +1162,29 @@
       },
       "required": [
         "message",
+        "id",
         "session",
         "title"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.rename.reply": {
       "type": "object",
       "properties": {
         "ok": {
           "const": true
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -846,6 +1198,20 @@
         "message": {
           "const": "session/archive"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -853,15 +1219,28 @@
       },
       "required": [
         "message",
+        "id",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.archive.reply": {
       "type": "object",
       "properties": {
         "ok": {
           "const": true
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -875,6 +1254,20 @@
         "message": {
           "const": "session/unarchive"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -882,15 +1275,28 @@
       },
       "required": [
         "message",
+        "id",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.unarchive.reply": {
       "type": "object",
       "properties": {
         "ok": {
           "const": true
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -904,6 +1310,20 @@
         "message": {
           "const": "session/delete"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -911,9 +1331,11 @@
       },
       "required": [
         "message",
+        "id",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.delete.reply": {
       "type": "object",
@@ -923,6 +1345,17 @@
         },
         "trash": {
           "type": "string"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -935,6 +1368,20 @@
       "properties": {
         "message": {
           "const": "session/compact"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "session": {
           "type": "string",
@@ -954,9 +1401,11 @@
       },
       "required": [
         "message",
+        "id",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.compact.reply": {
       "type": "object",
@@ -970,6 +1419,17 @@
             "now",
             "before_next_step"
           ]
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -983,6 +1443,14 @@
         "message": {
           "const": "session/user_messages"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -992,7 +1460,8 @@
         "message",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "session.user_messages.reply": {
       "type": "object",
@@ -1003,9 +1472,27 @@
         "messages": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "description": "one of the user's messages",
+            "properties": {
+              "seq": {
+                "type": "integer"
+              },
+              "time": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
           },
-          "description": "seq, time and text of each"
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1019,6 +1506,20 @@
         "message": {
           "const": "session/rewind"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -1030,10 +1531,12 @@
       },
       "required": [
         "message",
+        "id",
         "session",
         "seq"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.rewind.reply": {
       "type": "object",
@@ -1043,11 +1546,40 @@
         },
         "rewind": {
           "type": "object",
-          "description": "the rewind's record"
+          "description": "the rewind's record",
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "description": "its place in the session's log"
+            },
+            "type": {
+              "type": "string"
+            },
+            "time": {
+              "type": "string",
+              "description": "when it was written (ISO 8601, with its offset)"
+            }
+          },
+          "required": [
+            "seq",
+            "type"
+          ],
+          "additionalProperties": true
         },
         "text": {
           "type": "string",
           "description": "the message's text, for the input"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1060,6 +1592,20 @@
       "properties": {
         "message": {
           "const": "session/fork"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "session": {
           "type": "string",
@@ -1076,9 +1622,11 @@
       },
       "required": [
         "message",
+        "id",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.fork.reply": {
       "type": "object",
@@ -1087,12 +1635,23 @@
           "const": true
         },
         "session": {
-          "type": "object",
+          "$ref": "#/$defs/row.session",
           "description": "the new session's row"
         },
         "text": {
           "type": "string",
           "description": "the message's text, for the new session's input; empty for all of it"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1105,6 +1664,20 @@
       "properties": {
         "message": {
           "const": "session/set"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "session": {
           "type": "string",
@@ -1132,9 +1705,11 @@
       },
       "required": [
         "message",
+        "id",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "session.set.reply": {
       "type": "object",
@@ -1143,10 +1718,33 @@
           "const": true
         },
         "set": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": "what was set, by name"
         },
         "next_turn": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "a running or waiting turn holds the old values"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1159,6 +1757,14 @@
       "properties": {
         "message": {
           "const": "session/search"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
         "query": {
           "type": "string",
@@ -1180,7 +1786,8 @@
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "session.search.reply": {
       "type": "object",
@@ -1200,19 +1807,46 @@
         },
         "session": {
           "type": "object",
-          "description": "the session searched or read: id, title, workspace, state, mode, archived, updated_at"
+          "description": "the session searched or read",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "a session's id"
+            },
+            "title": {
+              "type": "string"
+            },
+            "workspace": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string"
+            },
+            "archived": {
+              "type": "boolean"
+            },
+            "updated_at": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": true
         },
         "sessions": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": true
           },
           "description": "the matching sessions, best first: a session's fields, record_count and its best record"
         },
         "records": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": true
           },
           "description": "records: seq, kind (user, notice, reply, call, handoff), a call's tool or a notice's source, time, and a snippet (a match marked « ») or, near around, the whole text"
         },
@@ -1237,6 +1871,13 @@
         },
         "later_count": {
           "type": "integer"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1250,10 +1891,19 @@
         "message": {
           "const": "subagent/send"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 200
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "text": {
           "type": "string"
@@ -1297,7 +1947,8 @@
         "for_session",
         "source"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "subagent.send.reply": {
       "type": "object",
@@ -1312,6 +1963,17 @@
         "started": {
           "type": "boolean",
           "description": "a new subagent was started"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1325,6 +1987,14 @@
         "message": {
           "const": "job/list"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -1333,7 +2003,8 @@
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "job.list.reply": {
       "type": "object",
@@ -1344,9 +2015,16 @@
         "jobs": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/row.job"
           },
-          "description": "one row a job, its state in words in `state_text`"
+          "description": "one row a job"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1360,15 +2038,31 @@
         "message": {
           "const": "job/stop"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "job": {
           "type": "string"
         }
       },
       "required": [
         "message",
+        "id",
         "job"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "job.stop.reply": {
       "type": "object",
@@ -1378,6 +2072,17 @@
         },
         "stopped": {
           "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1391,6 +2096,14 @@
         "message": {
           "const": "rounds/list"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -1399,7 +2112,8 @@
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "rounds.list.reply": {
       "type": "object",
@@ -1410,9 +2124,16 @@
         "rounds": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/row.rounds"
           },
-          "description": "one row a run, in a line in `summary`"
+          "description": "one row a run"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1426,15 +2147,31 @@
         "message": {
           "const": "rounds/stop"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "rounds": {
           "type": "string"
         }
       },
       "required": [
         "message",
+        "id",
         "rounds"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "rounds.stop.reply": {
       "type": "object",
@@ -1444,6 +2181,17 @@
         },
         "stopped": {
           "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1457,6 +2205,14 @@
         "message": {
           "const": "grant/list"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -1466,7 +2222,8 @@
         "message",
         "session"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "grant.list.reply": {
       "type": "object",
@@ -1477,9 +2234,17 @@
         "grants": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": true
           },
           "description": "id, by, scope, grant, description"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1493,6 +2258,20 @@
         "message": {
           "const": "grant/forget"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -1503,10 +2282,12 @@
       },
       "required": [
         "message",
+        "id",
         "session",
         "grant"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "grant.forget.reply": {
       "type": "object",
@@ -1516,6 +2297,17 @@
         },
         "forgot": {
           "type": "string"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1528,12 +2320,21 @@
       "properties": {
         "message": {
           "const": "model/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         }
       },
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "model.list.reply": {
       "type": "object",
@@ -1544,9 +2345,17 @@
         "servers": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": true
           },
-          "description": "one row a server"
+          "description": "server, title, models, and error where it listed none"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1560,6 +2369,20 @@
         "message": {
           "const": "model/features"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "model": {
           "type": "string"
         },
@@ -1569,9 +2392,11 @@
       },
       "required": [
         "message",
+        "id",
         "model"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "model.features.reply": {
       "type": "object",
@@ -1586,10 +2411,28 @@
           "type": "string"
         },
         "measured_at": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "features": {
           "type": "object"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1598,16 +2441,25 @@
     },
     "model.server.list": {
       "type": "object",
-      "description": "Every model server the server knows, whether its key is there, the default model, and why a session on it couldn't start (null: it can).",
+      "description": "Every model server the server knows, whether its key is there, the default model and its server, and why a session on it couldn't start (null: it can).",
       "properties": {
         "message": {
           "const": "model/server/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         }
       },
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "model.server.list.reply": {
       "type": "object",
@@ -1618,7 +2470,8 @@
         "servers": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": true
           },
           "description": "name, title, url, key_state, needs_key, user_added, in_catalog, context_window, models"
         },
@@ -1632,6 +2485,17 @@
             }
           ]
         },
+        "default_server": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the server the default model goes to"
+        },
         "not_ready_reason": {
           "anyOf": [
             {
@@ -1641,6 +2505,13 @@
               "type": "null"
             }
           ]
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1653,6 +2524,14 @@
       "properties": {
         "message": {
           "const": "model/server/probe"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
         "name": {
           "type": "string"
@@ -1667,7 +2546,8 @@
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "model.server.probe.reply": {
       "type": "object",
@@ -1681,9 +2561,17 @@
         "models": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": true
           },
           "description": "id, context_window"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1696,6 +2584,20 @@
       "properties": {
         "message": {
           "const": "model/server/connect"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "name": {
           "type": "string"
@@ -1722,10 +2624,12 @@
       },
       "required": [
         "message",
+        "id",
         "name",
         "model"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "model.server.connect.reply": {
       "type": "object",
@@ -1738,6 +2642,17 @@
         },
         "default": {
           "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1751,15 +2666,31 @@
         "message": {
           "const": "model/server/disconnect"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "name": {
           "type": "string"
         }
       },
       "required": [
         "message",
+        "id",
         "name"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "model.server.disconnect.reply": {
       "type": "object",
@@ -1772,6 +2703,17 @@
         },
         "default_unset": {
           "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1784,12 +2726,21 @@
       "properties": {
         "message": {
           "const": "mcp/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         }
       },
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "mcp.list.reply": {
       "type": "object",
@@ -1800,7 +2751,8 @@
         "servers": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": true
           },
           "description": "name, transport, command, args, env, cwd, url, headers, tools, start_seconds, call_seconds, state, error, protocol_version"
         },
@@ -1809,6 +2761,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1822,6 +2781,14 @@
         "message": {
           "const": "mcp/get"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
         "name": {
           "type": "string"
         }
@@ -1830,7 +2797,8 @@
         "message",
         "name"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "mcp.get.reply": {
       "type": "object",
@@ -1839,7 +2807,15 @@
           "const": true
         },
         "server": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": true
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1852,6 +2828,20 @@
       "properties": {
         "message": {
           "const": "mcp/add"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "name": {
           "type": "string"
@@ -1904,9 +2894,11 @@
       },
       "required": [
         "message",
+        "id",
         "name"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "mcp.add.reply": {
       "type": "object",
@@ -1915,13 +2907,25 @@
           "const": true
         },
         "server": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": true
         },
         "notes": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1935,15 +2939,31 @@
         "message": {
           "const": "mcp/remove"
         },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
         "name": {
           "type": "string"
         }
       },
       "required": [
         "message",
+        "id",
         "name"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "mcp.remove.reply": {
       "type": "object",
@@ -1953,6 +2973,17 @@
         },
         "removed": {
           "type": "string"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -1965,12 +2996,21 @@
       "properties": {
         "message": {
           "const": "setting/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         }
       },
       "required": [
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": false
     },
     "setting.list.reply": {
       "type": "object",
@@ -1981,7 +3021,8 @@
         "settings": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": true
           },
           "description": "name, group, label, default, kind, choices, minimum, unset_means, shown, needs, runs_on, value"
         },
@@ -1994,6 +3035,13 @@
               "type": "null"
             }
           ]
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
@@ -2002,10 +3050,24 @@
     },
     "setting.set": {
       "type": "object",
-      "description": "Write one of ZERO's settings to config.toml (a face's own table, the full screen's [tui], is the face's).",
+      "description": "Write one of ZERO's settings to config.toml (an app's own table, the full screen's [tui], is the app's).",
       "properties": {
         "message": {
           "const": "setting/set"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
         "name": {
           "type": "string"
@@ -2014,10 +3076,12 @@
       },
       "required": [
         "message",
+        "id",
         "name",
         "value"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "x-changes": true
     },
     "setting.set.reply": {
       "type": "object",
@@ -2027,11 +3091,491 @@
         },
         "set": {
           "type": "object"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
         }
       },
       "required": [
         "ok"
       ]
+    },
+    "row.ask": {
+      "type": "object",
+      "description": "a question waiting for the user's answer",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the ask's id: session/send's reply_to"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string",
+          "description": "the call as the ask shows it"
+        },
+        "why": {
+          "type": "string",
+          "description": "the rule's words with the reason, as the models read them"
+        },
+        "reason": {
+          "type": "string",
+          "description": "the reason the user reads ('' for none)"
+        },
+        "about": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "what the ask is about, where its rule says it"
+        },
+        "created_at": {
+          "type": "number"
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "its answers, as session/send's `choice` takes them"
+        },
+        "choice_labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "each of `choices` (in its order) with the words the ask's box shows for it"
+        }
+      }
+    },
+    "row.session": {
+      "type": "object",
+      "description": "a session as the list shows it",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "title": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "who started it: a client's name"
+        },
+        "model": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "workspace": {
+          "type": "string",
+          "description": "the folder its commands run in; / is the whole machine"
+        },
+        "state": {
+          "enum": [
+            "idle",
+            "running",
+            "waiting",
+            "failed"
+          ]
+        },
+        "created_at": {
+          "type": "number"
+        },
+        "updated_at": {
+          "type": "number"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "a session's id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the session it sits under (a fork, a subagent)"
+        },
+        "started_by": {
+          "anyOf": [
+            {
+              "enum": [
+                "zero",
+                "user"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "zero for a subagent, else the user (null: from before 0.6.7)"
+        },
+        "unseen": {
+          "type": "boolean",
+          "description": "a turn ended that the user hasn't seen"
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "what a set changed that a running or waiting turn still holds from before"
+        },
+        "ask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/row.ask"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jobs": {
+          "type": "integer",
+          "description": "its running background jobs"
+        },
+        "rounds": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "its open work in rounds, in a line"
+        }
+      }
+    },
+    "row.mode": {
+      "type": "object",
+      "description": "one of the modes a session runs in",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "about": {
+          "type": "string",
+          "description": "its sandbox and who answers its asks, in a line"
+        },
+        "in_cycle": {
+          "type": "boolean",
+          "description": "a key that steps through the modes lands on it (false: chosen by its name only)"
+        }
+      }
+    },
+    "row.job": {
+      "type": "object",
+      "description": "a background job",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "command": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "running",
+            "ended",
+            "stopped",
+            "lost"
+          ]
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "type": "number"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "due_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "when the model's estimate runs out"
+        },
+        "stopped_by": {
+          "anyOf": [
+            {
+              "enum": [
+                "model",
+                "user"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state_text": {
+          "type": "string",
+          "description": "its state in words, as the model reads it"
+        }
+      }
+    },
+    "row.rounds": {
+      "type": "object",
+      "description": "a session's work in rounds",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "round_count": {
+          "type": "integer",
+          "description": "the round under way, or the last"
+        },
+        "estimate_rounds": {
+          "type": "integer"
+        },
+        "estimate_minutes": {
+          "type": "number"
+        },
+        "estimate_dollars": {
+          "type": "number"
+        },
+        "spent_minutes": {
+          "type": "number"
+        },
+        "spent_dollars": {
+          "type": "number"
+        },
+        "last_status": {
+          "anyOf": [
+            {
+              "enum": [
+                "going_on",
+                "done",
+                "stuck"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "type": "number"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "description": "the run in a line"
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "description": "a record of a session's log: what an app reads of each kind is record.<type>",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        }
+      },
+      "required": [
+        "seq",
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "record.session": {
+      "type": "object",
+      "description": "a `session` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "session"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "note": {
+          "type": "string",
+          "description": "a line the session's start carries (a fork's)"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.user": {
+      "type": "object",
+      "description": "a `user` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "user"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "text": {
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inbox": {
+          "type": "string",
+          "description": "the message's id"
+        },
+        "steer": {
+          "type": "boolean",
+          "description": "sent while a turn ran"
+        },
+        "continue": {
+          "type": "boolean",
+          "description": "a turn went on with no new message"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.assistant": {
+      "type": "object",
+      "description": "a `assistant` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "assistant"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "message": {
+          "type": "object",
+          "description": "the model's message: content and tool_calls"
+        },
+        "call_summaries": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "each of its tool calls by id, as an ask shows it"
+        },
+        "prompt_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cached_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completion_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
     },
     "record.tool": {
       "type": "object",
@@ -2097,8 +3641,312 @@
             }
           },
           "description": "what its tool declares beside its text; a command's are listed"
+        },
+        "saved_path": {
+          "type": "string",
+          "description": "the file its whole result was saved in, past its share of the context (missing: none)"
         }
-      }
+      },
+      "additionalProperties": true
+    },
+    "record.ask": {
+      "type": "object",
+      "description": "a `ask` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "ask"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "ask": {
+          "type": "string",
+          "description": "the ask's id"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "about": {
+          "type": "string"
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "choice_labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "each of `choices` (in its order) with the words the ask's box shows for it"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.answer": {
+      "type": "object",
+      "description": "a `answer` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "answer"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "ask": {
+          "type": "string"
+        },
+        "yes": {
+          "type": "boolean"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.note": {
+      "type": "object",
+      "description": "a `note` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "note"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.switch": {
+      "type": "object",
+      "description": "a `switch` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "switch"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "from": {
+          "type": "object"
+        },
+        "to": {
+          "type": "object",
+          "description": "what changed, by name, to its new value"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.compaction": {
+      "type": "object",
+      "description": "a `compaction` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "compaction"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "tokens_before": {
+          "type": "integer"
+        },
+        "tokens_after": {
+          "type": "integer"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instructions": {
+          "type": "object",
+          "description": "what its askers said the handoff keeps, by who asked"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.compaction_failed": {
+      "type": "object",
+      "description": "a `compaction_failed` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "compaction_failed"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.nothing_to_compact": {
+      "type": "object",
+      "description": "a `nothing_to_compact` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "nothing_to_compact"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.rewind": {
+      "type": "object",
+      "description": "a `rewind` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "rewind"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "left_from": {
+          "type": "integer",
+          "description": "the first record it left behind"
+        },
+        "left_to": {
+          "type": "integer",
+          "description": "the last record it left behind"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.turn_end": {
+      "type": "object",
+      "description": "a `turn_end` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "turn_end"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seconds": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true
     }
   }
 }

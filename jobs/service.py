@@ -207,7 +207,7 @@ class JobsService(Service):
         no harness code to say it."""
         rows = self.running_jobs() if sid is None else self.store.jobs(sid)
         now = time.time()
-        return [{**row, "state_text": jobtools.state_text(row, now)} for row in rows]
+        return [listed_row(row, now) for row in rows]
 
     def session(self, sid, limits, log_of=None):
         return SessionJobs(self, sid, limits, log_of)
@@ -405,3 +405,16 @@ class JobsService(Service):
         self.stopping.set()
         with self.lock:
             self.live.clear()
+
+
+# A job's row as job/list gives it (protocol/messages.py's row.job): its
+# fields by the jobs table's columns they come from, so a column renamed
+# there changes no reply
+JOB_COLUMNS = ("id", "session", "command", "pid", "state", "exit_code",
+               "started_at", "ended_at", "due_at", "stopped_by")
+
+
+def listed_row(row, now):
+    """A job, from its row in the jobs table, with its state in words."""
+    return {**{name: row[name] for name in JOB_COLUMNS},
+            "state_text": jobtools.state_text(row, now)}

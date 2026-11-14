@@ -49,6 +49,8 @@ HOME_ENV = "ZERO_HOME"
 # The longest path a Unix socket can bind to (sun_path, less its end)
 SOCKET_MAX = 107
 SOCKET = "zero.sock"
+# The token file at the home's top: an app's proof of the user
+APP_TOKEN = "app-token"
 # How much of the zero on the PATH is read to see whether it runs this copy:
 # a launcher is two lines
 LAUNCHER_READ_BYTES = 4096
@@ -348,6 +350,10 @@ class Paths:
         self.old_server_lock = self.run / "host.lock"
         # Held by a client while it starts a server, so two start one
         self.start_lock = self.run / "start.lock"
+        # What proves the user where the socket can't tell who connects
+        # (server/peers.py): made by the server on first use, kept across
+        # restarts, readable by the user only
+        self.app_token = self.home / APP_TOKEN
         self.unit = unit_name(self.home)
 
     def environment(self):

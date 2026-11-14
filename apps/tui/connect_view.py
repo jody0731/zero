@@ -54,14 +54,6 @@ def name_from(url):
     return re.sub(r"[^a-z0-9_-]", "-", server.split(".")[0]).strip("-") or "server"
 
 
-def server_of(model, names):
-    """The server a model name goes to, as the server reads it."""
-    if not model:
-        return None
-    prefix, _, rest = model.partition("/")
-    return prefix if rest and prefix in names and prefix != "ollama" else "ollama"
-
-
 def connected_servers(listed):
     """The servers of a `servers` reply a model can be picked from: a key
     saved, or one of the user's own that needs none."""
@@ -313,6 +305,7 @@ class ServersView(Screen):
         self.selected = 0
         self.rows = [None]
         self.default = None
+        self.default_server = None
         self.not_ready_reason = None
 
     def compose(self):
@@ -344,6 +337,8 @@ class ServersView(Screen):
                    + [r for r in listed if not r["in_catalog"]])
         self.rows = [*ordered, None]
         self.default = reply["default"]
+        # The server the default model goes to, as the server routes it
+        self.default_server = reply.get("default_server")
         self.not_ready_reason = reply["not_ready_reason"]
         # A view closed before the answer came has nothing to draw into
         if self.query("#rows"):
@@ -351,8 +346,7 @@ class ServersView(Screen):
 
     def draw(self):
         self.selected = max(0, min(self.selected, len(self.rows) - 1))
-        names = [r["name"] for r in self.rows if r]
-        using = server_of(self.default, names)
+        using = self.default_server
         text = Text()
         for index, row in enumerate(self.rows):
             style = "reverse" if index == self.selected else ""
@@ -374,8 +368,7 @@ class ServersView(Screen):
             return ("A server of your own: its URL, a key if it takes one, and "
                     "a model it serves.")
         said = [row["url"]]
-        if row["name"] == server_of(self.default, [r["name"] for r in self.rows
-                                                    if r]):
+        if row["name"] == self.default_server:
             said.append(f"New sessions use {self.default}.")
         if self.not_ready_reason and self.default:
             said.append(self.not_ready_reason)

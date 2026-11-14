@@ -96,7 +96,7 @@ from permissions.consent import Consent
 from permissions.grants import GrantCheck
 from permissions.service import PermissionsService
 from permissions.modes import (
-    JUDGED, MODES, UNSANDBOXED, answers_line, canonical, raised,
+    JUDGED, MODES, UNSANDBOXED, answers_line, canonical, mode_rows, raised,
 )
 from limits.stops import BrokenReplyLimit
 from prompt import SETTINGS as PROMPT_SETTINGS

@@ -22,12 +22,6 @@ LEAVE = ("exit", "quit", "/bye")
 WAITING = "Nothing is running: a question is waiting. Answer it, or type a message."
 # How long after the last keystroke an ask's box may take the input's place
 BOX_DELAY_SECONDS = 1.0
-# What Shift+Tab steps through (Claude Code's key); bypassPermissions only by
-# name, typed, so no key lands on it by accident
-MODE_CYCLE = ("default", "auto", "auto+", "readOnly")
-# The modes offered where the server's hello names none: the cycle's and the
-# one typed by name
-MODES_KNOWN = (*MODE_CYCLE, "bypassPermissions")
 COMMANDS = {
     "/new": "a new session (asks for its workspace)",
     "/continue": "go on with a turn that ended without an answer",
@@ -150,23 +144,11 @@ class SessionInput(SessionState):
 PROCEED = "Do you want to proceed?"
 
 
-# The answers an ask's box offers, picked with ↑/↓ and Enter or their
-# number; words typed instead go to the consent check
-CHOICE_LABELS = {
-    "yes": "Yes",
-    "session": "Yes, and don't ask again this session for {what}",
-    "saved": "Yes, and don't ask again for {what}, in any session",
-    "no": "No",
-}
-
-
 def choices(ask):
-    """An ask's choices as (id, label): from its record, else Yes and
-    No."""
-    ids = ask.get("choices") or ["yes", "no"]
-    what = (ask.get("notes") or {}).get("offer_text") or "this"
-    return [(c, CHOICE_LABELS[c].format(what=what))
-            for c in ids if c in CHOICE_LABELS]
+    """The answers an ask's box offers, as (choice, its words), picked with
+    ↑/↓ and Enter or their number; words typed instead go to the consent
+    check. The server names them (the ask's `choice_labels`)."""
+    return list((ask.get("choice_labels") or {}).items())
 
 
 def command(text):
@@ -253,11 +235,25 @@ def progress(client, row, now=None):
     return pieces
 
 
-def next_mode(mode):
-    """The mode Shift+Tab goes to from `mode`."""
-    if mode not in MODE_CYCLE:
-        return MODE_CYCLE[0]
-    return MODE_CYCLE[(MODE_CYCLE.index(mode) + 1) % len(MODE_CYCLE)]
+def mode_line(row):
+    """A mode as /mode lists it: its name, then the server's line for it."""
+    about = row.get("about") or ""
+    return f"{row['name']:<18} {about}".rstrip()
+
+
+def next_mode(mode, modes):
+    """The mode Shift+Tab (Claude Code's key) goes to from `mode`: the next
+    of the server's modes (its hello's rows) that a key steps to, after the
+    end the first; `mode` itself where there is none."""
+    names = [row["name"] for row in modes]
+    stepped = [row["name"] for row in modes if row.get("in_cycle")]
+    if not stepped:
+        return mode
+    at = names.index(mode) if mode in names else -1
+    for name in names[at + 1:] + names[:at + 1]:
+        if name in stepped:
+            return name
+    return mode
 
 
 def mode_named(name, modes):

@@ -89,6 +89,7 @@ class ModelService(Service):
             return {"ok": False, "error": str(e)}
         model = self.default()
         return {"ok": True, "servers": listed, "default": model,
+                "default_server": connect.server_of(model),
                 "not_ready_reason": connect.not_ready_reason(model)}
 
     def probe_message(self, request):

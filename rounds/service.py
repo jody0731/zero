@@ -40,6 +40,21 @@ def save(folder, name, text):
     return path
 
 
+# A run's row as rounds/list gives it (protocol/messages.py's row.rounds):
+# its fields by the rounds table's columns they come from, so a column
+# renamed there changes no reply
+ROUNDS_COLUMNS = ("id", "session", "objective", "state", "round_count",
+                  "estimate_rounds", "estimate_minutes", "estimate_dollars",
+                  "spent_minutes", "spent_dollars", "last_status", "started_at",
+                  "ended_at")
+
+
+def listed_row(run):
+    """A run, from its row in the rounds table, with its line."""
+    return {**{name: run[name] for name in ROUNDS_COLUMNS},
+            "summary": summary(run)}
+
+
 def summary(run):
     """A run in a line, as the status line and `zero rounds list` show it,
     each against ZERO's estimate, the tokens in the user's unit: `round 3/8
@@ -200,8 +215,7 @@ class RoundsService(Service):
             raise Refused("session must be a string")
         runs = (self.store.runs(open_only=True) if sid is None
                 else self.store.runs(sid))
-        return {"ok": True, "rounds": [{**run, "summary": summary(run)}
-                                       for run in runs]}
+        return {"ok": True, "rounds": [listed_row(run) for run in runs]}
 
     def stop_message(self, request):
         id = request.get("rounds")

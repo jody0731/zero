@@ -15,6 +15,9 @@ Usage:
                              protocol's messages (commands.py)
     zero server status         whether the server runs, and what keeps it busy
                              (zero server hello the same; --json its reply)
+    zero server start [--json] start it if none runs, and print the way in
+                             for an app in any language (its socket, token
+                             file, protocol, release)
     zero server stop [--force] stop it (asked first if busy)
     zero server [--model NAME] run the server in this terminal
     zero mcp serve           ZERO as an MCP server on stdio, for other agents
@@ -45,11 +48,10 @@ message or client. A session's workspace is a folder, / for the whole machine;
 its commands run there, read-only in the sandbox until file tools come.
 Background jobs outlive their turn and the terminal; their session is told.
 
-Modes, least to most permissive: readOnly (nothing writable, asks refused),
-default (you answer asks), auto (a judge answers), auto+ (no sandbox; the
-judge reviews every call that needs permission), bypassPermissions (no sandbox,
-nothing asked). In default and auto a command may ask to run outside the
-sandbox, and a turn past its step limit asks to go on. A plan (propose_plan)
+Modes: each a sandbox and who answers asks, least to most permissive, as the
+server names them (/mode in zero lists them with a line each; Shift+Tab steps
+through all but the one where nothing asks). A command may ask to run
+outside the sandbox, and a turn past its step limit asks to go on. A plan (propose_plan)
 goes to the same approver; what an ask's "don't ask again" grants is listed by
 /permissions. --model chooses the model; without it a new session takes
 config.toml's (your default model).
@@ -61,7 +63,8 @@ models, the limits, the idle time, the keys), keys.toml (API keys),
 models.toml (the model servers you added) and permissions.toml (what you saved
 from an ask). ~/.zero/state/ holds state.sqlite, sessions/, locks/, jobs/ (each
 job's output) and server.log (a detached server's output). ~/.zero/run/ holds the
-socket (zero.sock) and the locks (server.lock, start.lock). Install writes
+socket (zero.sock) and the locks (server.lock, start.lock); app-token, at the
+home's top, proves the user where the socket can't tell. Install writes
 ~/.local/bin/zero. A release (its code, packages and Python) sits in
 ~/.local/share/zero/versions/, and current names the one that runs; an update
 adds one and switches current, never touching the home. A git clone runs on
@@ -254,6 +257,27 @@ def server_status(paths, as_json=False):
     return 0
 
 
+def server_start(paths, connection, as_json=False):
+    """`zero server start`: the server started when none answers, as any
+    command starts it, then the way in for an app in any language: its
+    socket, the token file where the socket can't tell who connects, the
+    protocol and the release (`as_json`: one object)."""
+    reply = connection.hello()
+    way_in = {
+        "ok": True, "socket": str(paths.socket),
+        "token_file": str(paths.app_token),
+        "protocol": reply["protocol"], "version": reply.get("version"),
+        "pid": reply["pid"],
+    }
+    if as_json:
+        print(json.dumps(way_in, ensure_ascii=False))
+        return 0
+    print(f"ZERO's server is running (pid {reply['pid']}, release "
+          f"{reply.get('version') or '?'}, protocol {reply['protocol']}).\n"
+          f"Its socket: {paths.socket}\nIts token file: {paths.app_token}")
+    return 0
+
+
 def server_stop(paths, force=False, confirm=None, seconds=20, as_json=False):
     """Stop the server cleanly, asking first while anything runs. `force`: for a
     server that doesn't answer, SIGTERM and then SIGKILL. `as_json`: one
@@ -398,15 +422,16 @@ def parser_for(argv):
         parser = argparse.ArgumentParser(prog=f"zero {argv[0]}")
         if argv[0] == "server":
             parser.add_argument("action", nargs="?", default="run",
-                                choices=("run", "hello", "status", "stop"))
+                                choices=("run", "hello", "status", "start",
+                                         "stop"))
             parser.add_argument("--model", help="run: new sessions' default model")
             parser.add_argument(
                 "--force", action="store_true",
                 help="stop: SIGTERM, then SIGKILL, for a server that hangs",
             )
             parser.add_argument("--json", action="store_true",
-                                help="hello, status, stop: the reply as one "
-                                     "JSON object")
+                                help="hello, status, start, stop: the reply "
+                                     "as one JSON object")
         elif argv[0] == "mcp":
             # list, get, add and remove are the family's (commands.py)
             parser.add_argument("action", choices=("serve",),
@@ -493,6 +518,8 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
         if args.command == "server":
             if args.action in ("hello", "status"):
                 return server_status(paths, args.json)
+            if args.action == "start":
+                return server_start(paths, connection, args.json)
             if args.action == "stop":
                 return server_stop(paths, force=args.force, as_json=args.json)
             run_server(args.model)

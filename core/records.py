@@ -113,6 +113,9 @@ class Call:
         self.fields = {}
         self.failed = False
         self.output_at = None
+        # The file its whole result was saved in, past its share of the
+        # context (context/'s tool_result pipe), for an app that links it
+        self.saved_path = None
         # What hooks found out about this call (a rule hit, say); logged as is
         self.notes = {}
         # Hook notes for the model, added below the result of a call that ran
@@ -137,6 +140,8 @@ class Call:
                if self.output_at is not None else {}),
             **({"called_through": self.called_through}
                if self.called_through is not None else {}),
+            **({"saved_path": str(self.saved_path)}
+               if self.saved_path is not None else {}),
         }
 
 

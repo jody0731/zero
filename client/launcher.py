@@ -7,11 +7,14 @@ after its home (`zero-server` for ~/.zero), where the user's systemd answers,
 else as a detached process. It
 polls until the server answers. A server that takes the connection but never
 answers is reported with its pid, never replaced by a second one. A server with
-another build (the code changed since it started) is restarted when it is
-idle, and only said to run older code while it is busy; so is a server of an
-older protocol, as an installed ZERO runs until its first update past it:
-protocol 1 names a request's message in "verb", 2 knows host/hello, 3 refuses
-a hello naming another protocol and answers one naming none.
+another build of an older release (or of the same release: a tree being
+worked on) is restarted when it is idle, and only said to run older code
+while it is busy; so is a server of an older protocol, as an installed ZERO
+runs until its first update past it: protocol 1 names a request's message in
+"verb", 2 knows host/hello, 3 and 4 refuse a hello naming another protocol
+and answer one naming none. A server of a newer release is never stopped: it
+answers in this client's protocol (protocol/older.py), and a client of an
+older release asking it to restart is refused.
 """
 
 import fcntl
@@ -19,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from client.connection import NoAnswer, NotRunning, ProtocolError, request
@@ -157,7 +161,12 @@ def shutdown(paths, timeout=5, protocol=None, **fields):
         return renamed(
             request(paths.socket, {"message": "host/stop", **fields}, timeout)
         )
-    return request(paths.socket, messages.request("server/stop", **fields), timeout)
+    stop = messages.request("server/stop", **fields)
+    if protocol >= 5:
+        # Written in its protocol, run once, and naming this client's release
+        stop.update(protocol=version.PROTOCOL, id=str(uuid.uuid4()),
+                    version=version.release())
+    return request(paths.socket, stop, timeout)
 
 
 # Said when a server of older code stays, busy, until it is idle
@@ -170,15 +179,13 @@ def server_is_current(paths, reply, report, seconds, kept_older=None):
     `kept_older()`: called when an older one stays."""
     kept_older = kept_older or (lambda: None)
     old = reply["protocol"] < version.PROTOCOL
-    if reply["protocol"] != version.PROTOCOL and (not old or reply.get("busy_with")):
+    if old and reply.get("busy_with"):
         raise ProtocolError(
             f"ZERO's server speaks protocol {reply['protocol']}, this zero "
-            f"{version.PROTOCOL}"
-            + (": it is replaced once it is idle, or stop it now with "
-               "zero server stop --force" if old else
-               ": restart it with zero server stop --force")
+            f"{version.PROTOCOL}: it is replaced once it is idle, or stop it "
+            "now with zero server stop --force"
         )
-    if reply["build"] == version.build_hash():
+    if reply["build"] == version.build_hash() or newer(reply):
         return True
     if reply.get("busy_with"):
         report(KEPT_OLDER)
@@ -203,6 +210,15 @@ def server_is_current(paths, reply, report, seconds, kept_older=None):
             raise NotRunning("ZERO's old server did not exit")
         time.sleep(POLL_SECONDS)
     return False
+
+
+def newer(reply):
+    """Whether the server runs a newer release than this client: it answers
+    in this client's protocol, and stays."""
+    if reply.get("server_protocol", reply["protocol"]) > version.PROTOCOL:
+        return True
+    theirs = version.release_order(reply.get("version") or "")
+    return theirs > version.release_order(version.release())
 
 
 class StartLock:

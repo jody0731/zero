@@ -33,6 +33,7 @@ import weakref
 from datetime import datetime
 
 from core import history
+from server.rebuild import labels_of
 
 # The database's format, its user_version: a newer ZERO's database is read for
 # what this one knows of it, and said
@@ -120,9 +121,27 @@ CREATE TABLE IF NOT EXISTS asks (
     closed_at REAL,
     -- The reply's inbox id and source
     reply TEXT,
-    source TEXT
+    source TEXT,
+    -- Its answers with the words the box shows for each, as JSON (an
+    -- object, in order): what apps draw
+    choice_labels TEXT
 );
 CREATE INDEX IF NOT EXISTS asks_open ON asks (session, status);
+CREATE TABLE IF NOT EXISTS message_replies (
+    -- A message that changes something, by the id its sender picked: run
+    -- once, its reply kept for the same id sent again (server/idempotency.py)
+    id TEXT PRIMARY KEY,
+    message TEXT NOT NULL,
+    -- A hash of the request less its protocol and token: the same id with
+    -- another request is refused
+    request_hash TEXT NOT NULL,
+    -- running, done, or cut_off (a stop came before its reply)
+    state TEXT NOT NULL,
+    -- The reply, as JSON, once done
+    reply TEXT,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS message_replies_age ON message_replies (created_at);
 """
 # Columns renamed since a database was made (0.6.2.8.1: a time ends in _at, a
 # count says so): table → {old name: new name}, renamed in place on opening
@@ -136,8 +155,13 @@ RENAMED_COLUMNS = {
 ADDED_COLUMNS = {
     "sessions": {"parent": "TEXT", "started_by": "TEXT",
                  "log_seq": "INTEGER NOT NULL DEFAULT 0"},
-    "asks": {"reason": "TEXT NOT NULL DEFAULT ''", "about": "TEXT"},
+    "asks": {"reason": "TEXT NOT NULL DEFAULT ''", "about": "TEXT",
+             "choice_labels": "TEXT"},
 }
+# Added columns a session's log fills (0.7.6.1): once added, the sessions
+# with rows in their table are rebuilt from their logs at the server's start
+# (their log_seq set back), so the rows made before carry them too (rule 9)
+FROM_THE_LOG = {"asks": ("choice_labels",)}
 # Beside the database, a copy of it as it was before a rename
 BACKUP_SUFFIX = ".before-renames-"
 # A user message that waits for the turn's answer instead of steering it
@@ -195,12 +219,16 @@ def rename_columns(db, path, renamed_columns):
 
 def add_columns(db, added_columns):
     """Add each column a table made before it lacks: no copy needed, since
-    nothing is lost and an older ZERO reads past it."""
+    nothing is lost and an older ZERO reads past it. A column the log fills
+    (FROM_THE_LOG) sends its table's sessions back to be rebuilt."""
     for table, columns in added_columns.items():
         have = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
         for name, kind in columns.items():
             if name not in have:
                 db.execute(f'ALTER TABLE {table} ADD COLUMN "{name}" {kind}')
+                if name in FROM_THE_LOG.get(table, ()):
+                    db.execute("UPDATE sessions SET log_seq = 0 WHERE id IN "
+                               f"(SELECT session FROM {table})")
 
 
 class Write:
@@ -616,11 +644,11 @@ class Store:
         def change(db):
             db.execute(
                 "INSERT OR IGNORE INTO asks (id, session, call, turn, tool, command, "
-                "why, reason, about, status, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+                "why, reason, about, status, created_at, choice_labels) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
                 (ask["ask"], session, ask["call"], turn, ask["tool"],
                  str(ask["command"]), ask["why"], ask["reason"],
-                 ask.get("about"), created_at),
+                 ask.get("about"), created_at, labels_of(ask)),
             )
             db.execute(
                 "UPDATE sessions SET state = 'waiting', updated_at = ?, "
@@ -696,10 +724,11 @@ class Store:
             db.execute("DELETE FROM asks WHERE session = ?", (session,))
             db.executemany(
                 "INSERT INTO asks (id, session, call, turn, tool, command, why, "
-                "reason, about, status, created_at, closed_at, reply, source) "
+                "reason, about, status, created_at, closed_at, reply, source, "
+                "choice_labels) "
                 "VALUES (:id, :session, :call, :turn, :tool, :command, :why, "
                 ":reason, :about, :status, :created_at, :closed_at, :reply, "
-                ":source)",
+                ":source, :choice_labels)",
                 [{**ask, "session": session} for ask in rows.asks],
             )
             for id, status in rows.inbox.items():
@@ -740,6 +769,38 @@ class Store:
             "SELECT * FROM sessions ORDER BY (state = 'waiting') DESC, "
             "updated_at DESC, created_at DESC"
         )
+
+    # Each message that changes something, run once by its id
+    # (server/idempotency.py)
+
+    def message_reply(self, msg_id):
+        """The id's row in message_replies, or None."""
+        rows = self.query("SELECT * FROM message_replies WHERE id = ?", msg_id)
+        return rows[0] if rows else None
+
+    def claim_reply(self, msg_id, message, request_hash):
+        """The id claimed before its message runs; IntegrityError if taken."""
+        self.write(lambda db: db.execute(
+            "INSERT INTO message_replies (id, message, request_hash, state, "
+            "created_at) VALUES (?, ?, ?, 'running', ?)",
+            (msg_id, message, request_hash, time.time())))
+
+    def keep_reply(self, msg_id, reply):
+        """The id's message has run: its reply (JSON) kept."""
+        self.write(lambda db: db.execute(
+            "UPDATE message_replies SET state = 'done', reply = ? WHERE id = ?",
+            (reply, msg_id)))
+
+    def cut_off_replies(self):
+        """At a start: the ids a stop left running were cut off."""
+        self.write(lambda db: db.execute(
+            "UPDATE message_replies SET state = 'cut_off' "
+            "WHERE state = 'running'"))
+
+    def forget_replies(self, before):
+        """The replies kept since before `before` (a time) let go of."""
+        self.write(lambda db: db.execute(
+            "DELETE FROM message_replies WHERE created_at < ?", (before,)))
 
     # What the user has seen, and housekeeping
 

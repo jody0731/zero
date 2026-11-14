@@ -3,6 +3,30 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.1
+
+Apps on one layer: ZERO's server says what its apps used to know, and any program can be one.
+
+- **Apps in any language.** `zero server start --json` names the server's socket, the token
+  file and the protocol; `protocol/schema.json` describes every message, its reply and the
+  rows replies carry. A program on this machine is known by the socket; where it isn't, the
+  token in `~/.zero/app-token` (made by the server, mode 600) lets it in. See the README's
+  "Apps in any language".
+- **Sent twice, run once.** Every message that changes something carries an id, and the
+  same id again runs nothing: a command retried after a dropped connection no longer starts
+  a second session or a second fork. Its first reply comes back, marked `replayed`.
+- **The server says what the apps knew by heart:** the modes, each with its line (Shift+Tab
+  steps through the server's list, `/mode` shows each mode's line), a question's choices
+  with their words, a model's server. `zero mcp serve`'s `zero_start` reply names the mode
+  and its line; `zero --choice` takes any choice the question lists.
+- **A tool's output kept out of the context names its file** as data, for an app to link.
+- **`zero mcp serve` inside a workflow** hands `zero_start`'s task to a subagent of the
+  session running it, as `zero -p` does there.
+- **Older and newer side by side.** This server answers apps of the protocol before (4) in
+  their own words, and an older `zero` no longer restarts a newer server into its own code.
+  After updating, restart Claude Code (or any agent running `zero mcp serve`) so its helper
+  runs the new release.
+
 ## 0.7.5.3
 
 ZERO comes as one file with its own Python inside.

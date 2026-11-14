@@ -10,11 +10,15 @@ client every face uses:
     zero_reply(session, text, choice)         session/send with reply_to
     zero_stop(session)                        session/stop
 
-Who answers ZERO's asks is the mode the caller starts the work in: in
-`default` the caller does, with zero_reply (its yes, or one of the ask's
-choices, approves); in `auto` and `auto+` ZERO's judge does, and zero_wait
-returns only when the work is done or stuck. The server is the caller's
-client, a process of the caller's and not of ZERO's.
+Who answers ZERO's asks is the mode the caller starts the work in, which
+zero_start's reply names with its line (the server's): the caller, with
+zero_reply (its yes, or one of the choices the ask lists, approves), or
+ZERO's judge, and then zero_wait returns only when the work is done or
+stuck. It names no mode and no choice of its own: the server sends them.
+The server is the caller's client, a process of the caller's and not of
+ZERO's; run as one of a ZERO session's commands (a workflow, $ZERO_SESSION_ID
+set), zero_start hands the task to a subagent of that session, as `zero -p`
+does there.
 """
 
 import threading
@@ -22,9 +26,11 @@ import time
 from typing import Any
 from pathlib import Path
 
-from client.connection import Connection, NotRunning, ProtocolError
+from client.connection import (
+    Connection, NotRunning, ProtocolError, command_session,
+)
 from client.launcher import ensure_server
-from client.result import CHOICES, Result, latest_turn
+from client.result import Result, latest_turn
 from paths import Paths
 
 SOURCE = "mcp"
@@ -44,8 +50,8 @@ INSTRUCTIONS = (
     "answer to a question, stopped or failed) or after its seconds with "
     "outcome running; zero_reply answers a waiting question or sends a "
     "follow-up; zero_stop stops the running turn. The mode decides who "
-    "answers ZERO's questions: in default, the caller with zero_reply; in "
-    "auto and auto+, ZERO's own judge."
+    "answers ZERO's questions, the caller with zero_reply or ZERO's own "
+    "judge; zero_start's reply says which."
 )
 
 
@@ -70,9 +76,24 @@ class ZeroTools:
         if not folder.is_absolute() or not folder.is_dir():
             raise ValueError(f"the workspace is a folder's absolute path; "
                              f"{workspace!r} isn't one")
-        reply = self.connection.send(task, workspace=str(folder.resolve()),
-                                     mode=mode, model=model)
-        return {"ok": True, "session": reply["session"]}
+        working_for = command_session()
+        if working_for is not None:
+            # A workflow's call: a subagent of the session whose command
+            # this is, in its workspace, mode and model
+            reply = self.connection.send_for(task, working_for)
+        else:
+            reply = self.connection.send(task, workspace=str(folder.resolve()),
+                                         mode=mode, model=model)
+        return {"ok": True, "session": reply["session"],
+                **self.mode_of(reply["session"])}
+
+    def mode_of(self, sid):
+        """The session's mode and its line, as the server says it."""
+        mode = self.session(sid)["mode"]
+        rows = self.connection.hello().get("modes") or ()
+        about = next((row.get("about", "") for row in rows
+                      if isinstance(row, dict) and row.get("name") == mode), "")
+        return {"mode": mode, "mode_about": about}
 
     def wait(self, session, seconds=WAIT_SECONDS):
         """The session's result once it settles, or "running" when the
@@ -111,8 +132,6 @@ class ZeroTools:
     def reply(self, session, text=None, choice=None):
         info = self.session(session)
         ask = info.get("ask")
-        if choice is not None and choice not in CHOICES:
-            raise ValueError(f"a choice is one of {', '.join(CHOICES)}")
         if choice is not None and ask is None:
             raise ValueError("no question waits in this session")
         if choice is None and not text:
@@ -147,10 +166,11 @@ def server(worker):
 
     @mcp.tool(description=(
         "Hand ZERO a task: a new session in `workspace` (a folder's absolute "
-        "path), started at once; returns its id. `mode`: readOnly, default "
-        "(you answer ZERO's questions with zero_reply), auto or auto+ (ZERO's "
-        "judge answers them), bypassPermissions; left out, the user's "
-        "default. `model`: left out, the user's default."
+        "path), started at once; returns its id, its mode and the mode's "
+        "line (its sandbox, and who answers ZERO's questions: you with "
+        "zero_reply, or ZERO's judge). `mode`: one of ZERO's modes by name "
+        "(a name it doesn't know is refused with the list); left out, the "
+        "user's default. `model`: left out, the user's default."
     ))
     def zero_start(task: str, workspace: str, mode: str | None = None,
                    model: str | None = None) -> dict[str, Any]:
@@ -167,9 +187,9 @@ def server(worker):
 
     @mcp.tool(description=(
         "Answer the question waiting in a ZERO session, in words (`text`) or "
-        "with one of its choices: yes, session (yes, and the same for the "
-        "rest of the session), saved (yes, and always), no. With no question "
-        "waiting, `text` is a follow-up message. Then zero_wait."
+        "with one of the choices its ask lists (`choices`, each with its "
+        "words in `choice_labels`). With no question waiting, `text` is a "
+        "follow-up message. Then zero_wait."
     ))
     def zero_reply(session: str, text: str | None = None,
                    choice: str | None = None) -> dict[str, Any]:

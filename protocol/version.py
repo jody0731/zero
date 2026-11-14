@@ -1,7 +1,15 @@
 """What `server/hello` tells a client: the protocol it speaks and the code it runs.
 
 The protocol is a number: adding a message, a field or an event keeps it,
-removing one or changing its meaning bumps it. The build is a hash of the files
+removing one or changing its meaning bumps it. Every request names the
+protocol it is written in (none: 4, the last before requests named it), and
+the server answers in it, from OLDEST to its own, its replies walked back one
+step at a time (protocol/older.py); so an app keeps working across a server's
+update, and a client never has to stop a newer server to talk to it.
+
+The release is ZERO's version, its CHANGELOG's newest section: a client
+restarts an idle server of an older release (or of the same release on other
+code, a tree being worked on), never a newer one. The build is a hash of the files
 that ship (`ships`: the code, its templates, catalog, prices and schema) and of
 the Python that runs them (its version line, which says free-threaded), taken
 when a process starts, so a client can tell a server that runs older code, or
@@ -13,10 +21,16 @@ so a pip upgrade is no new build; nor is dev/, which never ships
 
 import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 
-PROTOCOL = 4
+PROTOCOL = 5
+# The oldest protocol the server still answers in: 4 is what a request
+# naming none is written in
+OLDEST = 4
+# A CHANGELOG section's heading: the release it is for
+RELEASE_HEADING = re.compile(r"(?m)^## (\d+(?:\.\d+)*)\b")
 # ZERO's folder
 ROOT = Path(__file__).resolve().parents[1]
 # What stays on the development side: the tests and evals, and the records of
@@ -58,3 +72,22 @@ def build_hash(root=ROOT):
         digest.update(relative.as_posix().encode() + b"\0"
                       + (root / relative).read_bytes() + b"\0")
     return digest.hexdigest()[:12]
+
+
+def release(root=ROOT):
+    """ZERO's release this code is, its CHANGELOG's newest section; "" for
+    a copy without one."""
+    try:
+        found = RELEASE_HEADING.search((Path(root) / "CHANGELOG.md").read_text())
+    except OSError:
+        return ""
+    return found.group(1) if found else ""
+
+
+def release_order(text):
+    """A release as numbers to compare ("0.7.6.1" → (0, 7, 6, 1)); () for
+    none."""
+    try:
+        return tuple(int(part) for part in text.split(".")) if text else ()
+    except ValueError:
+        return ()

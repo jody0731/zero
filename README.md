@@ -190,6 +190,25 @@ claude mcp add zero -- zero mcp serve
 
 The mode decides who answers ZERO's questions: in `default` the calling agent does, with `zero_reply`; in `auto` and `auto+` ZERO's judge does.
 
+## Apps in any language
+
+The full screen, the commands and `zero mcp serve` are apps of ZERO's server, and a program in any language can be one. `zero server start --json` starts the server when none runs and names the way in:
+
+```json
+{"ok": true, "socket": "/home/you/.zero/run/zero.sock", "token_file": "/home/you/.zero/app-token", "protocol": 5, "version": "0.7.6.1", "pid": 4242}
+```
+
+A request is one JSON object on a line, answered by one line; [`protocol/schema.json`](protocol/schema.json) describes every message, its reply and the rows replies carry. Name the protocol in each request (`"protocol": 5`). A message that changes something (marked `x-changes`) carries an `id` you pick, new for each message: send the same id again when you don't know whether it got through, and it runs once, its first reply coming back marked `replayed`. A reply may carry fields your app doesn't know yet; read what you know. A program of yours on this machine is known by the socket itself; where it isn't (a relay, a container), put the token file's text in each request's `token`. The token lets your apps in and nothing more.
+
+```python
+import json, socket
+
+with socket.socket(socket.AF_UNIX) as s:
+    s.connect("/home/you/.zero/run/zero.sock")
+    s.sendall(b'{"message": "server/hello", "protocol": 5}\n')
+    print(json.loads(s.makefile().readline())["modes"])
+```
+
 ## Update
 
 ```bash
@@ -212,6 +231,7 @@ ZERO was once a git clone with a Python environment of its own (`~/Applications/
 | `~/.local/share/zero/` | ZERO's releases, each in `versions/` with its own Python; `current` names the one that runs |
 | `~/.local/bin/zero` | the command, which runs `current` |
 | `~/.agents/skills/` | the skills the agents on your machine share, which ZERO reads too |
+| `~/.zero/app-token` | the token an app sends where the socket can't tell who it is, mode 600; removed, a new one is made |
 | `~/.zero/mcp_servers.toml` | the MCP servers whose tools ZERO uses (`zero mcp add`), mode 600: an entry's `env` and `headers` may hold tokens |
 | `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), its own skills (`skills/`), and in `state/` the sessions and their history (`state/sessions/results/` holds the outputs kept out of a session's context; `state/session_search.sqlite`, the search's index, is made again from the logs whenever it's gone) |
 

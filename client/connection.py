@@ -1,19 +1,22 @@
 """JSON-line requests and a closeable, long-lived watch stream; each request
-built from the protocol's messages (protocol/messages.py).
+built from the protocol's messages (protocol/messages.py), naming the
+protocol it is written in, the app token where the user keeps one, and, for
+a message that changes something, an id of its own.
 
 A connection that fails or drops before its reply is NotRunning: the caller may
 start a server and send the same request again, with the same message id, which
-the server admits once. A server that takes the connection but never answers is
-NoAnswer: the request may be running there, and most carry no id to admit once,
-so it isn't sent again.
+the server runs once. A server that takes the connection but never answers is
+NoAnswer: the request may still be running there, so it isn't sent again.
 """
 
 import json
 import os
 import socket
 import uuid
+from pathlib import Path
 
-from protocol.messages import SESSION_ID_ENV, request as build
+from protocol import version
+from protocol.messages import MESSAGES, SESSION_ID_ENV, request as build
 
 
 def command_session():
@@ -77,16 +80,39 @@ def request(path, payload, timeout=30):
         raise ProtocolError("ZERO's server sent an invalid JSON reply") from None
 
 
+def read_token(path):
+    """The app token's text, or None where there is no file to read."""
+    if path is None:
+        return None
+    try:
+        return Path(path).read_text().strip() or None
+    except OSError:
+        return None
+
+
+def whole(payload, token=None):
+    """A request as it goes out: its protocol, the token where there is one,
+    and an id of its own for a message that changes something and has none."""
+    payload = {"protocol": version.PROTOCOL, **payload}
+    spec = MESSAGES.get(payload.get("message"))
+    if spec is not None and spec["changes"] and not payload.get("id"):
+        payload["id"] = str(uuid.uuid4())
+    if token is not None:
+        payload["token"] = token
+    return payload
+
+
 class Watch:
     """A stream of events: a session's (`session/watch`), or the session
     list's (`session/list` with `watch`, `payload` given)."""
 
-    def __init__(self, path, session=None, after=0, payload=None):
+    def __init__(self, path, session=None, after=0, payload=None, token=None):
         self.conn = connect(path)
         self.stream = None
         # The reason the server gave when it closed this watch, if it did
         self.bye = None
-        payload = payload or build("session/watch", session=session, after=after)
+        payload = whole(payload or build("session/watch", session=session,
+                                         after=after), token)
         try:
             self.conn.sendall((json.dumps(payload) + "\n").encode())
             self.conn.settimeout(None)
@@ -135,6 +161,13 @@ class Connection:
         self.ensure = ensure
         self.source = source or f"terminal-{os.getpid()}"
         self.checked = False
+        self._token = None
+
+    def token(self):
+        """The app token, read once there is one to read."""
+        if self._token is None:
+            self._token = read_token(getattr(self.paths, "app_token", None))
+        return self._token
 
     def ready(self):
         if self.ensure is not None and not self.checked:
@@ -143,6 +176,7 @@ class Connection:
 
     def call(self, payload, timeout=30):
         self.ready()
+        payload = whole(payload, self.token())
         try:
             reply = request(self.paths.socket, payload, timeout)
         except NoAnswer:
@@ -151,6 +185,8 @@ class Connection:
             if self.ensure is None:
                 raise
             self.ensure()
+            # The same request, its id too: the server runs it once
+            payload = whole(payload, self.token())
             reply = request(self.paths.socket, payload, timeout)
         if not reply["ok"]:
             raise ProtocolError(reply["error"])
@@ -398,9 +434,9 @@ class Connection:
     def stream(self, payload):
         self.ready()
         try:
-            return Watch(self.paths.socket, payload=payload)
+            return Watch(self.paths.socket, payload=payload, token=self.token())
         except NotRunning:
             if self.ensure is None:
                 raise
             self.ensure()
-            return Watch(self.paths.socket, payload=payload)
+            return Watch(self.paths.socket, payload=payload, token=self.token())

@@ -65,11 +65,11 @@ from core.asking import NO, PARK, YES
 from sessions import upgrade
 from sessions.log import Log, fresh_log
 from sessions.lock import Busy, SessionLock
-from server import rebuild
+from server import rebuild, replies
 from server.rebuild import FAILED
 from server.services import Refused
 from server.session_actions import (
-    ID_TRIES, SessionActions, asked, check_thinking_effort, new_id, title,
+    ID_TRIES, SessionActions, check_thinking_effort, new_id, title,
 )
 from server.session_state import SessionState
 from server.store import Store, UnknownSession
@@ -111,6 +111,22 @@ class Message:
     workspace: str | None = None
     # While a turn runs: "steer" it, or "queue" as a follow-up after its answer
     when_busy: str = "steer"
+
+
+def sent_before(row, message):
+    """What a message sent again gets, its id already in the inbox: the
+    first's ack, nothing run again; refused when the id came with another
+    message (its text, or the session it named)."""
+    payload = json.loads(row["payload"])
+    same = (row["kind"] == "user" and payload.get("text") == message.text
+            and (message.session is None or message.session == row["session"]))
+    if not same:
+        raise Refused(f"message id {message.id!r} was used for another "
+                      "message; a new message takes a new id")
+    ack = {"admitted": False, "session": row["session"]}
+    if payload.get("handled_as") is not None:
+        ack["handled_as"] = payload["handled_as"]
+    return ack
 
 
 def picked(ask, payload):
@@ -178,7 +194,8 @@ class Runtime(SessionActions):
                  mode=None, config=None, default_model=None):
         """`make_session(sid, info, log=None, ask=PARK)` builds a harness. An
         upgrade supplies a fresh log to obtain the current header without writes.
-        `modes`: every mode's name, least to most permissive; a session's asks
+        `modes`: every mode, least to most permissive, as its row
+        (protocol/messages.py's row.mode) or its name; a session's asks
         go to the clients following it (they park). `services`: the components'
         (server/services.py), attached once the store is open.
         `config()`: config.toml's settings as they stand (settings.Config), read
@@ -187,7 +204,12 @@ class Runtime(SessionActions):
         where neither the message nor the config names one."""
         paths.make()
         self.paths = paths
-        self.modes = tuple(modes)
+        # Each mode as apps read it (name, about, in_cycle): a name alone is
+        # a mode with nothing said of it, which a key steps to
+        self.mode_rows = tuple(
+            dict(m) if isinstance(m, dict)
+            else {"name": m, "about": "", "in_cycle": True} for m in modes)
+        self.modes = tuple(m["name"] for m in self.mode_rows)
         if mode and mode not in self.modes:
             raise ValueError(f"unknown mode {mode!r}; modes: {self.modes}")
         self.store = Store(
@@ -436,9 +458,9 @@ class Runtime(SessionActions):
             raise Refused("empty message")
         if message.when_busy not in WHEN_BUSY:
             raise Refused(f"when_busy is one of {WHEN_BUSY}")
-        seen = self.store.query("SELECT session FROM inbox WHERE id = ?", message.id)
+        seen = self.store.query("SELECT * FROM inbox WHERE id = ?", message.id)
         if seen:
-            return {"admitted": False, "session": seen[0]["session"]}
+            return sent_before(seen[0], message)
         new = None
         sid = message.session
         if sid is None:
@@ -469,6 +491,8 @@ class Runtime(SessionActions):
                 )
                 new["switch"] = json.dumps({"thinking_effort": effort})
         payload = {"text": message.text, **(extra or {})}
+        if message.choice is not None:
+            self.check_choice(sid, message)
         if message.reply_to is not None:
             payload["reply_to"] = message.reply_to
             if message.choice is not None:
@@ -490,6 +514,18 @@ class Runtime(SessionActions):
                 self.activity.notify_all()
         return {"admitted": admitted, "session": sid, "handled_as": handled_as}
 
+    def check_choice(self, sid, message):
+        """Refused unless the message answers the session's open ask with one
+        of its choices."""
+        ask = self.store.open_ask(sid) if sid is not None else None
+        if ask is None or message.reply_to != ask["id"]:
+            raise Refused("a choice answers the question waiting in its "
+                          "session, named in reply_to; none waits there")
+        offered = replies.ask_row(ask)["choices"]
+        if message.choice not in offered:
+            raise Refused(f"the question's choices are {', '.join(offered)}, "
+                          f"not {message.choice!r}")
+
     def admit_to_session(self, message, sid, new, payload):
         """(admitted, session id, handled_as): what becomes of the message
         decided and its row committed under the session's own lock. A new
@@ -503,6 +539,8 @@ class Runtime(SessionActions):
                 said = dict(payload)
                 if handled_as == "queued":
                     said["follow_up"] = True
+                # What a copy of it sent again is told (sent_before)
+                said["handled_as"] = handled_as
                 try:
                     admitted, sid = self.store.admit(
                         message.id, sid, "user", message.source, said,
@@ -537,9 +575,10 @@ class Runtime(SessionActions):
         info = self.store.session(sid)
         if info is None:
             raise Refused(f"no session {sid!r}")
-        seen = self.store.query("SELECT session FROM inbox WHERE id = ?", msg_id)
+        seen = self.store.query("SELECT * FROM inbox WHERE id = ?", msg_id)
         if seen:
-            return {"admitted": False, "session": sid}
+            return sent_before(seen[0], Message(msg_id, CONTINUE, session=sid,
+                                                source=source))
         state = self.state(sid)
         with state.lock:
             if state.runner is not None or self.store.has_queued(sid):
@@ -1191,7 +1230,7 @@ class Runtime(SessionActions):
             if state.runner is not None or self.store.has_queued(sid):
                 return None
         ask = self.store.open_ask(sid)
-        left = {"ask": None if ask is None else asked(ask)}
+        left = {"ask": None if ask is None else replies.ask_row(ask)}
         for service in self.services.values():
             left.update(service.settled(sid))
         return left

@@ -8,10 +8,6 @@ work in rounds, subagents), the tokens of every model call it saw and the
 seconds its turns took.
 """
 
-# The ask's choices, as its box offers them
-CHOICES = ("yes", "session", "saved", "no")
-
-
 class Result:
     def __init__(self, session):
         self.session = session

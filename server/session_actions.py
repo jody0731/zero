@@ -20,7 +20,7 @@ from pathlib import Path
 import settings
 from core import history
 from core.loop import Session
-from server import trash
+from server import replies, trash
 from server.rebuild import header_row
 from server.services import Refused
 from sessions import upgrade
@@ -54,14 +54,6 @@ def new_id():
 def title(text):
     line = text.strip().splitlines()[0]
     return line if len(line) <= TITLE_LENGTH else line[: TITLE_LENGTH - 1] + "…"
-
-
-def asked(ask):
-    """An open ask's row as apps read it: its question, its parts (the
-    reason the user reads, what it is about) and the rule's words with
-    the reason (`why`, which older apps draw)."""
-    return {name: ask[name] for name in (
-        "id", "tool", "command", "why", "reason", "about", "created_at")}
 
 
 class SessionActions:
@@ -181,37 +173,38 @@ class SessionActions:
         folder. Built whole once for each change the database commits (the
         list's version), whoever asks for it meanwhile."""
         result = []
-        for row in self.listed_rows():
+        rows, kept = self.listed_rows()
+        for row in rows:
             if archived is not None and row["archived"] != archived:
                 continue
             if workspace is not None and row["workspace"] != workspace:
                 continue
             row = dict(row)
             # Whether a turn holds a switch is the server's, not the database's
-            row["pending"] = self.pending_switches(row["id"], row)
+            row["pending"] = self.pending_switches(row["id"], kept[row["id"]])
             result.append(row)
         return result
 
     def listed_rows(self):
-        """Every session's row as the list shows it, built once for each
-        version of the list: kept, never changed, by every reader of it."""
+        """Every session's row as the list shows it (server/replies.py), and
+        by id what of its store row a turn's switch is read from; built once
+        for each version of the list: kept, never changed, by every reader of
+        it."""
         version = self.list_version
         kept = getattr(self, "listed", None)
         if kept is not None and kept[0] == version:
-            return kept[1]
-        rows = self.store.sessions()
+            return kept[1], kept[2]
+        stored = self.store.sessions()
         asks = {a["session"]: a for a in self.store.open_asks()}
-        for row in rows:
-            ask = asks.get(row["id"])
-            row["ask"] = None if ask is None else asked(ask)
-            row["archived"] = bool(row["archived"])
-            row["unseen"] = row["end_seq"] > row["seen_seq"]
+        rows = [replies.session_row(row, asks.get(row["id"])) for row in stored]
         for service in self.services.values():
             service.annotate(rows)
+        switches = {row["id"]: {"switch": row["switch"], "state": row["state"]}
+                    for row in stored}
         # A change committed while it was built moved the version on: the
         # next reader builds it again
-        self.listed = (version, rows)
-        return rows
+        self.listed = (version, rows, switches)
+        return rows, switches
 
     def mark_seen(self, sid, seq):
         """The user has seen the session up to `seq`: it is the one they last
@@ -391,7 +384,8 @@ class SessionActions:
         new = self.copy_session(sid, info, records, copied, went_on,
                                 {"title": info["title"], "source": source,
                                  "started_by": "user"})
-        return {"session": self.store.session(new), "text": text}
+        return {"session": replies.session_row(self.store.session(new)),
+                "text": text}
 
     def fork_finished(self, sid, title, source, rows_beside=None):
         """A new session from this one's finished turns: its current branch

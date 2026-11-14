@@ -35,6 +35,11 @@ def listed(calls, whole=False):
     """The calls, numbered, one summary each (core/tools.py's summary)."""
     lines = []
     for n, call in enumerate(calls, 1):
+        if not isinstance(call, dict) or not isinstance(call.get("arguments"),
+                                                         dict):
+            # Not a call: as the plan wrote it
+            lines.append(f"{n}. {call}")
+            continue
         arguments = json.dumps(call["arguments"], ensure_ascii=False)
         text = tools.summary(call["tool"], call["arguments"], arguments, whole)
         lines.append(f"{n}. {call['tool']}: {text}")

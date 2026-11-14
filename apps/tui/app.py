@@ -611,9 +611,14 @@ class ZeroApp(SafeClicks, App):
                 if rest:
                     self.switch(mode=rest)
                 else:
+                    rows = self.mode_rows()
+                    shown = [controller.mode_line(row) for row in rows]
+                    now = self.session_value("mode")
+                    current = next((line for line, row in zip(shown, rows)
+                                    if row["name"] == now), None)
                     self.push_screen(
-                        ChoiceView("Mode, from the next turn", self.modes(),
-                                   self.session_value("mode")),
+                        ChoiceView("Mode, from the next turn", shown, current,
+                                   values=[row["name"] for row in rows]),
                         lambda mode: mode and self.switch(mode=mode),
                     )
             elif name == "/model":
@@ -791,7 +796,8 @@ class ZeroApp(SafeClicks, App):
 
     def action_cycle_mode(self):
         if self.screen is self.view:
-            self.switch(mode=controller.next_mode(self.session_value("mode")))
+            self.switch(mode=controller.next_mode(self.session_value("mode"),
+                                                  self.mode_rows()))
 
     def on_transcript_at_top(self, message):
         self.load_earlier()
@@ -881,7 +887,12 @@ class ZeroApp(SafeClicks, App):
 
     def modes(self):
         """The modes the server offers (its `hello`): the client knows none."""
-        return list(self.defaults.get("modes") or controller.MODES_KNOWN)
+        return [row["name"] for row in self.mode_rows()]
+
+    def mode_rows(self):
+        """The server's modes as its hello gives them (row.mode)."""
+        return [row for row in self.defaults.get("modes") or ()
+                if isinstance(row, dict)]
 
     def served_models(self):
         """The models every server lists, asked of the server; none when it

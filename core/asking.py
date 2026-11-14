@@ -39,6 +39,18 @@ LIMIT_ASKS = ("limit",)
 # the call's ask has a grant to offer (permissions/grants.py)
 YES, SESSION, SAVED, NO = "yes", "session", "saved", "no"
 CHOICES = (YES, SESSION, SAVED, NO)
+# An ask with no grant to offer
+PLAIN_CHOICES = (YES, NO)
+# The words each answer shows at the ask's box, for the user; {what} is the
+# kind of call a grant lets run (its notes' offer_text)
+LABELS = {
+    YES: "Yes",
+    SESSION: "Yes, and don't ask again this session for {what}",
+    SAVED: "Yes, and don't ask again for {what}, in any session",
+    NO: "No",
+}
+# What a grant's words say where the call names no kind
+OFFER_UNNAMED = "this"
 
 
 def ask_of(call):
@@ -82,6 +94,14 @@ def choices(notes):
                                       for name in LIMIT_ASKS):
         return list(CHOICES)
     return [YES, NO]
+
+
+def choice_labels(choices, offer_text=None):
+    """Each of an ask's answers, in its order, with the words its box shows:
+    what an app draws, so none keeps its own copy."""
+    what = offer_text or OFFER_UNNAMED
+    return {choice: LABELS[choice].format(what=what) for choice in choices
+            if choice in LABELS}
 
 
 def put_to_user(call, ask, why):

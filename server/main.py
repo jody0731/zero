@@ -43,7 +43,7 @@ def build_runtime(paths, make_session=None, config=None, limits=None,
         make_session = assembly.server_session_maker(paths, config, limits)
     services = assembly.services(config, make_consent, saved_permissions, tick,
                                  mcp_servers)
-    return Runtime(paths, make_session, tuple(assembly.MODES), services=services,
+    return Runtime(paths, make_session, assembly.mode_rows(), services=services,
                    config=config, **options)
 
 

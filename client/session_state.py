@@ -90,7 +90,8 @@ class SessionState:
             elif kind == "assistant":
                 calls = record.get("message", {}).get("tool_calls") or []
                 if calls:
-                    self.doing("running", command_of(calls[0]))
+                    self.doing("running", command_of(
+                        calls[0], record.get("call_summaries")))
             elif kind == "turn_end":
                 if record.get("answer"):
                     self.last_reply = record["answer"]

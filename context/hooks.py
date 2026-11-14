@@ -287,7 +287,8 @@ class Context(Hook):
                 return TOO_BIG.format(cost=cost, most=most, parts=parts)
             return None
         name = f"{call.name}-{call.id}.txt"
-        return self._fit(session, at, result, cost, name, call.notes.get("whole_at"))
+        return self._fit(session, at, result, cost, name, call.notes.get("whole_at"),
+                         call)
 
     def notice(self, text, session):
         """A notice (a job's end, with its output) fitted as a result is."""
@@ -295,11 +296,12 @@ class Context(Hook):
         return self._fit(session, self._line(session), text,
                          counter(session)(text), name)
 
-    def _fit(self, session, at, text, cost, name, whole_at=None):
+    def _fit(self, session, at, text, cost, name, whole_at=None, call=None):
         """`text` as the context takes it: None when it fits its share, the
         share of the room left or, near the line, of the room a compaction
         leaves, whichever is more (the share shrank to none before: 6.3);
-        past it, saved whole and ZERO told so."""
+        past it, saved whole and ZERO told so, the file's path set on
+        `call` (the tool call's record) where one is given."""
         left = room.room_left(at, self._size(session), INSTRUCTION_TOKENS,
                               self.limits)
         after = self._room_after(session, at)
@@ -307,6 +309,9 @@ class Context(Hook):
         if cost <= allowed:
             return None
         path = whole_at or results.save(self.folder(), name, text)
+        if call is not None:
+            # As data beside the text, for an app that links it
+            call.saved_path = path
         shown = preview(text, allowed, bytes_a_token(session))
         percent = self.limits["result_share_percent"]
         if after > left and allowed > 0:

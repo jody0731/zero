@@ -1,6 +1,5 @@
 """Plain text from log records and ask events."""
 
-import json
 from datetime import datetime
 
 
@@ -134,38 +133,24 @@ def ask_line(ask):
     return f"? {ask['tool']}: {ask['command']}" + (f" ({reason})" if reason else "")
 
 
-def main_argument(args, raw):
-    """bash's command, a file tool's path, a fetch's URL, a search's query
-   , or else the raw arguments."""
-    for name in ("command", "path", "url", "query"):
-        if name in args:
-            return args[name]
-    return raw
+def call_line(call, summaries=None):
+    """A call in a line, as the transcript shows it: the server's summary,
+    which names the call (`read notes.txt`, `web_fetch URL`), a command's
+    after a prompt's `$`."""
+    line = command_of(call, summaries)
+    if call["function"].get("name") == "bash":
+        return f"$ {line}"
+    return line
 
 
-def plan_text(args):
-    """A plan as its text, then its calls numbered, one line each."""
-    lines = [str(args.get("plan", "")).strip(), "", "calls:"]
-    for n, call in enumerate(args.get("calls") or [], 1):
-        if isinstance(call, dict) and isinstance(call.get("arguments"), dict):
-            what = main_argument(call["arguments"], json.dumps(call["arguments"]))
-            lines.append(f"{n}. {call.get('tool')}: {what}")
-        else:
-            lines.append(f"{n}. {call}")
-    return "\n".join(lines)
-
-
-def command_of(call):
-    """A call as a line: its main argument (main_argument); a plan as its
-    text and calls (plan_text), whose first line is the plan's."""
-    arguments = call["function"]["arguments"]
-    try:
-        args = json.loads(arguments)
-        if call["function"].get("name") == "propose_plan" and "plan" in args:
-            return plan_text(args)
-        return main_argument(args, arguments)
-    except (ValueError, AttributeError, TypeError):
-        return arguments
+def command_of(call, summaries=None):
+    """A call as a line, as an ask shows it: the server's summary of it (an
+    assistant record's `call_summaries`, by the call's id), else its raw
+    arguments."""
+    found = (summaries or {}).get(call.get("id", ""))
+    if found is not None:
+        return found
+    return call["function"]["arguments"]
 
 
 def grants_text(grants):
@@ -229,10 +214,9 @@ class Renderer:
         if kind == "assistant":
             message = record["message"]
             lines = [message["content"]] if message.get("content") else []
+            summaries = record.get("call_summaries")
             for call in message.get("tool_calls") or []:
-                name = call["function"]["name"]
-                name = "plan" if name == "propose_plan" else name
-                lines.append(f"> {name}: {command_of(call)}")
+                lines.append(f"> {call_line(call, summaries)}")
             return lines
         if kind == "tool":
             return clipped(record["result"])

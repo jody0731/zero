@@ -250,7 +250,8 @@ class Transcript(VerticalScroll):
             if content:
                 made.append(message("●", Markdown(content), "zero"))
             for call in record["message"].get("tool_calls") or []:
-                block = Fold(header_of(call), classes="tool")
+                block = Fold(header_of(call, record.get("call_summaries")),
+                             classes="tool")
                 block.open = self.folds_open
                 self.calls[call["id"]] = block
                 made.append(block)
@@ -362,15 +363,10 @@ class Transcript(VerticalScroll):
         self.call_after_refresh(self.stick)
 
 
-def header_of(call):
-    """`$ command` for bash; the tool's name and arguments otherwise."""
-    name = call["function"]["name"]
-    command = render.command_of(call)
-    if name == "bash":
-        return f"$ {command}"
-    if name == "propose_plan":
-        return f"plan: {command}"
-    return f"{name}: {command}"
+def header_of(call, summaries=None):
+    """A call's line as the server sums it up, which names the call; a
+    command's after a prompt's `$`."""
+    return render.call_line(call, summaries)
 
 
 class MessageBox(TextArea):

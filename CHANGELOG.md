@@ -3,6 +3,14 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2.1
+
+- **Another agent finds its way in.** `zero --help` ends with how another agent connects:
+  ZERO's MCP address on this machine and the line for Claude Code and for Codex. Tell an
+  agent "use ZERO" and it can read them there and add ZERO itself.
+- Where no user systemd answers, the install's line says `zero web` starts the door and
+  agents use `zero mcp serve`.
+
 ## 0.7.6.2
 
 ZERO in the browser, and one door for every agent.

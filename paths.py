@@ -330,6 +330,12 @@ def run_folder(top):
     return Path(runtime) / f"{NAME}-{tag}"
 
 
+def systemd_user_folder(environ=os.environ):
+    """The user's systemd unit folder, where the HTTP door's units go."""
+    base = environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "systemd" / "user"
+
+
 def home_tag(top):
     """A home's mark in its units' names: none for the usual home."""
     if Path(top).absolute() == usual_home().absolute():

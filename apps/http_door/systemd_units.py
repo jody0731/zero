@@ -20,7 +20,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from paths import CURRENT, NAME, own_python, release_folder, write_whole
+from paths import (
+    CURRENT, NAME, own_python, release_folder, systemd_user_folder, write_whole,
+)
 
 DESCRIPTION = "ZERO's HTTP door"
 
@@ -53,8 +55,7 @@ ExecStart={command}
 
 def config_folder(environ=os.environ):
     """The user's systemd unit folder."""
-    base = environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "systemd" / "user"
+    return systemd_user_folder(environ)
 
 
 def door_command(code=None):
@@ -122,8 +123,8 @@ def install(paths, command=None, folder=None, run=subprocess.run):
     """The units written (when missing or changed) and the socket enabled
     and listening: (ok, a line saying what happened)."""
     if not systemd_usable(run):
-        return False, ("no user systemd here: the door starts when zero web "
-                       "or a client starts it, and leaves when idle")
+        return False, ("no user systemd here: zero web starts the door, and "
+                       "agents use zero mcp serve")
     folder = Path(folder) if folder else config_folder()
     unit = paths.http_door_unit
     changed = False

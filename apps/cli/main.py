@@ -87,6 +87,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 from datetime import datetime
 from pathlib import Path
@@ -122,7 +123,7 @@ from client.launcher import (  # noqa: E402
 )
 from paths import (  # noqa: E402
     LAUNCHER_READ_BYTES, Paths, changelog_version, own_python, release_command,
-    release_folder, write_whole,
+    release_folder, systemd_user_folder, write_whole,
 )
 
 NAME = "ZERO"
@@ -476,10 +477,13 @@ def parser_for(argv):
         args = parser.parse_args(argv[1:])
         args.command = argv[0]
         return parser, args
+    asked_for_help = bool({"-h", "--help"} & set(argv))
     parser = argparse.ArgumentParser(
         prog="zero", usage="zero [new | -r | -p TEXT] [--mode MODE] [--model NAME]",
-        description="Z.E.R.O., a general purpose agent. Commands: "
-        + ", ".join(COMMANDS),
+        description=textwrap.fill("Z.E.R.O., a general purpose agent. Commands: "
+                                  + ", ".join(COMMANDS), 79),
+        epilog=agents_lines() if asked_for_help else None,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("-r", "--resume", dest="r", action="store_true",
                         help="open the session list")
@@ -495,6 +499,25 @@ def parser_for(argv):
     args = parser.parse_args(argv)
     args.command = None
     return parser, args
+
+
+def agents_lines():
+    """The help's last lines: how another agent connects to ZERO, at this
+    home's HTTP door (built only when help is asked for)."""
+    try:
+        found = Paths()
+    except (OSError, RuntimeError):
+        return None
+    url = f"http://127.0.0.1:{found.http_door_port}/mcp"
+    lines = [f"Other agents: ZERO is an MCP server at {url}"]
+    # Its units written (zero install, zero http-door install): read from the
+    # file, so help asks systemd nothing
+    socket_unit = systemd_user_folder() / f"{found.http_door_unit}.socket"
+    if not socket_unit.exists():
+        lines.append("  first: zero http-door install")
+    lines += [f"  claude mcp add --transport http --scope user zero {url}",
+              f"  codex mcp add zero --url {url}"]
+    return "\n".join(lines)
 
 
 def argv_of(argv):

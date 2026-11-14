@@ -195,7 +195,7 @@ In Codex:
 codex mcp add zero --url http://127.0.0.1:4747/mcp
 ```
 
-An entry that runs `zero mcp serve` goes first (`claude mcp remove zero --scope user`, `codex mcp remove zero`). The door knows each caller by its connection, as the socket does, so the line holds no token; `zero http-door status` prints these lines with your port. For an agent that speaks only stdio, `zero mcp serve` serves the same tools there.
+Or tell the agent to use ZERO: `zero --help` ends with these lines, with your port, for it to run itself. An entry that runs `zero mcp serve` goes first (`claude mcp remove zero --scope user`, `codex mcp remove zero`). The door knows each caller by its connection, as the socket does, so the line holds no token. For an agent that speaks only stdio, `zero mcp serve` serves the same tools there.
 
 | Tool | What it does |
 | --- | --- |

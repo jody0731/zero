@@ -14,7 +14,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Linux-007C83?style=flat-square&logo=linux&logoColor=fff" alt="Linux">
-  <img src="https://img.shields.io/badge/Python-3.11%2B-6A55D8?style=flat-square&logo=python&logoColor=fff" alt="Python 3.11 or newer">
+  <img src="https://img.shields.io/badge/Python-its%20own-6A55D8?style=flat-square&logo=python&logoColor=fff" alt="Its own Python inside">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-555?style=flat-square" alt="MIT license"></a>
 </p>
 
@@ -47,17 +47,29 @@
 ZERO runs on Linux; Windows and macOS come later in its development.
 
 ```bash
-git clone https://github.com/jody0731/zero.git ~/Applications/zero
-~/Applications/zero/install.sh
+curl -fsSL https://github.com/jody0731/zero/releases/latest/download/install.sh | sh
 ```
 
-The installer checks what ZERO needs, checks out the newest release, makes a Python environment in the clone (`.venv/`) with a free-threaded Python when one is on the PATH (`python3.14t` or newer; `ZERO_PYTHON` names another), installs the requirements and puts the `zero` command in `~/.local/bin` (`--bin DIR` puts it elsewhere). Then it runs `zero doctor`, which tries what ZERO needs from the machine (a command in the sandbox, its home) and lists what ZERO's files hold that it doesn't know; run it again any time. Nothing starts at login.
+Each release is one file for each machine, ZERO with its own Python inside (free-threaded CPython from [python-build-standalone](https://github.com/astral-sh/python-build-standalone), with the packages ZERO was tested with), so nothing else is installed: no Python, git or pip. The installer fetches the newest one for this machine, checks its sha256, and puts it in `~/.local/share/zero` (`--dir DIR` puts it elsewhere) and the `zero` command in `~/.local/bin` (`--bin DIR`). Then it runs `zero doctor`, which tries what ZERO needs from the machine (a command in the sandbox, its home) and lists what ZERO's files hold that it doesn't know; run it again any time. Nothing starts at login.
+
+<details>
+<summary><b>The same, by hand</b>: one download</summary>
+
+Download `zero-<version>-x86_64-linux.tar.gz` from the [newest release](https://github.com/jody0731/zero/releases/latest), then:
+
+```bash
+tar -xzf zero-*-x86_64-linux.tar.gz
+zero-*/bin/zero install
+```
+
+The unpacked folder can go once it has installed.
+
+</details>
 
 <details>
 <summary><b>What it needs</b></summary>
 
-- Linux, with `git`, Python 3.11 or newer (made and tested on 3.14) and its `venv` module
-- for many sessions at once, a free-threaded Python (3.14t or newer), so they run side by side on every core: `uv python install 3.14t` puts one on the PATH, no root needed; with the usual Python they take turns on one core, which works, and `zero doctor` says so
+- Linux on x86-64 with glibc 2.28 or newer (Debian 10, Ubuntu 20.04, RHEL 8 and later); the installer needs `curl` or `wget`, `tar` and `sha256sum`
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`): ZERO's sandbox for the commands it runs
 - a model: an API key for a server ZERO knows (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter), or a server of your own that speaks OpenAI's Chat Completions API, such as Ollama or llama-server
 
@@ -184,17 +196,12 @@ The mode decides who answers ZERO's questions: in `default` the calling agent do
 zero update
 ```
 
-It fetches the releases, checks out the newest, installs the requirements again when they changed and shows what the new release brought. `zero --version` says which release you have. The server picks up the new code once it is idle. It never touches `~/.zero`, and it refuses when the clone has changes of your own.
+It fetches the newest release for this machine (its code, its Python and its packages together), checks its sha256, tries it (its version, and that its Python loads ZERO's server), then switches to it in one step and shows what it brought; until that step the release you had runs, and a failed update leaves it running. The one before stays until the next update, unless something still runs from it. `zero --version` says which release you have. The server picks up the new code once it is idle. It never touches `~/.zero`.
 
 <details>
-<summary><b>If an update goes wrong</b>: the same, by hand</summary>
+<summary><b>From a git clone</b>: ZERO before 0.7.5.3</summary>
 
-```bash
-git -C ~/Applications/zero fetch --tags
-git -C ~/Applications/zero checkout --detach \
-  "$(git -C ~/Applications/zero tag --list 'v*' --sort=-v:refname | head -n1)"
-~/Applications/zero/install.sh
-```
+ZERO was once a git clone with a Python environment of its own (`~/Applications/zero`). Its `zero update` checks out the newest release, and on its next start that release moves the install: it fetches its own archive, switches to it in `~/.local/share/zero`, points the `zero` command at it and runs your command again. If the move can't finish, the clone runs on as before, and the move is tried again an hour later, or at once with `zero update`. The next update removes the clone once it holds nothing of yours and nothing runs from it. `ZERO_RELEASES_URL` names a mirror of the releases, laid out as GitHub's.
 
 </details>
 
@@ -202,7 +209,8 @@ git -C ~/Applications/zero checkout --detach \
 
 | Path | What it holds |
 | --- | --- |
-| `~/Applications/zero/` | the code (this repository) and its `.venv/` |
+| `~/.local/share/zero/` | ZERO's releases, each in `versions/` with its own Python; `current` names the one that runs |
+| `~/.local/bin/zero` | the command, which runs `current` |
 | `~/.agents/skills/` | the skills the agents on your machine share, which ZERO reads too |
 | `~/.zero/mcp_servers.toml` | the MCP servers whose tools ZERO uses (`zero mcp add`), mode 600: an entry's `env` and `headers` may hold tokens |
 | `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), its own skills (`skills/`), and in `state/` the sessions and their history (`state/sessions/results/` holds the outputs kept out of a session's context; `state/session_search.sqlite`, the search's index, is made again from the logs whenever it's gone) |
@@ -211,9 +219,10 @@ git -C ~/Applications/zero checkout --detach \
 
 ```bash
 zero uninstall
-rm -rf ~/Applications/zero
 ```
+
+It removes the command and `~/.local/share/zero`, once ZERO's server has stopped (`zero server stop`); `~/.zero` stays, yours to remove.
 
 ---
 
-<p align="center"><sub>MIT license · <a href="CHANGELOG.md">Changelog</a> · <a href="protocol/schema.json">Protocol schema</a></sub></p>
+<p align="center"><sub>MIT license (a release's Python and packages under their own, inside it) · <a href="CHANGELOG.md">Changelog</a> · <a href="protocol/schema.json">Protocol schema</a></sub></p>

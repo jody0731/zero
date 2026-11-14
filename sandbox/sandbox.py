@@ -15,6 +15,7 @@ ZERO's home (its settings and keys, its history, its socket) and keys are
 hidden from every box by construction, the evals' boxes included.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -166,18 +167,40 @@ class SandboxError(Exception):
     """The sandbox can't be set up, so the command must not run."""
 
 
+# The start of a scratch folder's name
+SCRATCH_PREFIX = "agent-tmp-"
+
+
+def scratch_prefix(home):
+    """The start of the name of each scratch folder a server on `home` makes:
+    the home's mark after SCRATCH_PREFIX, so the next server on that home
+    finds what one killed before it could remove them left (service.py)."""
+    whole = os.path.normpath(os.path.abspath(home))
+    return f"{SCRATCH_PREFIX}{hashlib.sha256(whole.encode()).hexdigest()[:8]}-"
+
+
+def scratch_left(home):
+    """The scratch folders with `home`'s mark in the temp folder, none
+    followed through a link."""
+    top = Path(tempfile.gettempdir())
+    return sorted(path for path in top.glob(scratch_prefix(home) + "*")
+                  if path.is_dir() and not path.is_symlink())
+
+
 class Scratch:
     """A session's scratch folder, its $TMPDIR: a real folder, made on first
     use, removed when the last one holding it lets it go. The server keeps
     each session's while it runs, so a session built again (a switch of mode,
-    model or workspace) finds its files."""
+    model or workspace) finds its files; its names start with the server's
+    home's mark (scratch_prefix)."""
 
-    def __init__(self):
+    def __init__(self, prefix=SCRATCH_PREFIX):
+        self.prefix = prefix
         self.made = None
 
     def path(self):
         if self.made is None:
-            self.made = tempfile.mkdtemp(prefix="agent-tmp-")
+            self.made = tempfile.mkdtemp(prefix=self.prefix)
             weakref.finalize(self, shutil.rmtree, self.made, True)
         return self.made
 

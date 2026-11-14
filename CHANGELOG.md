@@ -3,6 +3,35 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.5.3
+
+ZERO comes as one file with its own Python inside.
+
+- **One file to install.** Each release is an archive for each machine: ZERO's code, the
+  packages it was tested with and its own free-threaded Python (CPython 3.14.10 from
+  python-build-standalone). Nothing else is installed: no Python, git or pip.
+  `curl -fsSL https://github.com/jody0731/zero/releases/latest/download/install.sh | sh`
+  installs the newest into `~/.local/share/zero` and the `zero` command into `~/.local/bin`; or
+  download the archive, unpack it and run its `bin/zero install`.
+- **`zero update` brings everything**, the code, its Python and its packages, and switches
+  whole or not at all. The new release is fetched, its sha256 checked and tried (its version,
+  and that its Python loads ZERO's server with the GIL off) before one rename makes it current;
+  until then the release you had runs, and a failed update leaves it running. The one before
+  stays until the next update, unless something still runs from it.
+- **From a git clone (0.7.5.2 and older), nothing by hand.** `zero update` checks out this
+  release as before; its next start moves ZERO to its own Python. It fetches this release's
+  archive (about 65 MB), installs it in `~/.local/share/zero`, points `~/.local/bin/zero` at
+  it and runs your command again. The server restarts on the new Python once it is idle. The
+  clone (`~/Applications/zero`) is no longer used, and the next update removes it if it holds
+  nothing of yours. A move that can't finish leaves the clone running as before, and is tried
+  again an hour later, or at once with `zero update`.
+- **`zero uninstall`** removes the releases with the command; `~/.zero` stays.
+- **`zero doctor`** says whose Python ZERO runs on.
+- **ZERO's own Python processes ignore the machine's Python settings** (`PYTHONPATH`,
+  `PYTHONHOME`, the user's site-packages). The commands ZERO runs for you still see them.
+- **A killed server's scratch folders** (`/tmp/agent-tmp-…`) are removed when the next server
+  starts on the same home.
+
 ## 0.7.5.2
 
 ZERO's sessions run side by side on every core.

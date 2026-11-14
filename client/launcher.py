@@ -38,6 +38,9 @@ OLD_RESTART = {"verb": "shutdown", "reason": "restart"}
 OLD_FIELDS = {"busy": "busy_with", "started": "started_at", "last": "last_session"}
 # The server's own entry, so a client never loads the server's code
 SERVER_SCRIPT = Path(__file__).resolve().parents[1] / "server" / "main.py"
+# The server's Python: this one, isolated from the machine's Python settings,
+# which are the user's (paths.own_python, which a client doesn't import)
+SERVER_PYTHON = (sys.executable, "-I")
 
 
 class Hung(Exception):
@@ -136,7 +139,7 @@ def ensure_server(paths, unit=None, command=None, popen=subprocess.Popen,
         reply = probe(paths, seconds)
         if reply is not None:
             return reply
-        argv = command if command is not None else [sys.executable, str(SERVER_SCRIPT)]
+        argv = command if command is not None else [*SERVER_PYTHON, str(SERVER_SCRIPT)]
         if systemd is None:
             systemd = systemd_usable(run)
         return start(paths, unit, argv, popen, run, systemd, seconds, report)

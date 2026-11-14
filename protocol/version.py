@@ -2,8 +2,10 @@
 
 The protocol is a number: adding a message, a field or an event keeps it,
 removing one or changing its meaning bumps it. The build is a hash of the files
-that ship (`ships`: the code, its templates, catalog, prices and schema), taken
-when a process starts, so a client can tell a server that runs older code. An
+that ship (`ships`: the code, its templates, catalog, prices and schema) and of
+the Python that runs them (its version line, which says free-threaded), taken
+when a process starts, so a client can tell a server that runs older code, or
+the same code on another Python (a clone's server, once ZERO has its own). An
 installed copy's own .venv, git's folder and the caches are never part of it,
 so a pip upgrade is no new build; nor is dev/, which never ships
 (dev/release.py exports by the same rule).
@@ -11,6 +13,7 @@ so a pip upgrade is no new build; nor is dev/, which never ships
 
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 PROTOCOL = 4
@@ -48,9 +51,9 @@ def shipped_files(root=ROOT):
 
 
 def build_hash(root=ROOT):
-    """A short hash of the files that ship."""
+    """A short hash of the files that ship and the Python that runs them."""
     root = Path(root)
-    digest = hashlib.sha256()
+    digest = hashlib.sha256(sys.version.encode() + b"\0")
     for relative in shipped_files(root):
         digest.update(relative.as_posix().encode() + b"\0"
                       + (root / relative).read_bytes() + b"\0")

@@ -16,7 +16,9 @@ side.
 
 Also the version this copy of ZERO is: its CHANGELOG.md, in ZERO's own
 folder beside this file, has a section for each release, the newest at its
-top.
+top. A copy installed from a release archive (7.5.3) sits in that release's
+folder: its code in zero/, its own Python in python/, bin/zero running the
+one on the other, release.json saying what it is (`release_folder`).
 
 And the one way a file in the home is written (design rule 10): whole or not
 at all (`write_whole`), and a change read, made and written back by one writer
@@ -51,6 +53,15 @@ SOCKET = "zero.sock"
 # a launcher is two lines
 LAUNCHER_READ_BYTES = 4096
 UNIT = f"{NAME}-server"
+
+# A release's folder, unpacked from its archive: what it is (version,
+# machine, where releases come from), ZERO's code, its own Python, and the
+# command that runs the one on the other
+RELEASE_FILE = "release.json"
+CODE_FOLDER = "zero"
+PYTHON_FOLDER = "python"
+# The install folder's link to the release that runs (apps/cli/install_folder)
+CURRENT = "current"
 
 # A CHANGELOG section's heading: the version it is for
 CHANGELOG_SECTION = re.compile(r"(?m)^## (\S+)")
@@ -168,12 +179,39 @@ def changelog_version(changelog=None):
     return match.group(1) if match else None
 
 
+def release_folder(code=None):
+    """The release folder this copy of ZERO runs from (its code's parent,
+    with release.json), or None for a clone or a tree. `code`: ZERO's own
+    folder, by default this one."""
+    code = Path(code) if code else Path(__file__).resolve().parent
+    folder = code.parent
+    if code.name == CODE_FOLDER and (folder / RELEASE_FILE).is_file():
+        return folder
+    return None
+
+
+def release_command(folder):
+    """A release folder's own command: its code on its own Python."""
+    return Path(folder) / "bin" / NAME
+
+
+def own_python():
+    """How ZERO starts a Python process of its own (its server, its full
+    screen): this Python, isolated from the machine's Python settings
+    (PYTHONPATH, PYTHONHOME, the user's site-packages), which are the
+    user's, not ZERO's."""
+    return [sys.executable, "-I"]
+
+
 def zero_command(which=shutil.which):
     """How a command runs this copy of ZERO, for a shell: `zero` where the
-    zero on the PATH runs it (its launcher names this copy's main.py), else
-    this Python and this copy's main.py, quoted. A command inherits the
-    server's ZERO_HOME, so either reaches this server."""
-    main = Path(__file__).resolve().parent / "apps" / "cli" / "main.py"
+    zero on the PATH runs it (its launcher names this copy's main.py, or the
+    install folder's current release, this one), else a release's own
+    command, else this Python and this copy's main.py, quoted. A command
+    inherits the server's ZERO_HOME, so either reaches this server."""
+    code = Path(__file__).resolve().parent
+    main = code / "apps" / "cli" / "main.py"
+    release = release_folder(code)
     found = which(NAME)
     if found:
         try:
@@ -183,7 +221,14 @@ def zero_command(which=shutil.which):
             text = ""
         if str(main) in text:
             return NAME
-    return f"{shlex.quote(sys.executable)} {shlex.quote(str(main))}"
+        if release is not None:
+            current = release.parent.parent / CURRENT
+            if (str(current) in text
+                    and os.path.realpath(current) == str(release)):
+                return NAME
+    if release is not None:
+        return shlex.quote(str(release_command(release)))
+    return " ".join(shlex.quote(part) for part in [*own_python(), str(main)])
 
 
 def usual_home():

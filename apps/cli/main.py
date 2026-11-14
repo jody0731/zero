@@ -20,8 +20,11 @@ Usage:
     zero mcp serve           ZERO as an MCP server on stdio, for other agents
     zero mcp list|get|add|remove
                              the MCP servers whose tools ZERO uses
-    zero install [--bin DIR] put the zero command on the PATH (~/.local/bin)
-    zero uninstall           remove the command
+    zero install [--bin DIR] [--dir DIR]
+                             from a release: put it in the install folder
+                             (~/.local/share/zero) and the zero command on the
+                             PATH (~/.local/bin); from a clone, the command
+    zero uninstall           remove the command, and an install's releases
     zero update              an installed ZERO to its newest release
     zero --version           this copy of ZERO's version
 
@@ -59,13 +62,16 @@ models.toml (the model servers you added) and permissions.toml (what you saved
 from an ask). ~/.zero/state/ holds state.sqlite, sessions/, locks/, jobs/ (each
 job's output) and server.log (a detached server's output). ~/.zero/run/ holds the
 socket (zero.sock) and the locks (server.lock, start.lock). Install writes
-~/.local/bin/zero. ZERO's code is wherever it was cloned (install.sh makes its
-.venv there); an update changes the code, never the home.
+~/.local/bin/zero. A release (its code, packages and Python) sits in
+~/.local/share/zero/versions/, and current names the one that runs; an update
+adds one and switches current, never touching the home. A git clone runs on
+its own .venv, and an installed one moves to the releases on its first start.
 """
 
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -76,21 +82,34 @@ from pathlib import Path
 if __name__ == "__main__":
     # Run as a script (the zero on the PATH): ZERO's folder in place of this
     # one, whose names (config, main) would hide ZERO's own
-    sys.path[0] = str(Path(__file__).resolve().parents[2])
+    folder = str(Path(__file__).resolve().parents[2])
+    # With -I (ZERO's own Pythons), which leaves this one out, before
+    # the rest
+    if sys.flags.safe_path:
+        sys.path.insert(0, folder)
+    else:
+        sys.path[0] = folder
 
-from apps.cli import commands, update  # noqa: E402
+from apps.cli import commands, move_from_clone, update  # noqa: E402
+from apps.cli.install_folder import (  # noqa: E402
+    Busy, InstallError, InstallFolder, default_bin, is_release_folder_in,
+    release_file, remove, running_from, try_release,
+)
 # The readers live with the commands; tests and the evals reach them here
 from apps.cli.commands import (  # noqa: E402, F401
     ending, match_session, history_text, list_sessions, print_turn, read_session, show,
 )
 from client import launcher  # noqa: E402
 from client.connection import (  # noqa: E402
-    Connection, NoAnswer, NotRunning, ProtocolError,
+    Connection, NoAnswer, NotRunning, ProtocolError, command_session,
 )
 from client.launcher import (  # noqa: E402
     Hung, busy_text, ensure_server, hello, server_pid,
 )
-from paths import Paths, changelog_version, write_whole  # noqa: E402
+from paths import (  # noqa: E402
+    LAUNCHER_READ_BYTES, Paths, changelog_version, own_python, release_command,
+    release_folder, write_whole,
+)
 
 NAME = "ZERO"
 
@@ -110,9 +129,21 @@ def shell_path(path):
     return '"' + text + '"'
 
 
-def install(folder=None):
-    """Write the launcher: `zero` on the PATH (or in `folder`). Nothing
-    starts at login."""
+def path_note(launcher):
+    if str(launcher.parent) not in os.environ.get("PATH", "").split(os.pathsep):
+        print(f"{launcher.parent} isn't on PATH; add it to run zero by name.")
+
+
+def install(folder=None, install_dir=None):
+    """`zero install`. From a release (an archive unpacked): the release put
+    in the install folder (`install_dir`, else ~/.local/share/zero) and
+    switched to, and the zero command in `folder` (else ~/.local/bin) run
+    it; then `zero doctor`. From a clone or a tree: a launcher that runs
+    this copy on this Python. Nothing starts at login. Exit code 0 when
+    installed."""
+    release = release_folder(ROOT)
+    if release is not None:
+        return install_release(release, folder, install_dir)
     script = Path(__file__).resolve()
     python = Path(sys.executable).absolute()
     launcher = Path(folder) / "zero" if folder else launcher_path()
@@ -122,14 +153,82 @@ def install(folder=None):
     )
     launcher.chmod(0o755)
     print(f"Installed {launcher}.")
-    if str(launcher.parent) not in os.environ.get("PATH", "").split(os.pathsep):
-        print(f"{launcher.parent} isn't on PATH; add it to run zero by name.")
+    path_note(launcher)
+    return 0
+
+
+def install_release(release, folder=None, install_dir=None, execv=os.execv):
+    """A release folder into the install folder. One outside it is copied in
+    and placed, and its copy finishes (an archive unpacked anywhere, as by
+    install.sh); one inside is tried, switched to and given the command."""
+    target = InstallFolder(Path(install_dir).absolute() if install_dir else None)
+    bin_folder = Path(folder).absolute() if folder else default_bin()
+    version = release_file(release).get("version")
+    if not version:
+        print(f"{release} has no version in its release.json.", file=sys.stderr)
+        return 1
+    try:
+        if not is_release_folder_in(release, target):
+            with target.locked():
+                target.sweep()
+                if target.current_version() != version:
+                    target.place(target.copy_in(release), version)
+            placed = release_command(target.release(version))
+            argv = [str(placed), "install", "--bin", str(bin_folder),
+                    "--dir", str(target.path)]
+            execv(argv[0], argv)
+            return 0
+        with target.locked():
+            problem = try_release(release, version)
+            if problem:
+                raise InstallError(f"ZERO {version} didn't run here: {problem}")
+            target.tidy({version, target.current_version()})
+            target.switch(version)
+            target.sweep()
+            command = target.write_command(bin_folder)
+    except (Busy, InstallError, OSError) as error:
+        print(f"ZERO wasn't installed: {error}", file=sys.stderr)
+        return 1
+    print(f"Installed ZERO {version} in {target.path}; its command is {command}.")
+    path_note(command)
+    # Said before the doctor takes this process's place
+    sys.stdout.flush()
+    run_doctor()
+    return 0
 
 
 def uninstall():
-    launcher = launcher_path()
-    launcher.unlink(missing_ok=True)
-    print(f"Removed {launcher}. ZERO's home stays in {Paths().home}.")
+    """`zero uninstall`: the zero command removed, and an install folder's
+    releases with it when nothing else runs from them; the home stays."""
+    release = release_folder(ROOT)
+    home = Paths().home
+    if release is None:
+        launcher = launcher_path()
+        launcher.unlink(missing_ok=True)
+        print(f"Removed {launcher}. ZERO's home stays in {home}.")
+        return 0
+    target = InstallFolder(release.parent.parent)
+    users = running_from(target.path)
+    if users is None or users:
+        print(f"Something runs from {target.path} "
+              f"({', '.join(map(str, users or [])) or 'no /proc to look in'}); "
+              "stop ZERO's server first (zero server stop).", file=sys.stderr)
+        return 1
+    removed = []
+    for launcher in {launcher_path(), *filter(None, [shutil.which("zero")])}:
+        launcher = Path(launcher)
+        try:
+            with open(launcher, errors="replace") as stream:
+                ours = str(target.path) in stream.read(LAUNCHER_READ_BYTES)
+        except OSError:
+            ours = False
+        if ours:
+            launcher.unlink()
+            removed.append(str(launcher))
+    remove(target.path)
+    print(f"Removed {', '.join([*removed, str(target.path)])}. ZERO's home "
+          f"stays in {home}.")
+    return 0
 
 
 def server_status(paths, as_json=False):
@@ -243,7 +342,7 @@ def kill_server(paths, grace=10):
 def run_server(model=None):
     """The server in this terminal: server/main.py in this process's place, so
     this command never loads the server's code."""
-    argv = [sys.executable, str(launcher.SERVER_SCRIPT)]
+    argv = [*own_python(), str(launcher.SERVER_SCRIPT)]
     argv += ["--model", model] if model else []
     os.execv(sys.executable, argv)
 
@@ -259,17 +358,17 @@ DOCTOR_SCRIPT = ROOT / "doctor.py"
 def run_tui(argv):
     """`zero`, `zero new`, `zero -r`: the full screen, given the words as
     they came."""
-    os.execv(sys.executable, [sys.executable, str(TUI_SCRIPT), *argv])
+    os.execv(sys.executable, [*own_python(), str(TUI_SCRIPT), *argv])
 
 
 def run_mcp():
     """`zero mcp serve`: ZERO as an MCP server."""
-    os.execv(sys.executable, [sys.executable, str(MCP_SCRIPT)])
+    os.execv(sys.executable, [*own_python(), str(MCP_SCRIPT)])
 
 
 def run_doctor():
     """`zero doctor`: what ZERO needs from the machine, tried."""
-    os.execv(sys.executable, [sys.executable, str(DOCTOR_SCRIPT)])
+    os.execv(sys.executable, [*own_python(), str(DOCTOR_SCRIPT)])
 
 
 COMMANDS = ("zero", "zero new", "zero -r", "zero -p TEXT", "zero session …",
@@ -314,7 +413,10 @@ def parser_for(argv):
                                 help="serve: ZERO as an MCP server on stdio")
         elif argv[0] == "install":
             parser.add_argument("--bin", metavar="DIR",
-                                help="where the launcher goes (~/.local/bin)")
+                                help="where the zero command goes (~/.local/bin)")
+            parser.add_argument("--dir", metavar="DIR",
+                                help="a release's install folder "
+                                     "(~/.local/share/zero)")
         args = parser.parse_args(argv[1:])
         args.command = argv[0]
         return parser, args
@@ -343,6 +445,12 @@ def argv_of(argv):
     return sys.argv[1:] if argv is None else argv
 
 
+def moves_first(args):
+    """Whether this command moves an installed clone first: the full screen,
+    -p and the plain commands, outside a session's commands."""
+    return args.command in (None, "tui", "family") and command_session() is None
+
+
 def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
          systemd=None):
     """`start_command`, `start_popen`, `unit` and `systemd` are for tests: the
@@ -358,15 +466,17 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
               + ", ".join(COMMANDS) + ". To send a message: zero -p [TEXT]",
               file=sys.stderr)
         return 2
+    # An install from a git clone moves to its own Python first (7.5.3): not
+    # in a session's command, a diagnosis, nor what installs or updates
+    if argv is None and moves_first(args):
+        move_from_clone.run(ROOT, sys.argv[1:])
     # These change the code or the command, never the home
     if args.command == "update":
         return update.update(ROOT)
     if args.command == "install":
-        install(args.bin)
-        return 0
+        return install(args.bin, args.dir)
     if args.command == "uninstall":
-        uninstall()
-        return 0
+        return uninstall()
     if args.command == "mcp":
         return run_mcp()
     if args.command == "doctor":

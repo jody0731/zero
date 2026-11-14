@@ -114,8 +114,9 @@ from permissions.grants import read_saved
 from sandbox.check import check_sandbox
 from sessions.log import Log, fresh_log
 from sandbox.sandbox import (
-    Outside, Sandbox, Scratch, Unsandboxed, private_folders,
+    Outside, Sandbox, Scratch, Unsandboxed, private_folders, scratch_prefix,
 )
+from sandbox.service import SandboxService
 
 
 
@@ -660,11 +661,18 @@ class ServerSessionMaker:
         self.scratches = {}
 
     def __call__(self, sid, info, log=None, ask=PARK):
-        scratch = self.scratches.setdefault(sid, Scratch())
         return server_session(
-            self.paths, sid, info, log, ask, config=self.config, scratch=scratch,
-            **self.options,
+            self.paths, sid, info, log, ask, config=self.config,
+            scratch=self.scratch_for(sid), **self.options,
         )
+
+    def scratch_for(self, sid):
+        """The session's scratch folder, kept while the server runs; its name
+        starts with the server's home's mark (sandbox's scratch_prefix), so
+        the next server on the home removes it if this one is killed."""
+        if sid not in self.scratches:
+            self.scratches[sid] = Scratch(scratch_prefix(self.paths.home))
+        return self.scratches[sid]
 
     def forget(self, sid):
         """A deleted session's scratch folder, let go of: removed once no
@@ -691,7 +699,8 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
     return [JobsService(tick=tick), PermissionsService(make_consent, saved_permissions),
             ModelService(), ContextService(), RoundsService(),
             SubagentsService(), SessionSearchService(),
-            McpServersService(mcp_servers, LiveSettings(config))]
+            McpServersService(mcp_servers, LiveSettings(config)),
+            SandboxService()]
 
 
 # What ZERO needs from the machine, each need's check, declared here once

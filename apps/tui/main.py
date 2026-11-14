@@ -14,7 +14,13 @@ from pathlib import Path
 if __name__ == "__main__":
     # Run as a script: ZERO's folder in place of this one, whose names
     # (config, main) would hide ZERO's own
-    sys.path[0] = str(Path(__file__).resolve().parents[2])
+    folder = str(Path(__file__).resolve().parents[2])
+    # With -I (ZERO's own Pythons), which leaves this one out, before
+    # the rest
+    if sys.flags.safe_path:
+        sys.path.insert(0, folder)
+    else:
+        sys.path[0] = folder
 
 import settings  # noqa: E402
 from apps.tui import config  # noqa: E402

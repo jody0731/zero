@@ -30,17 +30,19 @@ def home_line():
 
 
 def python_lines():
-    """The Python ZERO runs on, and whether its threads run side by side:
-    a free-threaded build runs sessions on every core; with the GIL they
-    take turns on one, which works, slower under many sessions."""
+    """The Python ZERO runs on, whose it is, and whether its threads run side
+    by side: a free-threaded build runs sessions on every core; with the GIL
+    they take turns on one, which works, slower under many sessions."""
     version = ".".join(str(n) for n in sys.version_info[:3])
+    whose = ", ZERO's own" if paths.release_folder() else ""
     if not getattr(sys, "_is_gil_enabled", lambda: True)():
-        return [(MET, f"Python {version}, free-threaded: sessions run side by side")]
-    return [(MET, f"Python {version}"),
+        return [(MET, f"Python {version}{whose}, free-threaded: sessions run "
+                      "side by side")]
+    return [(MET, f"Python {version}{whose}"),
             (NOTE, "Python's GIL is on: ZERO's sessions take turns on one core; "
-                   "a free-threaded Python (3.14t or newer) runs them side by "
-                   "side: install.sh again with one on the PATH (README, What "
-                   "it needs)")]
+                   "ZERO's releases bring their own free-threaded Python, which "
+                   "runs them side by side: zero update, or install.sh (README, "
+                   "Install)")]
 
 
 def report():

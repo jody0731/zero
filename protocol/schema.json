@@ -162,6 +162,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         }
       },
       "required": [
@@ -275,6 +280,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -351,6 +361,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -506,6 +521,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -582,6 +602,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -666,6 +691,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "archived": {
           "anyOf": [
             {
@@ -690,6 +720,10 @@
         },
         "watch": {
           "type": "boolean"
+        },
+        "keeps_server_up": {
+          "type": "boolean",
+          "description": "false: this watch doesn't keep the server up; when the server leaves idle the watch ends with bye \"idle\" (default true)"
         }
       },
       "required": [
@@ -753,6 +787,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "session": {
           "type": "string",
@@ -919,6 +958,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -935,6 +979,10 @@
               "type": "null"
             }
           ]
+        },
+        "keeps_server_up": {
+          "type": "boolean",
+          "description": "false: this watch doesn't keep the server up; when the server leaves idle the watch ends with bye \"idle\" (default true)"
         }
       },
       "required": [
@@ -1085,6 +1133,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1146,6 +1199,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1206,6 +1264,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1262,6 +1325,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1317,6 +1385,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -1376,6 +1449,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -1451,6 +1529,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -1513,6 +1596,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -1601,6 +1689,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1672,6 +1765,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -1765,6 +1863,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "query": {
           "type": "string",
@@ -1899,6 +2002,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1995,6 +2103,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -2045,6 +2158,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2104,6 +2222,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -2154,6 +2277,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2213,6 +2341,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -2265,6 +2398,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2328,6 +2466,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         }
       },
       "required": [
@@ -2376,6 +2519,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2453,6 +2601,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         }
       },
       "required": [
@@ -2533,6 +2686,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "name": {
           "type": "string"
         },
@@ -2592,6 +2750,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2674,6 +2837,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -2734,6 +2902,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         }
       },
       "required": [
@@ -2789,6 +2962,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "name": {
           "type": "string"
         }
@@ -2836,6 +3014,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2947,6 +3130,11 @@
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
         },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -3004,6 +3192,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         }
       },
       "required": [
@@ -3062,6 +3255,11 @@
         "token": {
           "type": "string",
           "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
         "id": {
           "type": "string",

@@ -19,7 +19,9 @@ service's workflow messages for its own session (subagent/send: a subagent of
 that session, whose asks go where its other subagents' go).
 
 The server leaves after `server_idle_minutes` with no turn, no message that could start
-one, no job and no client connected; a parked ask waits on disk. A shutdown or
+one, no job and no client connected (a watch sent with keeps_server_up false
+doesn't count: a web page left open; it ends with bye "idle"); a parked ask
+waits on disk. A shutdown or
 SIGTERM drains: no new messages, running turns get a few seconds, each job's
 loss is written before it is killed, and what is cut off resumes at the next
 start without using a try. Nothing starts it at login: `zero` starts it when
@@ -35,6 +37,7 @@ import socket
 import threading
 import time
 import traceback
+from contextlib import contextmanager
 
 import settings
 from core import history
@@ -96,8 +99,10 @@ class Server:
         self.stopping = threading.Event()
         # The `bye` its watches get when it stops
         self.reason = "stopped"
-        # Open connections of every kind: a client connected keeps it up
+        # Open connections of every kind: a client connected keeps it up,
+        # but for the watches sent with keeps_server_up false, counted apart
         self.connections = 0
+        self.light_watches = 0
         self.connection_lock = threading.Lock()
         # Tells the user's clients from ZERO's own commands
         self.peers = peers.Peers()
@@ -229,13 +234,15 @@ class Server:
             # Look often enough to leave close to the idle time, at most each
             # second
             next_look = now + min(1.0, idle_seconds / 4)
-            if self.connections or self.runtime.busy_with():
+            if self.holding() or self.runtime.busy_with():
                 idle_since = None
             elif idle_since is None:
                 idle_since = now
             elif now - idle_since >= idle_seconds and self.leave_idle():
                 minutes = idle_seconds / 60
                 print(f"ZERO's server: idle for {minutes:g} min, exiting.", flush=True)
+                # The watches that didn't hold it end with this reason
+                self.stop("idle")
                 return
 
     def idle_seconds(self):
@@ -243,13 +250,35 @@ class Server:
                    or self.runtime.config()["server_idle_minutes"])
         return minutes * 60
 
+    def holding(self):
+        """The open connections that keep the server up."""
+        return self.connections - self.light_watches
+
     def leave_idle(self):
         """Whether the server may go: checked once more, under the lock a new
         turn takes, so nothing starts in the moment it decides."""
         with self.connection_lock:
-            if self.connections:
+            if self.holding():
                 return False
             return self.runtime.close_if_idle()
+
+    @contextmanager
+    def light(self, request):
+        """A watch sent with keeps_server_up false, counted apart while it
+        lasts, so it leaves the server free to go when idle."""
+        keeps = request.get("keeps_server_up", True)
+        if not isinstance(keeps, bool):
+            raise Refused("keeps_server_up is true or false")
+        if keeps:
+            yield
+            return
+        with self.connection_lock:
+            self.light_watches += 1
+        try:
+            yield
+        finally:
+            with self.connection_lock:
+                self.light_watches -= 1
 
     def wait_for_connections(self, seconds):
         deadline = time.monotonic() + seconds
@@ -281,8 +310,11 @@ class Server:
             protocol = self.protocol_of(request)
             # The token proves, and goes no further
             token = request.pop("token", None)
+            relayed_for = request.pop("relayed_for_pid", None)
             try:
                 pid = peers.proven(conn, token, self.app_token)
+                # A relay's client, checked as a socket's own peer is
+                pid = peers.relayed(pid, relayed_for, self.peers)
             except PermissionError as why:
                 raise Refused(str(why)) from None
             # ZERO's own commands may look, never act; a workflow sends for
@@ -292,10 +324,12 @@ class Server:
                 if self.peers.is_zero_command(pid):
                     self.check_workflow(name, request, pid, looking)
             if name == "session/watch":
-                self.watch(conn, request, protocol)
+                with self.light(request):
+                    self.watch(conn, request, protocol)
                 return
             if name == "session/list" and request.get("watch"):
-                self.watch_list(conn, request, protocol)
+                with self.light(request):
+                    self.watch_list(conn, request, protocol)
                 return
             reply = self.reply_to(name, request, protocol)
         except Refused as e:

@@ -12,7 +12,7 @@ trajectories, locks, jobs' output, the trash, server.log and crashes.log. run/
 holds the running server's socket and locks. The sandbox hides the whole home
 from commands. Each home's server runs as a systemd unit of its own: zero-server
 for ~/.zero, zero-server-<hash> for any other, so two homes' servers run side by
-side.
+side; so does its HTTP door (zero-http-door, on 127.0.0.1:4747 for ~/.zero).
 
 Also the version this copy of ZERO is: its CHANGELOG.md, in ZERO's own
 folder beside this file, has a section for each release, the newest at its
@@ -40,6 +40,7 @@ import shlex
 import shutil
 import sys
 import tempfile
+import tomllib
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -55,6 +56,16 @@ APP_TOKEN = "app-token"
 # a launcher is two lines
 LAUNCHER_READ_BYTES = 4096
 UNIT = f"{NAME}-server"
+# ZERO's HTTP door (apps/http_door/): its systemd units' name for the usual
+# home, and its port on 127.0.0.1 there; another home's port is offset by its
+# hash (as its units are named), so a second home's door never answers for
+# the first; config.toml's [http_door] port sets either
+HTTP_DOOR_UNIT = f"{NAME}-http-door"
+HTTP_DOOR_PORT = 4747
+HTTP_DOOR_TABLE = "http_door"
+# The ports another home's door is offset into, below 5000 (where other
+# local servers sit) and the kernel's ephemeral range
+HTTP_DOOR_PORTS_OTHER = 250
 
 # A release's folder, unpacked from its archive: what it is (version,
 # machine, where releases come from), ZERO's code, its own Python, and the
@@ -319,12 +330,34 @@ def run_folder(top):
     return Path(runtime) / f"{NAME}-{tag}"
 
 
-def unit_name(top):
-    """The systemd unit a home's server runs as."""
+def home_tag(top):
+    """A home's mark in its units' names: none for the usual home."""
     if Path(top).absolute() == usual_home().absolute():
-        return UNIT
-    tag = hashlib.sha256(str(top).encode()).hexdigest()[:8]
-    return f"{UNIT}-{tag}"
+        return None
+    return hashlib.sha256(str(top).encode()).hexdigest()[:8]
+
+
+def unit_name(top, unit=UNIT):
+    """The systemd unit a home's server (or `unit`) runs as."""
+    tag = home_tag(top)
+    return unit if tag is None else f"{unit}-{tag}"
+
+
+def http_door_port(top):
+    """The port a home's HTTP door listens on, on 127.0.0.1: config.toml's
+    [http_door] port, else the usual home's, offset by the home's mark for
+    another home."""
+    try:
+        data = tomllib.loads((Path(top) / "config.toml").read_text())
+        port = data.get(HTTP_DOOR_TABLE, {}).get("port")
+    except (OSError, ValueError, AttributeError):
+        port = None
+    if type(port) is int and 0 < port < 65536:
+        return port
+    tag = home_tag(top)
+    if tag is None:
+        return HTTP_DOOR_PORT
+    return HTTP_DOOR_PORT + 1 + int(tag, 16) % HTTP_DOOR_PORTS_OTHER
 
 
 class Paths:
@@ -355,6 +388,14 @@ class Paths:
         # restarts, readable by the user only
         self.app_token = self.home / APP_TOKEN
         self.unit = unit_name(self.home)
+        # ZERO's HTTP door's systemd units (.socket, .service): systemd holds
+        # its port and starts it at the first knock
+        self.http_door_unit = unit_name(self.home, HTTP_DOOR_UNIT)
+
+    @property
+    def http_door_port(self):
+        """The HTTP door's port, read from config.toml when asked."""
+        return http_door_port(self.home)
 
     def environment(self):
         """The variable that leads a server to this home."""

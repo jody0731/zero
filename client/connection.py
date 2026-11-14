@@ -90,15 +90,18 @@ def read_token(path):
         return None
 
 
-def whole(payload, token=None):
+def whole(payload, token=None, relayed_for_pid=None):
     """A request as it goes out: its protocol, the token where there is one,
-    and an id of its own for a message that changes something and has none."""
+    an id of its own for a message that changes something and has none, and
+    for a relay, the process it sends this for."""
     payload = {"protocol": version.PROTOCOL, **payload}
     spec = MESSAGES.get(payload.get("message"))
     if spec is not None and spec["changes"] and not payload.get("id"):
         payload["id"] = str(uuid.uuid4())
     if token is not None:
         payload["token"] = token
+    if relayed_for_pid is not None:
+        payload["relayed_for_pid"] = relayed_for_pid
     return payload
 
 
@@ -106,13 +109,14 @@ class Watch:
     """A stream of events: a session's (`session/watch`), or the session
     list's (`session/list` with `watch`, `payload` given)."""
 
-    def __init__(self, path, session=None, after=0, payload=None, token=None):
+    def __init__(self, path, session=None, after=0, payload=None, token=None,
+                 relayed_for_pid=None):
         self.conn = connect(path)
         self.stream = None
         # The reason the server gave when it closed this watch, if it did
         self.bye = None
         payload = whole(payload or build("session/watch", session=session,
-                                         after=after), token)
+                                         after=after), token, relayed_for_pid)
         try:
             self.conn.sendall((json.dumps(payload) + "\n").encode())
             self.conn.settimeout(None)
@@ -154,12 +158,15 @@ class Watch:
 
 class Connection:
     """`ensure()` finds or starts a server, and checks its versions: called before
-    the first request, and again when a request finds no server."""
+    the first request, and again when a request finds no server.
+    `relayed_for_pid`: for a relay (ZERO's HTTP door), the process of its own
+    client that each request is sent for, where the kernel named it."""
 
-    def __init__(self, paths, ensure=None, source=None):
+    def __init__(self, paths, ensure=None, source=None, relayed_for_pid=None):
         self.paths = paths
         self.ensure = ensure
         self.source = source or f"terminal-{os.getpid()}"
+        self.relayed_for_pid = relayed_for_pid
         self.checked = False
         self._token = None
 
@@ -175,8 +182,17 @@ class Connection:
             self.checked = True
 
     def call(self, payload, timeout=30):
+        """The server's reply; ProtocolError for its no."""
+        reply = self.reply_to(payload, timeout)
+        if not reply["ok"]:
+            raise ProtocolError(reply["error"])
+        return reply
+
+    def reply_to(self, payload, timeout=30):
+        """The server's reply as it came, its no too (a relay passes it on
+        whole)."""
         self.ready()
-        payload = whole(payload, self.token())
+        payload = whole(payload, self.token(), self.relayed_for_pid)
         try:
             reply = request(self.paths.socket, payload, timeout)
         except NoAnswer:
@@ -186,10 +202,8 @@ class Connection:
                 raise
             self.ensure()
             # The same request, its id too: the server runs it once
-            payload = whole(payload, self.token())
+            payload = whole(payload, self.token(), self.relayed_for_pid)
             reply = request(self.paths.socket, payload, timeout)
-        if not reply["ok"]:
-            raise ProtocolError(reply["error"])
         return reply
 
     def send(self, text, session=None, mode=None, model=None, reply_to=None,
@@ -433,10 +447,13 @@ class Connection:
 
     def stream(self, payload):
         self.ready()
+        relayed = self.relayed_for_pid
         try:
-            return Watch(self.paths.socket, payload=payload, token=self.token())
+            return Watch(self.paths.socket, payload=payload, token=self.token(),
+                         relayed_for_pid=relayed)
         except NotRunning:
             if self.ensure is None:
                 raise
             self.ensure()
-            return Watch(self.paths.socket, payload=payload, token=self.token())
+            return Watch(self.paths.socket, payload=payload, token=self.token(),
+                         relayed_for_pid=relayed)

@@ -21,7 +21,7 @@ import sys
 import time
 from pathlib import Path
 
-from apps.cli import releases
+from apps.cli import door_units, releases
 from apps.cli.install_folder import Busy, InstallError, InstallFolder
 from paths import LAUNCHER_READ_BYTES, NAME, changelog_version
 
@@ -95,6 +95,9 @@ def move(code, command, folder, version, out):
         folder.write_command(command.parent)
     out(f"ZERO now runs from {folder.release(version)}; {command} runs it. "
         f"The clone in {code} is no longer used: the next update removes it.")
+    # systemd holds the HTTP door's port, the moved release's door
+    sys.stdout.flush()
+    door_units.keep("install", command)
 
 
 def run(code, argv, out=None, now=time.time, execv=os.execv, which=shutil.which):

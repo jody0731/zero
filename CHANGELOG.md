@@ -3,6 +3,30 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2
+
+ZERO in the browser, and one door for every agent.
+
+- **The web UI.** `zero web` opens ZERO in your browser, signed in: your sessions with
+  their subagents and forks, each turn as it happens (tools, asks, notes, drafts), an
+  ask answered in place of the input, a session's mode, model, folder, context and
+  running work beside it, a new session in any folder. It works on a phone-sized window
+  too. An open page doesn't keep ZERO's server running; the page shows when it sleeps
+  and wakes it.
+- **ZERO's HTTP door** on `127.0.0.1:4747` serves the web UI and ZERO's MCP server at
+  `/mcp`. systemd holds the port from login and starts the door at the first knock; the
+  door leaves after five idle minutes, and ZERO's server still leaves when idle. Only
+  your own programs get in: the door knows a caller by its connection as the socket
+  does, a browser by the sign-in `zero web` gives, and it takes no other host or site.
+  `zero install` and `zero update` put its two units in `~/.config/systemd/user`;
+  `zero http-door status|install|uninstall` shows or changes them.
+- **Claude Code and Codex by URL.** Point them at
+  `http://127.0.0.1:4747/mcp` (`zero http-door status` prints the lines) and their
+  sessions use ZERO with no `zero mcp serve` process of their own. `zero mcp serve`
+  stays for stdio, lighter: no MCP library, a quarter of the memory (22 MB, was 88).
+- **The MCP server speaks MCP's stateless 2026-07-28 revision** as well as the
+  handshake of the ones before.
+
 ## 0.7.6.1
 
 Apps on one layer: ZERO's server says what its apps used to know, and any program can be one.

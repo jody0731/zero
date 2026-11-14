@@ -21,11 +21,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from apps.cli import move_from_clone, releases
+from apps.cli import door_units, move_from_clone, releases
 from apps.cli.install_folder import (
     Busy, InstallError, InstallFolder, is_release_folder_in, release_file,
 )
-from paths import CODE_FOLDER, changelog_version, release_folder
+from paths import (
+    CODE_FOLDER, changelog_version, release_command, release_folder,
+)
 
 TAG = re.compile(r"v(\d+(?:\.\d+)*)")
 SECTION = re.compile(r"## (\d+(?:\.\d+)*)")
@@ -135,6 +137,8 @@ def update_release(release, out):
     out(f"Updated ZERO {current} → {latest}.")
     brought(target.release(latest) / CODE_FOLDER, f"v{current}", f"v{latest}",
             out)
+    # systemd's units for the HTTP door, as the new release writes them
+    door_units.keep("install", release_command(target.release(latest)))
     out(SERVER_NOTE)
     return 0
 

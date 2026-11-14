@@ -23,6 +23,13 @@ Usage:
     zero mcp serve           ZERO as an MCP server on stdio, for other agents
     zero mcp list|get|add|remove
                              the MCP servers whose tools ZERO uses
+    zero web                 the web UI in your browser, signed in
+    zero http-door serve|install|uninstall|status
+                             ZERO's HTTP door on 127.0.0.1:4747: the web UI
+                             and MCP at /mcp for other agents by URL; install:
+                             systemd holds its port from login and starts it
+                             at the first knock; status: the lines that point
+                             Claude Code and Codex at it
     zero install [--bin DIR] [--dir DIR]
                              from a release: put it in the install folder
                              (~/.local/share/zero) and the zero command on the
@@ -42,10 +49,12 @@ words.
 
 Every turn runs in the server, and every command reaches it through its socket.
 A command starts the server when none answers: a transient systemd user unit,
-zero-server, or a detached process where there is no systemd. Nothing starts at
-login, and the server leaves after its idle minutes with no turn, job, queued
-message or client. A session's workspace is a folder, / for the whole machine;
-its commands run there, read-only in the sandbox until file tools come.
+zero-server, or a detached process where there is no systemd. Nothing of ZERO's
+runs from login (systemd only holds the HTTP door's port, zero-http-door.socket,
+and starts the door at the first knock), and the server and the door each leave
+after their idle minutes with nothing to do. A session's workspace is a folder,
+/ for the whole machine; its commands run there, read-only in the sandbox until
+file tools come.
 Background jobs outlive their turn and the terminal; their session is told.
 
 Modes: each a sandbox and who answers asks, least to most permissive, as the
@@ -93,7 +102,9 @@ if __name__ == "__main__":
     else:
         sys.path[0] = folder
 
-from apps.cli import commands, move_from_clone, update  # noqa: E402
+from apps.cli import (  # noqa: E402
+    commands, door_units, move_from_clone, update,
+)
 from apps.cli.install_folder import (  # noqa: E402
     Busy, InstallError, InstallFolder, default_bin, is_release_folder_in,
     release_file, remove, running_from, try_release,
@@ -142,7 +153,7 @@ def install(folder=None, install_dir=None):
     in the install folder (`install_dir`, else ~/.local/share/zero) and
     switched to, and the zero command in `folder` (else ~/.local/bin) run
     it; then `zero doctor`. From a clone or a tree: a launcher that runs
-    this copy on this Python. Nothing starts at login. Exit code 0 when
+    this copy on this Python. Nothing runs from login. Exit code 0 when
     installed."""
     release = release_folder(ROOT)
     if release is not None:
@@ -194,6 +205,9 @@ def install_release(release, folder=None, install_dir=None, execv=os.execv):
         return 1
     print(f"Installed ZERO {version} in {target.path}; its command is {command}.")
     path_note(command)
+    # systemd holds the HTTP door's port (the usual home's)
+    sys.stdout.flush()
+    door_units.keep("install", command)
     # Said before the doctor takes this process's place
     sys.stdout.flush()
     run_doctor()
@@ -211,6 +225,8 @@ def uninstall():
         print(f"Removed {launcher}. ZERO's home stays in {home}.")
         return 0
     target = InstallFolder(release.parent.parent)
+    # The HTTP door's units first: its door may run from the release
+    door_units.keep("uninstall")
     users = running_from(target.path)
     if users is None or users:
         print(f"Something runs from {target.path} "
@@ -375,6 +391,7 @@ def run_server(model=None):
 # command line imports none of them, nor they it
 TUI_SCRIPT = ROOT / "apps" / "tui" / "main.py"
 MCP_SCRIPT = ROOT / "apps" / "mcp" / "main.py"
+HTTP_DOOR_SCRIPT = ROOT / "apps" / "http_door" / "main.py"
 # `zero doctor`'s, which loads the harness to try what ZERO needs
 DOCTOR_SCRIPT = ROOT / "doctor.py"
 
@@ -390,6 +407,11 @@ def run_mcp():
     os.execv(sys.executable, [*own_python(), str(MCP_SCRIPT)])
 
 
+def run_http_door(argv):
+    """`zero web` and `zero http-door …`: the HTTP door's own entry."""
+    os.execv(sys.executable, [*own_python(), str(HTTP_DOOR_SCRIPT), *argv])
+
+
 def run_doctor():
     """`zero doctor`: what ZERO needs from the machine, tried."""
     os.execv(sys.executable, [*own_python(), str(DOCTOR_SCRIPT)])
@@ -398,8 +420,10 @@ def run_doctor():
 COMMANDS = ("zero", "zero new", "zero -r", "zero -p TEXT", "zero session …",
             "zero job …", "zero grant …", "zero model …", "zero setting …",
             "zero server hello|stop|status|run", "zero mcp serve|list|get|add|remove",
+            "zero web", "zero http-door serve|install|uninstall|status",
             "zero install|uninstall", "zero update", "zero doctor")
-OWN_COMMANDS = ("server", "mcp", "install", "uninstall", "update", "doctor")
+OWN_COMMANDS = ("server", "mcp", "install", "uninstall", "update", "doctor",
+                "web", "http-door")
 # The full screen's word; its flags are its own (apps/tui/main.py)
 TUI_COMMANDS = ("new",)
 
@@ -436,6 +460,13 @@ def parser_for(argv):
             # list, get, add and remove are the family's (commands.py)
             parser.add_argument("action", choices=("serve",),
                                 help="serve: ZERO as an MCP server on stdio")
+        elif argv[0] == "http-door":
+            parser.add_argument("action", choices=(
+                "serve", "install", "uninstall", "status"),
+                help="serve: the door here; install: systemd holds its port; "
+                     "status: where it is, and the lines for other agents")
+            parser.add_argument("--idle-seconds", type=float,
+                                help="serve: seconds idle before it leaves")
         elif argv[0] == "install":
             parser.add_argument("--bin", metavar="DIR",
                                 help="where the zero command goes (~/.local/bin)")
@@ -504,6 +535,12 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
         return uninstall()
     if args.command == "mcp":
         return run_mcp()
+    if args.command == "web":
+        return run_http_door(["web"])
+    if args.command == "http-door":
+        more = ([] if args.idle_seconds is None
+                else ["--idle-seconds", str(args.idle_seconds)])
+        return run_http_door([args.action, *more])
     if args.command == "doctor":
         return run_doctor()
     if args.command == "tui" or (args.command is None and args.p is None):

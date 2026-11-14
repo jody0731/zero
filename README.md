@@ -50,7 +50,7 @@ ZERO runs on Linux; Windows and macOS come later in its development.
 curl -fsSL https://github.com/jody0731/zero/releases/latest/download/install.sh | sh
 ```
 
-Each release is one file for each machine, ZERO with its own Python inside (free-threaded CPython from [python-build-standalone](https://github.com/astral-sh/python-build-standalone), with the packages ZERO was tested with), so nothing else is installed: no Python, git or pip. The installer fetches the newest one for this machine, checks its sha256, and puts it in `~/.local/share/zero` (`--dir DIR` puts it elsewhere) and the `zero` command in `~/.local/bin` (`--bin DIR`). Then it runs `zero doctor`, which tries what ZERO needs from the machine (a command in the sandbox, its home) and lists what ZERO's files hold that it doesn't know; run it again any time. Nothing starts at login.
+Each release is one file for each machine, ZERO with its own Python inside (free-threaded CPython from [python-build-standalone](https://github.com/astral-sh/python-build-standalone), with the packages ZERO was tested with), so nothing else is installed: no Python, git or pip. The installer fetches the newest one for this machine, checks its sha256, and puts it in `~/.local/share/zero` (`--dir DIR` puts it elsewhere) and the `zero` command in `~/.local/bin` (`--bin DIR`). Then it runs `zero doctor`, which tries what ZERO needs from the machine (a command in the sandbox, its home) and lists what ZERO's files hold that it doesn't know; run it again any time. Nothing of ZERO's runs at login: systemd holds the port of ZERO's HTTP door (`127.0.0.1:4747`, for the web UI and other agents) and starts the door at the first knock.
 
 <details>
 <summary><b>The same, by hand</b>: one download</summary>
@@ -132,6 +132,14 @@ zero -p "a question" # one question, for scripts (--print)
 
 Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's model and its thinking; `/compact` compacts the session's context now; `/rewind` and `/fork` go back to one of your messages; `/settings` sets this session, what new sessions start with, the theme, the models and keys and the key bindings, and in **Advanced…** the judge, the limits (**Compact at (tokens)** among them) and the server. The status line shows the context's size against its line and the share of the last call the server's cache served, as `context 42k/1M · cache 96%`.
 
+### Web UI
+
+```bash
+zero web             # the web UI in your browser, signed in
+```
+
+Your sessions and their subagents, each turn as it happens, an ask answered in place of the input, a session's mode, model, folder, context and running work beside it; a new session in any folder. It is served by ZERO's HTTP door on `127.0.0.1:4747`, which systemd starts at the first knock and which leaves after five idle minutes; an open page doesn't keep ZERO's server running. Only your browser, signed in by `zero web`'s link, gets in: the door takes no other host or site, and the link works once, for two minutes.
+
 ### CLI
 
 Everything a caller does has a command, named as its message: a family, then the action.
@@ -175,11 +183,19 @@ ZERO uses the tools of [MCP](https://modelcontextprotocol.io) servers: a command
 
 ## For other agents
 
-`zero mcp serve` serves ZERO as an MCP server on stdio. In Claude Code:
+ZERO is an MCP server at `http://127.0.0.1:4747/mcp`, on its HTTP door: every session of every agent uses the one door, and none starts a ZERO process of its own. In Claude Code:
 
 ```bash
-claude mcp add zero -- zero mcp serve
+claude mcp add --transport http --scope user zero http://127.0.0.1:4747/mcp
 ```
+
+In Codex:
+
+```bash
+codex mcp add zero --url http://127.0.0.1:4747/mcp
+```
+
+An entry that runs `zero mcp serve` goes first (`claude mcp remove zero --scope user`, `codex mcp remove zero`). The door knows each caller by its connection, as the socket does, so the line holds no token; `zero http-door status` prints these lines with your port. For an agent that speaks only stdio, `zero mcp serve` serves the same tools there.
 
 | Tool | What it does |
 | --- | --- |
@@ -192,7 +208,7 @@ The mode decides who answers ZERO's questions: in `default` the calling agent do
 
 ## Apps in any language
 
-The full screen, the commands and `zero mcp serve` are apps of ZERO's server, and a program in any language can be one. `zero server start --json` starts the server when none runs and names the way in:
+The full screen, the web UI, the commands and the MCP server are apps of ZERO's server, and a program in any language can be one. `zero server start --json` starts the server when none runs and names the way in:
 
 ```json
 {"ok": true, "socket": "/home/you/.zero/run/zero.sock", "token_file": "/home/you/.zero/app-token", "protocol": 5, "version": "0.7.6.1", "pid": 4242}
@@ -209,13 +225,15 @@ with socket.socket(socket.AF_UNIX) as s:
     print(json.loads(s.makefile().readline())["modes"])
 ```
 
+Over HTTP, the door takes the same request at `POST http://127.0.0.1:4747/api/request` and answers with the reply; it knows a program of yours by its connection, and where it can't, `Authorization: Bearer` with the token file's text lets it in.
+
 ## Update
 
 ```bash
 zero update
 ```
 
-It fetches the newest release for this machine (its code, its Python and its packages together), checks its sha256, tries it (its version, and that its Python loads ZERO's server), then switches to it in one step and shows what it brought; until that step the release you had runs, and a failed update leaves it running. The one before stays until the next update, unless something still runs from it. `zero --version` says which release you have. The server picks up the new code once it is idle. It never touches `~/.zero`.
+It fetches the newest release for this machine (its code, its Python and its packages together), checks its sha256, tries it (its version, and that its Python loads ZERO's server), then switches to it in one step and shows what it brought; until that step the release you had runs, and a failed update leaves it running. The one before stays until the next update, unless something still runs from it. `zero --version` says which release you have. The server picks up the new code once it is idle, and the HTTP door at its next start; an update also writes the door's systemd units where they are missing or out of date. It never touches `~/.zero`.
 
 <details>
 <summary><b>From a git clone</b>: ZERO before 0.7.5.3</summary>
@@ -231,6 +249,7 @@ ZERO was once a git clone with a Python environment of its own (`~/Applications/
 | `~/.local/share/zero/` | ZERO's releases, each in `versions/` with its own Python; `current` names the one that runs |
 | `~/.local/bin/zero` | the command, which runs `current` |
 | `~/.agents/skills/` | the skills the agents on your machine share, which ZERO reads too |
+| `~/.config/systemd/user/zero-http-door.socket` | systemd's hold on the HTTP door's port, with `zero-http-door.service` beside it; `zero http-door uninstall` takes them away, `zero http-door install` puts them back. The port is `[http_door] port` in `config.toml` |
 | `~/.zero/app-token` | the token an app sends where the socket can't tell who it is, mode 600; removed, a new one is made |
 | `~/.zero/mcp_servers.toml` | the MCP servers whose tools ZERO uses (`zero mcp add`), mode 600: an entry's `env` and `headers` may hold tokens |
 | `~/.zero/` | everything ZERO keeps, moved by `ZERO_HOME`: your settings (`config.toml`), keys, model servers, `SOUL.md` (who ZERO is) and `ZERO.md` (your instructions and its memory), its own skills (`skills/`), and in `state/` the sessions and their history (`state/sessions/results/` holds the outputs kept out of a session's context; `state/session_search.sqlite`, the search's index, is made again from the logs whenever it's gone) |
@@ -241,7 +260,7 @@ ZERO was once a git clone with a Python environment of its own (`~/Applications/
 zero uninstall
 ```
 
-It removes the command and `~/.local/share/zero`, once ZERO's server has stopped (`zero server stop`); `~/.zero` stays, yours to remove.
+It removes the command, the HTTP door's units and `~/.local/share/zero`, once ZERO's server has stopped (`zero server stop`); `~/.zero` stays, yours to remove.
 
 ---
 

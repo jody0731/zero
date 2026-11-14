@@ -2,13 +2,15 @@
 trying it (design rule 8; the checks are the components', declared to the
 assembly), then what ZERO's files say that this ZERO doesn't know, what
 of the skills a session in this folder would find ZERO can't use as it is,
-and what of the MCP servers listed it can't (a command not found here).
+and what of the MCP servers listed it can't (a command not found here);
+last, ZERO's HTTP door and the lines that point other agents at it.
 The command line runs this in its own place, as it runs the server, so it
 never loads the harness itself; install.sh runs it once ZERO is in place.
 Exit code 0 when ZERO can run here, 1 when a need isn't met.
 """
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,6 +47,31 @@ def python_lines():
                    "Install)")]
 
 
+def http_door_lines(run=subprocess.run):
+    """ZERO's HTTP door: whether systemd holds its port, and the lines that
+    point Claude Code and Codex at it (ZERO writes no other agent's
+    settings: the user runs them)."""
+    found = paths.Paths()
+    url = f"http://127.0.0.1:{found.http_door_port}/mcp"
+    unit = f"{found.http_door_unit}.socket"
+    try:
+        result = run(["systemctl", "--user", "is-active", unit],
+                     capture_output=True, text=True, timeout=5)
+        held = result.stdout.strip() == "active"
+    except (OSError, subprocess.SubprocessError):
+        held = False
+    agents = (f"Claude Code: claude mcp add --transport http --scope user "
+              f"zero {url} (an entry that runs zero mcp serve goes first: "
+              f"claude mcp remove zero --scope user); Codex: codex mcp add "
+              f"zero --url {url}")
+    if held:
+        return [(MET, f"ZERO's HTTP door: {url}, held by systemd ({unit}). "
+                      f"Other agents reach ZERO there; {agents}")]
+    return [(NOTE, f"ZERO's HTTP door, {url}, isn't held by systemd: zero "
+                   f"http-door install. Then other agents reach ZERO there; "
+                   f"{agents}")]
+
+
 def report():
     """[(mark, line)]: the machine's needs, ZERO's home, its files' notes."""
     lines = python_lines()
@@ -58,6 +85,7 @@ def report():
     lines += [(NOTE, note) for note in assembly.skill_notes(Path.cwd())]
     # The MCP servers listed: what ZERO can't use, a command not found
     lines += [(NOTE, note) for note in assembly.mcp_server_notes()]
+    lines += http_door_lines()
     return lines
 
 

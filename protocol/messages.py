@@ -39,7 +39,8 @@ closes it ("stopped": stay down until the user types; "restart": a newer
 build, reconnect at once; "behind": the client read too slowly and the
 events waiting for it passed their cap, so it watches again from its last
 seq, the log holding them all; "deleted", a session's watch only: the
-session was deleted).
+session was deleted; "idle": the server left idle, and a watch sent with
+`keeps_server_up` false didn't hold it: the next request starts one).
 
 A component's messages (job/…, grant/…, model/…) are described here and
 handled in the component's own server part, as a tool is described in core's
@@ -111,7 +112,20 @@ PROTOCOL_FIELD = {**INTEGER, "description": "the protocol the request is "
 TOKEN_FIELD = {**STRING, "description": "the user's token, the token file's "
                "text: needed where the socket can't tell who connects; a "
                "wrong one is refused"}
-EVERY_REQUEST = {"protocol": PROTOCOL_FIELD, "token": TOKEN_FIELD}
+# A relay's client: ZERO's HTTP door names the process its HTTP client is,
+# where the kernel says, so the server holds it to what it would hold it to
+# on the socket (a ZERO command's limits)
+RELAYED_FOR_PID = {**INTEGER, "minimum": 2, "description": "the process a "
+                   "relay sends this for, where it can tell: the server "
+                   "checks it as it checks a socket's own peer; heeded only "
+                   "from the user's own client"}
+EVERY_REQUEST = {"protocol": PROTOCOL_FIELD, "token": TOKEN_FIELD,
+                 "relayed_for_pid": RELAYED_FOR_PID}
+# A watch that leaves the server free to go when idle (a web page left open
+# shouldn't keep it up all day): ended with a `bye` of "idle" when it goes
+KEEPS_SERVER_UP = {**BOOLEAN, "description": "false: this watch doesn't keep "
+                   "the server up; when the server leaves idle the watch ends "
+                   "with bye \"idle\" (default true)"}
 # What every reply to a message that changes something may say beside its
 # own fields
 REPLAYED = {**BOOLEAN, "description": "this id was sent before: the first "
@@ -466,6 +480,7 @@ MESSAGES = {
                          "(true), the others (false), or all (null)"},
             "workspace": {**maybe(STRING), "description": "only this folder's"},
             "watch": BOOLEAN,
+            "keeps_server_up": KEEPS_SERVER_UP,
         },
         reply={"sessions": rows("session", "one row a session")},
         stream={"sessions": rows("session", "the whole list"), "bye": STRING},
@@ -482,7 +497,8 @@ MESSAGES = {
     ),
     "session/watch": message(
         "A session's records after a seq, then each new one as it comes.",
-        {"session": SESSION, "after": INTEGER, "limit": maybe(INTEGER)},
+        {"session": SESSION, "after": INTEGER, "limit": maybe(INTEGER),
+         "keeps_server_up": KEEPS_SERVER_UP},
         required=("session",),
         stream={"record": RECORD, "settled": SETTLED, "draft": OBJECT,
                 "withdrawn": OBJECT, "earlier_count": INTEGER,

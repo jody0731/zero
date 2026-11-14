@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZERO</title>
+<link rel="stylesheet" href="/ui/style.css">
+<script src="/ui/markdown.js" defer></script>
+<script src="/ui/app.js" defer></script>
+</head>
+<body>
+<div id="frame" class="frame">
+  <aside id="sessions" class="panel sessions" aria-label="Sessions">
+    <header class="panel-head">
+      <span class="brand">ZERO</span>
+      <button id="new-session" type="button">New</button>
+    </header>
+    <input id="search" class="search" type="search"
+           placeholder="Search" aria-label="Search">
+    <ul id="session-list" class="session-list" role="list"></ul>
+    <footer id="server-state" class="server-state" aria-live="polite"></footer>
+  </aside>
+  <div class="handle" data-handle="left"></div>
+  <main id="session" class="panel session" aria-label="Session">
+    <header class="panel-head session-head">
+      <button id="back" class="ghost back" type="button"
+              aria-label="Sessions">‹</button>
+      <div class="titles">
+        <h1 id="session-title"></h1>
+        <div id="session-sub" class="sub"></div>
+      </div>
+      <button id="details-toggle" class="ghost" type="button"
+              aria-label="Details">ⓘ</button>
+    </header>
+    <div id="timeline" class="timeline" tabindex="0"
+         aria-label="Timeline"></div>
+    <button id="follow" class="follow" type="button" hidden
+            aria-label="Newest">↓</button>
+    <section id="ask" class="ask" hidden aria-live="polite"></section>
+    <form id="composer" class="composer" autocomplete="off">
+      <textarea id="text" rows="2"
+                placeholder="Message" aria-label="Message"></textarea>
+      <div class="composer-row">
+        <label class="queue"><input id="queue" type="checkbox"> Queue</label>
+        <span class="spacer"></span>
+        <button id="stop" type="button" hidden>Stop</button>
+        <button id="send" class="primary" type="submit">Send</button>
+      </div>
+    </form>
+  </main>
+  <div class="handle" data-handle="right"></div>
+  <aside id="details" class="panel details" aria-label="Details"></aside>
+</div>
+<dialog id="new-dialog" class="dialog">
+  <form id="new-form" method="dialog">
+    <h2>New session</h2>
+    <label>Folder <input id="new-folder" required></label>
+    <label>Mode <select id="new-mode"></select></label>
+    <label>Message <textarea id="new-text" rows="4" required></textarea></label>
+    <p id="new-error" class="error" hidden></p>
+    <div class="composer-row">
+      <span class="spacer"></span>
+      <button value="cancel" class="ghost" type="button" id="new-cancel">Cancel</button>
+      <button value="start" class="primary" type="submit">Start</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>

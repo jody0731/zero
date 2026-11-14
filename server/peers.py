@@ -28,6 +28,12 @@ proves the user with the app token, the text of a file only the user reads
 (paths.app_token), made on first use and kept across restarts (Jupyter's
 and Tailscale's way). A wrong token is refused wherever it comes; a right
 one never lifts a ZERO command's limits, which the process tree decides.
+
+A relay (ZERO's HTTP door) sends on its own clients' behalf and names each
+request's client process in `relayed_for_pid` where the kernel told it (a
+loopback connection's owner): the server then decides by that process as if
+it had connected itself (`relayed`). Heeded only from the user's own client,
+so a ZERO command can't pass for another.
 """
 
 import hmac
@@ -161,6 +167,40 @@ def proven(conn, token, app_token):
     if token is None:
         raise PermissionError(UNPROVEN.format(path=app_token.path))
     return None
+
+
+def owner(pid):
+    """The user a process runs as (its real uid), or None once it has gone."""
+    try:
+        text = open(f"/proc/{pid}/status").read()
+    except (OSError, TypeError):
+        return None
+    for line in text.splitlines():
+        if line.startswith("Uid:"):
+            return int(line.split()[1])
+    return None
+
+
+# The no for a relay naming another user's process
+RELAYED_OTHER_USER = "the process this was relayed for is another user's"
+
+
+def relayed(pid, relayed_for, peers):
+    """The process a request is held to: `relayed_for`, the one a relay
+    (ZERO's HTTP door) names as its client, where the relay itself is the
+    user's own client; else the connection's own `pid`. A ZERO command that
+    names another process is held to itself, so naming one never lifts a
+    limit. PermissionError for another user's process."""
+    if relayed_for is None:
+        return pid
+    if type(relayed_for) is not int or relayed_for < 2:
+        raise PermissionError("relayed_for_pid is a process's id")
+    if pid is not None and peers.is_zero_command(pid):
+        return pid
+    found = owner(relayed_for)
+    if found is not None and found != os.getuid():
+        raise PermissionError(RELAYED_OTHER_USER)
+    return relayed_for
 
 
 def parent(pid):

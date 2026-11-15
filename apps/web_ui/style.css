@@ -22,7 +22,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #18191a;
     --panel: #202122;
     --raise: #292a2b;
@@ -36,6 +36,21 @@
     --accent: #ff6157;
     color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #18191a;
+  --panel: #202122;
+  --raise: #292a2b;
+  --line: #3c3c3c;
+  --ink: #ffffff;
+  --text: #eeeae5;
+  --text-2: #c8c4be;
+  --text-3: #aaa6a0;
+  --invert-bg: #eeeae5;
+  --invert-ink: #18191a;
+  --accent: #ff6157;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; border-radius: 0; }
@@ -500,4 +515,34 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
 .brand img { display: block; width: 100%; height: 100%; }
 @media (prefers-color-scheme: dark) {
   .turn > .who::before { background-image: url('/ui/favicon-dark.svg'); }
+}
+
+/* Message metadata and actions sit outside the user's shaded message. */
+.entry.you { padding: 0; background: none; }
+.entry.you .bubble { padding: 16px 20px; background: var(--panel);
+  border-radius: 6px; }
+.who { display: flex; align-items: center; gap: 4px; min-height: 22px; }
+.turn > .who::before { flex: 0 0 14px; margin-right: 4px; height: 22px; }
+:root[data-theme="light"] .turn > .who::before {
+  background-image: url('/ui/favicon-light.svg'); }
+:root[data-theme="dark"] .turn > .who::before {
+  background-image: url('/ui/favicon-dark.svg'); }
+.session-actions[open] { grid-column: 4; background: none; }
+.session-menu { position: fixed; inset: auto; margin: 0; width: 168px;
+  padding: 5px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--text);
+  box-shadow: 0 8px 24px #0003; }
+.session-actions[open] .session-menu button { border: 0; padding: 8px 10px;
+  background: transparent; }
+.session-actions[open] .session-menu button:hover { background: var(--panel); }
+.session-actions > summary::-webkit-details-marker { display: none; }
+.details-back { display: block; margin: 14px 16px 0 auto; border: 0;
+  font-size: 20px; line-height: 1; }
+#details-toggle { display: none; font-size: 20px; }
+.no-details #details-toggle { display: block; }
+#archived::before { content: "▤"; margin-right: 10px; font-size: 16px; }
+#settings-open::before { content: "⚙"; margin-right: 10px; font-size: 16px; }
+@media (max-width: 760px) {
+  #details-toggle { display: block; }
+  .entry.you { padding: 0; }
 }

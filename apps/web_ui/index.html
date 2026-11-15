@@ -31,8 +31,8 @@
       + New session
     </button>
     <ul id="session-list" class="session-list" role="list"></ul>
-    <button id="archived" type="button">Archived</button>
-    <button id="settings-open" type="button">Settings</button>
+    <button id="archived" aria-label="Archived" type="button">Archived</button>
+    <button id="settings-open" aria-label="Settings" type="button">Settings</button>
     <footer id="server-state" class="server-state" aria-live="polite"></footer>
   </aside>
   <div class="handle" data-handle="left"></div>
@@ -45,7 +45,7 @@
         <div id="session-sub" class="sub"></div>
       </div>
       <button id="details-toggle" class="ghost" type="button"
-              aria-label="Details">Details</button>
+              aria-label="Expand side panel" title="Expand side panel">◧</button>
     </header>
     <div id="timeline" class="timeline" tabindex="0"
          aria-label="Timeline"></div>

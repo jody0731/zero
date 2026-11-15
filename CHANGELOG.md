@@ -3,6 +3,17 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2.6
+
+- Appearance settings offer System, Light and Dark themes for this browser.
+  Theme changes apply immediately, including the wordmark and tab icon.
+- Session actions open in a compact popover without stretching the session row.
+- User names and times sit above shaded messages; rewind-and-edit sits below.
+  ZERO's dotted mark aligns with its name, and response actions stay below replies.
+- Archive and Settings have icons. The side panel owns its collapse control;
+  a small reopen control appears when it is closed.
+- Drafts save silently; a storage failure still explains that the draft is tab-only.
+
 ## 0.7.6.2.5
 
 - A lighter reading layout in light and dark themes, with compact session rows,

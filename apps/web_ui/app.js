@@ -922,8 +922,8 @@
   function saveComposerDraft() {
     const text = $("text").value;
     const saved = writeComposerDraft(state.open, text);
-    $("draft-status").textContent = !text ? "" : saved
-      ? "Draft saved" : "Draft kept in this tab only";
+    $("draft-status").textContent = !text || saved
+      ? "" : "Draft kept in this tab only";
   }
 
   function restoreComposerDraft() {
@@ -1042,8 +1042,13 @@
       $("timeline").append(welcome);
       return;
     }
-    const back = el("button", "details-back", "Back to conversation");
-    back.addEventListener("click", () => showPanel("session"));
+    const back = el("button", "details-back", "◨");
+    back.setAttribute("aria-label", "Collapse side panel");
+    back.title = "Collapse side panel";
+    back.addEventListener("click", () => {
+      $("frame").classList.add("no-details");
+      showPanel("session");
+    });
     panel.append(back, runsWithSection(row));
     const family = familySection(row);
     if (family) panel.append(family);
@@ -1498,12 +1503,27 @@
     const summary = el("summary", null, "⋯");
     summary.setAttribute("aria-label", `Actions for ${row.title || row.id}`);
     menu.append(summary);
+    const choices = el("div", "session-menu");
+    choices.setAttribute("popover", "auto");
+    menu.append(choices);
+    menu.addEventListener("toggle", () => {
+      if (!menu.open) { choices.hidePopover(); return; }
+      const bounds = summary.getBoundingClientRect();
+      choices.showPopover();
+      choices.style.left = `${Math.max(8, Math.min(bounds.right - 160,
+        window.innerWidth - 176))}px`;
+      choices.style.top = `${Math.max(8, Math.min(bounds.bottom + 4,
+        window.innerHeight - choices.offsetHeight - 8))}px`;
+    });
+    choices.addEventListener("toggle", () => {
+      if (!choices.matches(":popover-open")) menu.open = false;
+    });
     const actions = [
       ["Rename", async () => {
         const input = el("input", "rename");
         input.value = row.title || "";
         input.setAttribute("aria-label", "Session name");
-        menu.replaceChildren(input);
+        choices.replaceChildren(input);
         input.focus();
         input.select();
         input.addEventListener("keydown", async (event) => {
@@ -1558,7 +1578,7 @@
         }
         Promise.resolve(action()).catch((error) => alert(error.message));
       });
-      menu.append(button);
+      choices.append(button);
     }
     return menu;
   }
@@ -1879,7 +1899,7 @@
     state.settingsView = view;
     const tabs = $("settings-tabs");
     tabs.replaceChildren();
-    for (const name of ["Defaults", "Models", "Advanced"]) {
+    for (const name of ["Appearance", "Defaults", "Models", "Advanced"]) {
       const button = el("button", name === view ? "primary" : "", name);
       button.type = "button";
       button.addEventListener("click", () => {
@@ -1895,6 +1915,28 @@
     body.replaceChildren(el("p", "sub settings-intro", view === "Defaults"
       ? "Defaults for new sessions. Changes apply when you return to the conversation."
       : "Changes apply when you return to the conversation."));
+    if (view === "Appearance") {
+      body.replaceChildren();
+      const label = el("label", "setting-row", "Theme");
+      const select = el("select");
+      select.setAttribute("aria-label", "Theme");
+      for (const name of ["System", "Light", "Dark"]) {
+        const option = el("option", null, name);
+        option.value = name.toLowerCase();
+        select.append(option);
+      }
+      select.value = themePreference;
+      select.addEventListener("change", () => {
+        themePreference = select.value;
+        try { localStorage.setItem("zero.theme", themePreference); }
+        // This tab still uses the chosen theme if storage is unavailable.
+        catch (error) {}
+        applyTheme();
+      });
+      label.append(select);
+      body.append(label);
+      return;
+    }
     if (view === "Models") return modelServers(body);
     for (const setting of state.settings.filter((each) => each.shown
       && (view === "Defaults" ? each.group === "Default"
@@ -2108,8 +2150,33 @@
   $("archived").addEventListener("click", () => {
     state.archived = !state.archived;
     $("archived").textContent = state.archived ? "Active sessions" : "Archived";
+    $("archived").setAttribute("aria-label", $("archived").textContent);
     drawSessions();
   });
 
+  let themePreference = "system";
+  try { themePreference = localStorage.getItem("zero.theme") || "system"; }
+  // System appearance works without browser storage.
+  catch (error) {}
+  const darkScheme = matchMedia("(prefers-color-scheme: dark)");
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  function applyTheme() {
+    const dark = themePreference === "dark"
+      || (themePreference === "system" && darkScheme.matches);
+    const theme = dark ? "dark" : "light";
+    document.documentElement.dataset.theme = theme;
+    const still = reducedMotion.matches ? "-still" : "";
+    document.querySelectorAll(".brand source").forEach((source) => {
+      source.srcset = `/ui/wordmark-${theme}${still}.svg`;
+    });
+    document.querySelector(".brand img").src = `/ui/wordmark-${theme}${still}.svg`;
+    document.querySelectorAll('link[rel="icon"]').forEach((icon) => {
+      icon.removeAttribute("media");
+      icon.href = `/ui/favicon-${theme}.svg`;
+    });
+  }
+  darkScheme.addEventListener("change", applyTheme);
+  reducedMotion.addEventListener("change", applyTheme);
+  applyTheme();
   start();
 })();

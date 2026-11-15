@@ -1,7 +1,11 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/media/zero-logo-dark.svg">
-    <img src="docs/media/zero-logo-light.svg" alt="Z.E.R.O." width="360">
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)"
+      srcset="apps/web_ui/wordmark-dark-still.svg">
+    <source media="(prefers-reduced-motion: reduce)"
+      srcset="apps/web_ui/wordmark-light-still.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web_ui/wordmark-dark.svg">
+    <img src="apps/web_ui/wordmark-light.svg" alt="ZERO" width="360">
   </picture>
 </p>
 
@@ -20,15 +24,21 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/media/zero-screen-dark.svg">
-    <img src="docs/media/zero-screen-light.svg" alt="ZERO's TUI: a question, the command it ran and its answer" width="860">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/zero-web-dark.png">
+    <img src="docs/media/zero-web-light.png"
+      alt="ZERO's web UI: conversation, session trees and background jobs"
+      width="860">
   </picture>
 </p>
 
+<p align="center"><sub>The browser app in light and dark themes, shown with
+illustrative session data. Run <code>zero</code> to open it;
+<code>zero tui</code> opens the terminal app.</sub></p>
+
 - **Any model:** any server that speaks OpenAI's Chat Completions or Responses API. ZERO ships a catalog (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter, Ollama) and takes servers of your own; no model is built in. What a model honours of its API (thinking off, strict JSON) is measured, and a setting it can't honour shows unavailable.
-- **Many sessions:** each with its own workspace and history, opened, switched, renamed or archived from any terminal.
+- **Many sessions:** each with its own workspace and history, opened, switched, renamed or archived from the browser or terminal.
 - **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
-- **One server:** it runs every session. Turns, background jobs and waiting questions go on after the terminal closes, and every app reaches the server the same way.
+- **One server:** it runs every session. Turns, background jobs and waiting questions go on after the browser or terminal closes, and every app reaches the server the same way.
 - **Long sessions keep going:** near its line (the model's context window, or the one you set), a session's context is compacted: older outputs are saved to files, then ZERO writes itself a handoff. Nothing ZERO reads has a fixed cap: a long result past its share of the room is saved whole, and ZERO reads its start and end and where the rest is.
 - **Long work in rounds:** leave ZERO a long job (or send it with `--rounds`) and it works in rounds, each a turn that starts fresh from the last one's handoff, until its done check passes, it is stuck, or you stop it. ZERO states its estimate (rounds, time, dollars) and is told once if the work passes it; nothing stops at it. Nothing in a round waits on you: in default mode the judge answers what would have asked you.
 - **Subagents:** ZERO starts a subagent when it judges one fits: a session of its own under the one it works in, from a copy of the conversation so far or with its task alone, which reports back when it has finished. In default mode a subagent runs with the judge answering, its goal your words; subagents go two levels deep (a setting). Sessions message each other by id, and a message never answers a question. `usage` tells ZERO what a turn, a session and its subagents have used.
@@ -94,7 +104,15 @@ That lifts it for every program. Ubuntu's `apparmor` package also ships a profil
 
 ### Connect a model
 
-The first `zero` with no model opens **Connect a model**. Pick a server and paste its API key, or choose **Your own server…** and give its URL, a key if it takes one, a model it serves and, where the server doesn't say, its context window. ZERO makes a one-token test call before it saves anything, and the first model connected becomes new sessions' default. With a server connected but no default (its server removed, say), `zero` opens **New sessions' model** instead: a pick of the models known. Later, `/settings` → **Models and keys…** connects another model, takes a new key, tests a server or removes it.
+Run `zero` to open the browser, then **Settings → Models**. Enter a model name
+and an API key for a known model server, or use **Add a model server** with its
+name and API URL. **Test and connect** makes a small model call, which the server
+may charge for, before saving the connection. Pick the default model for new
+sessions in **Settings → General → Defaults**; the current session's model is
+selected in its right panel.
+
+The terminal app, `zero tui`, has its own first-run connection flow and
+**/settings → Models and keys…**. Both apps use the same saved connections.
 
 <details>
 <summary><b>The same, by hand</b>: ZERO's files in <code>~/.zero/</code></summary>
@@ -183,14 +201,16 @@ rewind. Unsent text is saved per session in this browser, including across reope
 A draft clears only after a successful send; newer edits stay. If browser storage is
 unavailable, the composer says the draft is kept only in the current tab.
 
-The page follows the system's light or dark theme. Its dotted wordmark respects
-reduced-motion preferences, and the standalone O marks the browser tab. Session
-rows are compact, with extra detail on the selected row. Browser Find searches
+**Settings → General → Appearance** selects System, Light or Dark for this
+browser; the choice applies immediately. The dotted wordmark respects reduced
+motion, and the standalone O marks the browser tab. Both session panels share
+compact tree rows and expansion state. Selection changes the highlight, not the
+row height. Browser Find searches
 loaded conversation text; ZERO can retrieve context from other sessions itself.
 
 Type `/` for commands; `/quit` belongs to the terminal, so close the browser tab to
-leave the web app. Settings separates new-session defaults, model-server
-connections and advanced settings. Edits stay while switching tabs and apply on
+leave the web app. Settings groups Appearance and Defaults under General, with separate Models
+and Advanced tabs. Edits stay while switching tabs and apply on
 **Back** or Escape; rejected values keep the view open with an inline error.
 Reading settings or model capabilities makes no
 paid model call. **Test and connect** explicitly tests a model server with a small
@@ -289,7 +309,10 @@ Over HTTP, the door takes the same request at `POST http://127.0.0.1:4747/api/re
 zero update
 ```
 
-It fetches the newest release for this machine (its code, its Python and its packages together), checks its sha256, tries it (its version, and that its Python loads ZERO's server), then switches to it in one step and shows what it brought; until that step the release you had runs, and a failed update leaves it running. The one before stays until the next update, unless something still runs from it. `zero --version` says which release you have. The server picks up the new code once it is idle, and the HTTP door at its next start; an update also writes the door's systemd units where they are missing or out of date. It never touches `~/.zero`.
+It fetches the newest release for this machine (its code, its Python and its packages together), checks its sha256, tries it (its version, and that its Python loads ZERO's server), then switches to it in one step and shows what it brought; until that step the release you had runs, and a failed update leaves it running. The one before stays until the next update, unless something still runs from it. `zero --version` says which release you have. The server picks up the new code once it is idle, and the update replaces a running HTTP door automatically, even when its systemd
+unit files have not changed. A stopped door stays stopped until needed. Refresh
+an open browser tab to load the new UI; no manual service restart is needed.
+An update also keeps the door's systemd units in place. It never touches `~/.zero`.
 
 <details>
 <summary><b>From a git clone</b>: ZERO before 0.7.5.3</summary>
@@ -321,6 +344,3 @@ It removes the command, the HTTP door's units and `~/.local/share/zero`, once ZE
 ---
 
 <p align="center"><sub>MIT license (a release's Python and packages under their own, inside it) · <a href="CHANGELOG.md">Changelog</a> · <a href="protocol/schema.json">Protocol schema</a></sub></p>
-
-Browser appearance: Settings → General → Appearance selects System, Light or Dark.
-This choice belongs to the browser and applies immediately. Drafts save silently.

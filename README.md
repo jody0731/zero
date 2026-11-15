@@ -322,5 +322,5 @@ It removes the command, the HTTP door's units and `~/.local/share/zero`, once ZE
 
 <p align="center"><sub>MIT license (a release's Python and packages under their own, inside it) · <a href="CHANGELOG.md">Changelog</a> · <a href="protocol/schema.json">Protocol schema</a></sub></p>
 
-Browser appearance: Settings → Appearance selects System, Light or Dark.
+Browser appearance: Settings → General → Appearance selects System, Light or Dark.
 This choice belongs to the browser and applies immediately. Drafts save silently.

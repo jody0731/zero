@@ -3,6 +3,17 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2.7
+
+- Both session panels share compact rows, elbow connectors and synchronized
+  expansion. Selection changes the highlight without changing the row height.
+- User messages align right; conversation width stays readable on wide screens.
+  Message actions sit close to their messages, and the title has no subtitle.
+- Light mode uses cleaner white and cool-neutral surfaces. Expanded thinking,
+  tools and background notices share a compact hierarchy.
+- General settings combine Appearance and Defaults. The workspace chooser has
+  clickable breadcrumbs, parent navigation and a clear Cancel action.
+
 ## 0.7.6.2.6
 
 - Appearance settings offer System, Light and Dark themes for this browser.

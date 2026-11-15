@@ -3,13 +3,13 @@
 
 :root {
   --bg: #ffffff;
-  --panel: #f1f0ee;
-  --raise: #e8e6e3;
-  --line: #dedbd6;
+  --panel: #f7f8fa;
+  --raise: #eef0f3;
+  --line: #e4e7eb;
   --ink: #202020;
   --text: #202020;
-  --text-2: #57534f;
-  --text-3: #66625e;
+  --text-2: #505761;
+  --text-3: #626b76;
   --invert-bg: #202020;
   --invert-ink: #ffffff;
   --font: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", system-ui,
@@ -253,16 +253,6 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 .meter { height: 8px; background: var(--raise); margin-top: 6px; }
 .meter > i { display: block; height: 100%; background: var(--ink); }
 .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
-.tree ul { margin-left: 6px; padding-left: 10px; border-left: 2px solid
-  var(--ink); }
-.tree li { margin: 2px 0; }
-.tree button { border: none; padding: 1px 4px; text-align: left; max-width: 100%;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 400; }
-.tree button:hover { background: var(--raise); color: var(--text); }
-.tree button.open { background: var(--invert-bg); color: var(--invert-ink); }
-.tree .kind { font-size: 10px; color: var(--text-3); margin-left: 4px;
-  text-transform: none; letter-spacing: 0; }
 .small-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
 .small-list li { margin: 3px 0; overflow-wrap: anywhere; font-family: var(--mono);
   font-size: 12px; }
@@ -359,20 +349,6 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 .job-group .job > summary { display: flex; align-items: center; gap: 8px; }
 .job-group .job > summary button { margin-left: auto; }
 .job-group pre { max-height: 240px; overflow: auto; }
-.session-family .tree ul {
-  margin-left: 10px; padding-left: 8px; border-left: 1px solid var(--line);
-}
-.tree-row { display: grid; grid-template-columns: 24px minmax(0, 1fr); }
-.tree .tree-toggle { padding: 7px 2px; text-align: center; font-size: 16px; }
-.tree .tree-session {
-  display: flex; flex-direction: column; padding: 7px 8px; min-width: 0;
-  text-align: left; white-space: normal; text-transform: none;
-}
-.tree-title { overflow-wrap: anywhere; }
-.tree-session .kind { font-size: 10px; }
- .tree-session[aria-current="true"] .kind { color: inherit; }
-.tree .tree-title { white-space: normal; }
-.tree .kind { margin-left: 0; }
 .settings-dialog header {
   position: sticky; top: 0; background: var(--bg); padding: 12px 20px;
 }
@@ -410,7 +386,6 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 @media (max-width: 760px) {
   .frame.show-details > .details { display: block; }
   .details > section { padding: 14px 16px; }
-  .tree .tree-session { padding-block: 9px; }
   #settings-tabs { padding-inline: 16px; }
   #settings-body { padding-inline: 16px; }
 }
@@ -479,16 +454,6 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
 .details > section { padding: 24px 20px; }
 .details h2 { font-size: 19px; letter-spacing: -.4px; margin-bottom: 18px; }
 .details dt { font-weight: 400; font-size: 12px; }
-.tree .tree-row { display: flex; align-items: center; min-width: 0; }
-.tree .tree-session { display: block; min-width: 0; padding: 4px 6px;
-  min-height: 28px; border-radius: 0; white-space: nowrap; }
-.tree .tree-title { overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; display: block; font-size: 12px; }
-.tree .kind { display: none; }
-.tree button.open { background: var(--panel); color: var(--text);
-  border-left: 3px solid var(--accent); }
-.tree ul { border-left: 1px solid var(--line); }
-.tree .tree-toggle { width: 22px; flex: none; padding: 2px; }
 .dialog { border-radius: 8px; }
 .dialog h2 { text-transform: none; letter-spacing: -.4px; font-size: 20px;
   background: var(--bg); color: var(--ink); }
@@ -508,7 +473,6 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
   .timeline { padding-inline: 16px; }
   .composer { margin: 0 12px 12px; padding: 10px 12px; }
   .entry.you { padding: 14px; }
-  .tree .tree-session { padding-block: 4px; }
   .details-back { align-self: start; }
 }
 
@@ -546,3 +510,83 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
   #details-toggle { display: block; }
   .entry.you { padding: 0; }
 }
+
+/* Shared reading width leaves useful margins on large and small screens. */
+.session { --reading-width: 860px; --reading-gutter: 24px; }
+.timeline { padding-inline: max(var(--reading-gutter),
+  calc((100% - var(--reading-width)) / 2)); }
+.session-head, .composer { width: calc(100% - 2 * var(--reading-gutter));
+  max-width: var(--reading-width); margin-inline: auto; }
+.session-head { min-height: 82px; }
+.entry.you { width: fit-content; max-width: min(680px, 84%);
+  margin-left: auto; }
+.entry.you .who { justify-content: flex-end; }
+.entry.you > .message-action { display: block; margin-left: auto; }
+.message-action { margin-top: 8px; line-height: 18px; }
+.turn > .message-action { display: block; }
+.reply > :last-child { margin-bottom: 0; }
+.turn-replies > :last-child { margin-bottom: 0; }
+.row, .row.open { height: 32px; min-height: 32px; }
+.row .where, .row.open .where { display: none; }
+.session-actions { grid-row: 1; }
+.session-branch { list-style: none; position: relative; }
+.session-children { list-style: none; padding: 0 0 0 16px; margin: 0; }
+.session-children > .session-branch::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: -8px;
+  border-left: 1px solid var(--text-3); pointer-events: none;
+}
+.session-children > .session-branch:last-child::before { bottom: auto;
+  height: 18px; }
+.session-children > .session-branch::after {
+  content: ""; position: absolute; left: -8px; top: 18px; width: 8px;
+  border-top: 1px solid var(--text-3); pointer-events: none;
+}
+.process > .process-step, .process > .notice {
+  margin: 0; padding: 4px 12px; border: 0;
+  border-left: 1px solid var(--line); margin-left: 6px;
+}
+.process details.thinking > summary, .process details.call > summary {
+  font: 12px/1.6 var(--font); padding: 4px 0;
+}
+.process > .notice .who { margin: 0 0 4px; min-height: 0; font-size: 12px; }
+.process > .notice .who b { font-size: 12px; font-weight: 500; }
+.process > .notice .bubble { padding: 0; background: none; font-size: 12px;
+  color: var(--text-2); }
+.settings-section-title { font-size: 15px; margin: 24px 0 12px; }
+.settings-section-title:first-child { margin-top: 16px; }
+.folder-navigation { margin: 0 0 12px; justify-content: space-between; }
+.folder-current { display: flex; align-items: center; flex-wrap: wrap;
+  gap: 2px; background: none; padding: 0 0 8px; }
+.folder-current button { max-width: 100%; overflow-wrap: anywhere;
+  text-align: left; }
+.folder-current button:disabled { opacity: 1; color: var(--text); }
+.folder-dialog .recent-folders { display: block; margin: 12px 0; }
+.recent-folders summary { cursor: pointer; font-size: 12px;
+  color: var(--text-2); margin-bottom: 8px; }
+.folder-footer { display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: 16px; }
+@media (max-width: 760px) {
+  .session { --reading-gutter: 16px; }
+  .entry.you { max-width: 90%; }
+  .session-children { padding-left: 12px; }
+}
+
+/* Both session views use the same rows, branches and expansion state. */
+.row { grid-template-columns: 16px minmax(0, 1fr) auto 24px; }
+.tree .row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 0 7px; padding: 4px 8px; border-left: 3px solid transparent;
+  border-radius: 0; font-size: 13px; }
+.tree .row.open { border-left-color: var(--accent); background: var(--bg); }
+.tree .row:hover { background: var(--raise); }
+.tree .session-children { margin: 0; border: 0; padding-left: 16px; }
+.tree-toggle, .tree .tree-toggle { width: 16px; min-width: 0; padding: 0;
+  border: 0; font: 12px/20px var(--font); background: transparent; }
+.session-children > .session-branch:last-child::before { height: 16px; }
+.session-children > .session-branch::after { top: 16px; }
+@media (max-width: 760px) {
+  .tree .session-children { padding-left: 12px; }
+}
+
+.row.open, .tree .row.open { background: var(--raise); }
+
+.tree li { margin: 0; }

@@ -1,6 +1,6 @@
 /* ZERO's web UI: the sessions, one session's timeline, and its details,
  * all from ZERO's server through the HTTP door; the page keeps nothing of its
- * own but browser pairing, unsent drafts and panel widths.
+ * own but browser pairing, unsent drafts, appearance and panel widths.
  *
  * Every request is one protocol message, whole (POST /api/request); one
  * stream (GET /api/events) brings the session list and the open session's
@@ -33,7 +33,7 @@
     settings: [], models: [], commandIndex: 0, launch: {},
     expandedJobs: new Map(), expandedFamilies: new Map(),
     settingsDraft: new Map(), settingsErrors: new Map(), settingsSaving: false,
-    settingsView: "Defaults", modelLookup: null,
+    settingsView: "General", modelLookup: null,
     rewindPoints: new Set(), composerDrafts: new Map(),
     jobs: new Map(), settingsDirty: false, features: new Map(), turnStarted: null,
   };
@@ -232,7 +232,7 @@
 
   function drawSessions() {
     const list = $("session-list");
-    const editing = new Map(Array.from(list.children).filter((item) =>
+    const editing = new Map(Array.from(list.querySelectorAll(".row")).filter((item) =>
       item.contains(document.activeElement) || item.querySelector("details[open]"))
       .map((item) => [item.dataset.session, item]));
     const rows = state.sessions.filter(
@@ -250,29 +250,26 @@
     const tops = rows.filter((row) => !row.parent || !ids.has(row.parent));
     tops.sort((a, b) => (stateWord(b) === "waiting") - (stateWord(a) === "waiting"));
     list.replaceChildren();
-    const add = (row, depth) => {
-      const kids = children.get(row.id) || [];
-      list.append(editing.get(row.id) || sessionRow(row, depth, kids.length));
-      if (depth < 1 || row.id === state.open || kids.some(
-        (kid) => kid.id === state.open)) {
-        for (const kid of kids) add(kid, depth + 1);
-      }
-    };
-    for (const row of tops) add(row, 0);
+    const seen = new Set();
+    for (const row of tops) {
+      const branch = sessionBranch(row, children, seen, false, editing);
+      if (branch) list.append(branch);
+    }
     if (!list.children.length) {
       list.append(el("li", "loading", "—"));
     }
   }
 
-  function sessionRow(row, depth, kids) {
-    const item = el("li", "row" + (depth ? " child" : "")
+  function sessionRow(row, kids, family = false) {
+    const item = el("div", "row" + (family ? " family-row tree-session" : "")
       + (row.id === state.open ? " open" : ""));
     item.tabIndex = 0;
     item.title = `${row.title || "Untitled"} · ${row.workspace || ""}`;
-    item.dataset.session = row.id;
-    item.style.marginLeft = depth ? `${16 * depth}px` : "";
+    if (family) item.dataset.familySession = row.id;
+    else item.dataset.session = row.id;
+    if (row.id === state.open) item.setAttribute("aria-current", "true");
     const dot = el("span", "dot" + (row.unseen ? " unseen" : ""));
-    const title = el("span", "title", row.title || "(untitled)");
+    const title = el("span", "title tree-title", row.title || "(untitled)");
     const word = stateWord(row);
     const badges = [];
     if (row.jobs) badges.push(`${row.jobs} job${row.jobs > 1 ? "s" : ""}`);
@@ -285,7 +282,8 @@
       row.started_by === "zero" ? "subagent" : (row.parent ? "fork" : ""),
       ...badges].filter(Boolean).join(" · "));
     where.title = row.workspace || "";
-    item.append(dot, title, status, where, sessionActions(row));
+    item.append(dot, title, status, where);
+    if (!family) item.append(sessionActions(row));
     item.addEventListener("click", (event) => {
       if (!event.target.closest("button, input, details")) openSession(row.id);
     });
@@ -293,6 +291,50 @@
       if (event.key === "Enter" && event.target === item) openSession(row.id);
     });
     return item;
+  }
+
+  function sessionBranch(row, children, seen, family, editing = new Map()) {
+    if (seen.has(row.id)) return null;
+    seen.add(row.id);
+    const kids = children.get(row.id) || [];
+    const branch = el("li", "session-branch");
+    const line = editing.get(row.id) || sessionRow(row, kids.length, family);
+    line.classList.toggle("open", row.id === state.open);
+    if (row.id === state.open) line.setAttribute("aria-current", "true");
+    else line.removeAttribute("aria-current");
+    branch.append(line);
+    if (!kids.length) return branch;
+    const nested = el("ul", "session-children");
+    nested.dataset.treeParent = row.id;
+    for (const kid of kids) {
+      const child = sessionBranch(kid, children, seen, family, editing);
+      if (child) nested.append(child);
+    }
+    const toggle = el("button", "tree-toggle");
+    toggle.type = "button";
+    toggle.dataset.treeToggle = row.id;
+    const update = (control, expanded) => {
+      control.textContent = expanded ? "▾" : "▸";
+      control.setAttribute("aria-expanded", String(expanded));
+      control.setAttribute("aria-label",
+        `${expanded ? "Collapse" : "Expand"} ${row.title || row.id}`);
+    };
+    const expanded = state.expandedFamilies.get(row.id) ?? true;
+    nested.hidden = !expanded;
+    update(toggle, expanded);
+    toggle.addEventListener("click", () => {
+      const expanded = !(state.expandedFamilies.get(row.id) ?? true);
+      state.expandedFamilies.set(row.id, expanded);
+      document.querySelectorAll("[data-tree-parent]").forEach((list) => {
+        if (list.dataset.treeParent === row.id) list.hidden = !expanded;
+      });
+      document.querySelectorAll("[data-tree-toggle]").forEach((control) => {
+        if (control.dataset.treeToggle === row.id) update(control, expanded);
+      });
+    });
+    line.firstElementChild.replaceWith(toggle);
+    branch.append(nested);
+    return branch;
   }
 
   function rowOf(id) {
@@ -355,7 +397,6 @@
     state.open = null;
     restoreComposerDraft();
     $("session-title").textContent = "";
-    $("session-sub").textContent = "";
     $("timeline").replaceChildren();
     showPanel("sessions");
     drawAsk();
@@ -428,7 +469,6 @@
   function drawHead() {
     const row = rowOf(state.open);
     $("session-title").textContent = row ? row.title || row.id : state.open || "";
-    $("session-sub").textContent = row ? folderName(row.workspace) : "";
   }
 
   async function markSeen() {
@@ -1163,11 +1203,15 @@
   function chooseWorkspace(initial, chosen) {
     const dialog = actionDialog("Choose workspace");
     dialog.classList.add("folder-dialog");
+    const close = dialog.querySelector("button");
+    close.textContent = "Cancel";
     const navigation = el("nav", "folder-navigation");
+    navigation.setAttribute("aria-label", "Folder navigation");
     const home = el("button", "ghost", "Home");
-    const up = el("button", "ghost", "Up");
+    const up = el("button", "ghost", "↑ Parent folder");
     navigation.append(home, up);
-    const current = el("div", "folder-current");
+    const current = el("nav", "folder-current");
+    current.setAttribute("aria-label", "Current folder");
     const folders = el("div", "folder-list");
     const status = el("p", "error");
     status.setAttribute("role", "alert");
@@ -1185,8 +1229,21 @@
         });
         if (request !== version || !dialog.open) return;
         selected = reply.path;
-        current.textContent = selected;
-        current.title = selected;
+        current.replaceChildren();
+        const root = el("button", "ghost", "/");
+        root.setAttribute("aria-label", "Filesystem root");
+        root.addEventListener("click", () => show("/"));
+        current.append(root);
+        const parts = selected.split("/").filter(Boolean);
+        parts.forEach((part, index) => {
+          const path = "/" + parts.slice(0, index + 1).join("/");
+          const crumb = el("button", "ghost", part);
+          crumb.title = path;
+          crumb.disabled = index === parts.length - 1;
+          crumb.addEventListener("click", () => show(path));
+          if (index) current.append(el("span", "sub", "/"));
+          current.append(crumb);
+        });
         up.disabled = !reply.parent;
         up.onclick = () => show(reply.parent);
         if (!after) folders.replaceChildren();
@@ -1215,7 +1272,8 @@
       }
     };
     home.addEventListener("click", () => show(null));
-    const recent = el("div", "recent-folders");
+    const recent = el("details", "recent-folders");
+    recent.append(el("summary", null, "Recent workspaces"));
     for (const path of [...new Set(state.sessions.map((row) => row.workspace))]
       .filter(Boolean).slice(0, 5)) {
       const button = el("button", "ghost", folderName(path));
@@ -1234,7 +1292,9 @@
         choose.disabled = false;
       }
     });
-    dialog.append(navigation, recent, current, folders, status, choose);
+    const footer = el("div", "folder-footer");
+    footer.append(close, choose);
+    dialog.append(navigation, current, folders, recent, status, footer);
     show(initial || null);
   }
 
@@ -1333,56 +1393,9 @@
     if (top === row && !children.has(row.id)) return null;
     const section = el("section", "session-family");
     section.append(el("h2", null, "Session tree"));
-    const seen = new Set();
-    const branch = (session) => {
-      if (seen.has(session.id)) return null;
-      seen.add(session.id);
-      const item = el("li");
-      const line = el("div", "tree-row");
-      const kids = children.get(session.id) || [];
-      const toggle = el("button", "tree-toggle", kids.length ? "−" : "·");
-      toggle.type = "button";
-      toggle.disabled = !kids.length;
-      const button = el("button", "tree-session"
-        + (session.id === state.open ? " open" : ""));
-      button.type = "button";
-      button.title = session.title || session.id;
-      if (session.id === state.open) button.setAttribute("aria-current", "true");
-      button.append(el("span", "tree-title", session.title || session.id),
-        el("span", "kind", [session.parent
-          ? session.started_by === "zero" ? "Subagent" : "Fork" : "Root",
-          stateWord(session)].join(" · ")));
-      button.addEventListener("click", () => openSession(session.id));
-      line.append(toggle, button);
-      item.append(line);
-      if (kids.length) {
-        const list = el("ul");
-        for (const kid of kids) {
-          const child = branch(kid);
-          if (child) list.append(child);
-        }
-        const key = `${state.open}:${session.id}`;
-        let expanded = state.expandedFamilies.get(key) ?? ancestors.has(session.id);
-        const update = () => {
-          list.hidden = !expanded;
-          toggle.textContent = expanded ? "−" : "+";
-          toggle.setAttribute("aria-expanded", String(expanded));
-          toggle.setAttribute("aria-label",
-            `${expanded ? "Collapse" : "Expand"} ${session.title || session.id}`);
-        };
-        toggle.addEventListener("click", () => {
-          expanded = !expanded;
-          state.expandedFamilies.set(key, expanded);
-          update();
-        });
-        update();
-        item.append(list);
-      }
-      return item;
-    };
     const tree = el("ul", "tree");
     tree.setAttribute("aria-label", "Related sessions");
-    tree.append(branch(top));
+    tree.append(sessionBranch(top, children, new Set(), true));
     section.append(tree);
     return section;
   }
@@ -1888,7 +1901,7 @@
     if (!reply.grants.length) dialog.append(el("p", null, "No saved grants"));
   }
 
-  async function openSettings(view = "Defaults") {
+  async function openSettings(view = "General") {
     const dialog = $("settings-dialog");
     if (!dialog.open) {
       state.settingsDraft.clear();
@@ -1899,7 +1912,7 @@
     state.settingsView = view;
     const tabs = $("settings-tabs");
     tabs.replaceChildren();
-    for (const name of ["Appearance", "Defaults", "Models", "Advanced"]) {
+    for (const name of ["General", "Models", "Advanced"]) {
       const button = el("button", name === view ? "primary" : "", name);
       button.type = "button";
       button.addEventListener("click", () => {
@@ -1912,11 +1925,11 @@
       tabs.append(button);
     }
     const body = $("settings-body");
-    body.replaceChildren(el("p", "sub settings-intro", view === "Defaults"
+    body.replaceChildren(el("p", "sub settings-intro", view === "General"
       ? "Defaults for new sessions. Changes apply when you return to the conversation."
       : "Changes apply when you return to the conversation."));
-    if (view === "Appearance") {
-      body.replaceChildren();
+    if (view === "General") {
+      body.replaceChildren(el("h3", "settings-section-title", "Appearance"));
       const label = el("label", "setting-row", "Theme");
       const select = el("select");
       select.setAttribute("aria-label", "Theme");
@@ -1934,12 +1947,12 @@
         applyTheme();
       });
       label.append(select);
-      body.append(label);
-      return;
+      body.append(label, el("h3", "settings-section-title", "Defaults"),
+        el("p", "sub", "For new sessions. Applied when you leave settings."));
     }
     if (view === "Models") return modelServers(body);
     for (const setting of state.settings.filter((each) => each.shown
-      && (view === "Defaults" ? each.group === "Default"
+      && (view === "General" ? each.group === "Default"
         : each.group !== "Default"))) {
       const form = el("div", "setting-row");
       const label = el("label", null, setting.label);
@@ -1988,7 +2001,7 @@
           state.settingsErrors.delete(name);
         } catch (error) {
           state.settingsErrors.set(name, error.message);
-          await openSettings(setting.group === "Default" ? "Defaults" : "Advanced");
+          await openSettings(setting.group === "Default" ? "General" : "Advanced");
           $("settings-body").querySelector(`[data-setting="${name}"]`)?.focus();
           return;
         }

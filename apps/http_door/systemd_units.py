@@ -145,9 +145,11 @@ def install(paths, command=None, folder=None, run=subprocess.run):
     ok, said = systemctl("enable", "--now", f"{unit}.socket", run=run)
     if not ok:
         return False, f"systemd couldn't hold 127.0.0.1:{paths.http_door_port}: {said}"
-    # A changed service runs its new command from its next start
-    if changed:
-        systemctl("stop", f"{unit}.service", run=run)
+    # The current symlink can change while the unit text stays identical.
+    # Replace a running door; an idle one stays stopped until the next request.
+    ok, said = systemctl("try-restart", f"{unit}.service", run=run)
+    if not ok:
+        return False, f"systemctl try-restart {unit}.service: {said}"
     return True, (f"systemd holds 127.0.0.1:{paths.http_door_port} for ZERO's "
                   f"HTTP door ({unit}.socket in {folder})")
 

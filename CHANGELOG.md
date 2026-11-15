@@ -3,6 +3,12 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2.8
+
+- Updating replaces a running HTTP door even when its systemd unit files have
+  not changed. Refresh an open browser page to load the new UI. A stopped door
+  stays stopped until needed; ZERO's working sessions remain in its server.
+
 ## 0.7.6.2.7
 
 - Both session panels share compact rows, elbow connectors and synchronized

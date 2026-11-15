@@ -31,6 +31,9 @@
     hiddenTimer: null, seenSent: 0, turn: null, archived: false,
     stoppingJobs: new Set(), detailsVersion: 0,
     settings: [], models: [], commandIndex: 0, launch: {},
+    expandedJobs: new Map(), expandedFamilies: new Map(),
+    settingsDraft: new Map(), settingsErrors: new Map(), settingsSaving: false,
+    settingsView: "Defaults", modelLookup: null,
     jobs: new Map(), settingsDirty: false, features: new Map(), turnStarted: null,
   };
 
@@ -885,6 +888,9 @@
         state.commandIndex = (state.commandIndex
           + (event.key === "ArrowDown" ? 1 : choices.length - 1)) % choices.length;
         drawCommands(false);
+        $("commands").querySelector(".primary")?.scrollIntoView({
+          block: "nearest", inline: "nearest",
+        });
         return;
       }
       if (event.key === "Escape") {
@@ -917,6 +923,12 @@
     drawUsage();
     const version = ++state.detailsVersion;
     if (row && (state.settingsDirty || panel.contains(document.activeElement))) {
+      const family = familySection(row);
+      const oldFamily = panel.querySelector(".session-family");
+      if (oldFamily) {
+        if (family) oldFamily.replaceWith(family);
+        else oldFamily.remove();
+      } else if (family) panel.append(family);
       const work = await workSection(row);
       if (version === state.detailsVersion && state.open === row.id) {
         const old = panel.querySelector("#background-jobs");
@@ -956,10 +968,13 @@
 
   function fieldInput(setting, value) {
     let input;
-    if (setting.kind === "choice" || setting.kind === "mode") {
+    if (["choice", "mode", "model"].includes(setting.kind)) {
       input = el("select");
       const choices = setting.kind === "mode"
-        ? (state.hello.modes || []).map((mode) => mode.name) : setting.choices;
+        ? (state.hello.modes || []).map((mode) => mode.name)
+        : setting.kind === "model"
+          ? [...new Set([value, ...state.models].filter(Boolean))]
+          : setting.choices;
       if (setting.unset_means) {
         const unset = el("option", null, setting.unset_means);
         unset.value = "";
@@ -978,57 +993,193 @@
         input.min = setting.minimum;
         if (setting.maximum !== null) input.max = setting.maximum;
       }
-      if (setting.kind === "model") input.setAttribute("list", "models");
+
     }
     input.value = value === null || value === undefined ? "" : value;
     input.setAttribute("aria-label", setting.label);
+    if (setting.kind === "model") {
+      input.dataset.modelPicker = "true";
+      input.addEventListener("focus", () => refreshModels());
+    }
     return input;
+  }
+
+  async function refreshModels() {
+    if (!state.modelLookup) state.modelLookup = look("model/list");
+    try {
+      const reply = await state.modelLookup;
+      const found = reply.servers.flatMap((server) => server.models || []);
+      if (found.length) state.models = [...new Set(found)].sort();
+      for (const select of document.querySelectorAll("[data-model-picker]")) {
+        const current = select.value;
+        const unset = select.querySelector('option[value=""]')?.textContent;
+        select.replaceChildren();
+        if (unset) {
+          const option = el("option", null, unset);
+          option.value = "";
+          select.append(option);
+        }
+        for (const model of new Set([current, ...state.models].filter(Boolean))) {
+          const option = el("option", null, model);
+          option.value = model;
+          select.append(option);
+        }
+        select.value = current;
+      }
+    } catch (_) {
+      state.modelLookup = null;
+    }
+  }
+
+  function workspaceControl(value, chosen) {
+    const wrapper = el("div", "workspace-control");
+    wrapper.append(el("span", "field-label", "Folder"));
+    const line = el("div", "workspace-line");
+    const path = el("span", "workspace-path", value || "Home");
+    path.title = value || "Home";
+    const button = el("button", "ghost", "Choose…");
+    button.type = "button";
+    button.setAttribute("aria-label", "Choose workspace");
+    button.addEventListener("click", () => chooseWorkspace(value, async (folder) => {
+      await chosen(folder, button);
+      value = folder;
+      path.textContent = folder;
+      path.title = folder;
+    }));
+    line.append(path, button);
+    wrapper.append(line);
+    return wrapper;
+  }
+
+  function chooseWorkspace(initial, chosen) {
+    const dialog = actionDialog("Choose workspace");
+    dialog.classList.add("folder-dialog");
+    const navigation = el("nav", "folder-navigation");
+    const home = el("button", "ghost", "Home");
+    const up = el("button", "ghost", "Up");
+    navigation.append(home, up);
+    const current = el("div", "folder-current");
+    const folders = el("div", "folder-list");
+    const status = el("p", "error");
+    status.setAttribute("role", "alert");
+    const choose = el("button", "primary", "Use this folder");
+    let selected = null;
+    let version = 0;
+    const show = async (path, after) => {
+      const request = ++version;
+      status.textContent = "";
+      choose.disabled = true;
+      if (!after) folders.replaceChildren(el("p", "sub", "Opening…"));
+      try {
+        const reply = await look("workspace/list", {
+          ...(path ? { path } : {}), ...(after ? { after } : {}),
+        });
+        if (request !== version || !dialog.open) return;
+        selected = reply.path;
+        current.textContent = selected;
+        current.title = selected;
+        up.disabled = !reply.parent;
+        up.onclick = () => show(reply.parent);
+        if (!after) folders.replaceChildren();
+        for (const folder of reply.folders) {
+          const button = el("button", "folder-choice", folder.name);
+          button.type = "button";
+          button.addEventListener("click", () => show(folder.path));
+          folders.append(button);
+        }
+        if (reply.next_after) {
+          const more = el("button", "ghost", "More folders");
+          more.addEventListener("click", () => {
+            more.remove();
+            show(selected, reply.next_after);
+          });
+          folders.append(more);
+        }
+        if (!folders.children.length) folders.append(el("p", "sub", "No subfolders"));
+        choose.disabled = false;
+      } catch (error) {
+        if (request === version) {
+          selected = null;
+          folders.replaceChildren();
+          status.textContent = error.message;
+        }
+      }
+    };
+    home.addEventListener("click", () => show(null));
+    const recent = el("div", "recent-folders");
+    for (const path of [...new Set(state.sessions.map((row) => row.workspace))]
+      .filter(Boolean).slice(0, 5)) {
+      const button = el("button", "ghost", folderName(path));
+      button.title = path;
+      button.addEventListener("click", () => show(path));
+      recent.append(button);
+    }
+    choose.addEventListener("click", async () => {
+      if (!selected) return;
+      choose.disabled = true;
+      try {
+        await chosen(selected);
+        dialog.close();
+      } catch (error) {
+        status.textContent = error.message;
+        choose.disabled = false;
+      }
+    });
+    dialog.append(navigation, recent, current, folders, status, choose);
+    show(initial || null);
   }
 
   function runsWithSection(row) {
     const section = el("section");
     section.append(el("h2", null, "Session"));
-    const form = el("form", "session-settings");
+    const form = el("div", "session-settings");
     const runs = state.runsWith || {};
     const inputs = {};
-    form.addEventListener("input", () => { state.settingsDirty = true; });
+    const status = el("div", "sub save-status");
+    status.setAttribute("aria-live", "polite");
+    const apply = async (name, value, control) => {
+      const previous = name === "thinking_effort" ? runs[name] : row[name];
+      control.disabled = true;
+      state.settingsDirty = true;
+      status.textContent = "Updating…";
+      try {
+        const reply = await change("session/set", {
+          session: row.id, [name]: value,
+        });
+        if (state.open === row.id) {
+          state.runsWith = { ...state.runsWith, ...reply.set };
+          Object.assign(rowOf(row.id) || row, reply.set);
+        }
+        Object.assign(runs, reply.set);
+        status.textContent = reply.next_turn ? "Applies next turn" : "Updated";
+      } catch (error) {
+        if (control.tagName === "SELECT") control.value = previous || "";
+        status.textContent = error.message;
+        throw error;
+      } finally {
+        state.settingsDirty = false;
+        control.disabled = false;
+      }
+    };
     for (const [name, label, value] of [
       ["mode", "Mode", row.mode], ["model", "Model", row.model],
-      ["workspace", "Folder", row.workspace],
       ["thinking_effort", "Thinking", runs.thinking_effort],
     ]) {
       const setting = state.settings.find((each) => each.name === name)
-        || { kind: name === "mode" ? "mode" : name === "model" ? "model"
-          : "text", label };
+        || { kind: name === "thinking_effort" ? "choice" : name,
+          choices: value ? [value] : [], label };
       const input = fieldInput({ ...setting, label }, value);
       const wrapper = el("label", null, label);
       wrapper.append(input);
       form.append(wrapper);
       inputs[name] = input;
+      input.addEventListener("change", () => {
+        apply(name, input.value, input).catch(() => {});
+      });
     }
-    const status = el("div", "sub");
-    status.setAttribute("aria-live", "polite");
-    const save = el("button", null, "Apply");
-    save.type = "submit";
-    form.append(save, status);
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      save.disabled = true;
-      try {
-        const fields = Object.fromEntries(Object.entries(inputs)
-          .map(([name, input]) => [name, input.value.trim()])
-          .filter(([, value]) => value !== ""));
-        const reply = await change("session/set", { session: row.id, ...fields });
-        state.runsWith = { ...runs, ...reply.set };
-        Object.assign(row, reply.set);
-        state.settingsDirty = false;
-        status.textContent = reply.next_turn ? "Applies next turn" : "Saved";
-      } catch (error) {
-        status.textContent = error.message;
-      } finally {
-        save.disabled = false;
-      }
-    });
+    form.append(workspaceControl(row.workspace, async (folder, button) => {
+      await apply("workspace", folder, button);
+    }), status);
     const capabilities = async () => {
       const model = inputs.model.value.trim();
       if (!model) return;
@@ -1059,38 +1210,69 @@
   }
 
   function familySection(row) {
-    // The whole family: up to its first session, then everything under it
     let top = row;
-    const seen = new Set();
-    while (top.parent && rowOf(top.parent) && !seen.has(top.id)) {
-      seen.add(top.id);
+    const ancestors = new Set([row.id]);
+    while (top.parent && rowOf(top.parent) && !ancestors.has(top.parent)) {
       top = rowOf(top.parent);
+      ancestors.add(top.id);
     }
-    const section = el("section");
-    section.append(el("h2", null, "Family"));
-    const kids = (id) => state.sessions.filter((each) => each.parent === id)
-      .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
-    if (top === row && !kids(row.id).length) return null;
-    const branch = (node) => {
+    const children = new Map();
+    for (const session of state.sessions) {
+      if (!children.has(session.parent)) children.set(session.parent, []);
+      children.get(session.parent).push(session);
+    }
+    if (top === row && !children.has(row.id)) return null;
+    const section = el("section", "session-family");
+    section.append(el("h2", null, "Session tree"));
+    const seen = new Set();
+    const branch = (session) => {
+      if (seen.has(session.id)) return null;
+      seen.add(session.id);
       const item = el("li");
-      const button = el("button", node.id === state.open ? "open" : "",
-        node.title || node.id);
+      const line = el("div", "tree-row");
+      const kids = children.get(session.id) || [];
+      const toggle = el("button", "tree-toggle", kids.length ? "−" : "·");
+      toggle.type = "button";
+      toggle.disabled = !kids.length;
+      const button = el("button", "tree-session"
+        + (session.id === state.open ? " open" : ""));
       button.type = "button";
-      button.addEventListener("click", () => openSession(node.id));
-      item.append(button);
-      const kind = node.parent ? (node.started_by === "zero" ? "subagent" : "fork")
-        : "first";
-      item.append(el("span", "kind", node.parent ? `${kind} · ${stateWord(node)}`
-        : stateWord(node)));
-      const under = kids(node.id);
-      if (under.length) {
+      button.title = session.title || session.id;
+      if (session.id === state.open) button.setAttribute("aria-current", "true");
+      button.append(el("span", "tree-title", session.title || session.id),
+        el("span", "kind", [session.parent
+          ? session.started_by === "zero" ? "Subagent" : "Fork" : "Root",
+          stateWord(session)].join(" · ")));
+      button.addEventListener("click", () => openSession(session.id));
+      line.append(toggle, button);
+      item.append(line);
+      if (kids.length) {
         const list = el("ul");
-        for (const kid of under) list.append(branch(kid));
+        for (const kid of kids) {
+          const child = branch(kid);
+          if (child) list.append(child);
+        }
+        const key = `${state.open}:${session.id}`;
+        let expanded = state.expandedFamilies.get(key) ?? ancestors.has(session.id);
+        const update = () => {
+          list.hidden = !expanded;
+          toggle.textContent = expanded ? "−" : "+";
+          toggle.setAttribute("aria-expanded", String(expanded));
+          toggle.setAttribute("aria-label",
+            `${expanded ? "Collapse" : "Expand"} ${session.title || session.id}`);
+        };
+        toggle.addEventListener("click", () => {
+          expanded = !expanded;
+          state.expandedFamilies.set(key, expanded);
+          update();
+        });
+        update();
         item.append(list);
       }
       return item;
     };
     const tree = el("ul", "tree");
+    tree.setAttribute("aria-label", "Related sessions");
     tree.append(branch(top));
     section.append(tree);
     return section;
@@ -1128,6 +1310,23 @@
         });
         section.append(all);
       }
+      const groups = new Map();
+      for (const [name, items] of [
+        ["Running", running],
+        ["Finished", reply.jobs.filter((job) => job.state !== "running")],
+      ]) {
+        const group = el("details", "job-group");
+        group.dataset.group = name;
+        const key = `${row.id}:${name}`;
+        group.open = state.expandedJobs.get(key) ?? name === "Running";
+        group.addEventListener("toggle", () => {
+          if (group.isConnected) state.expandedJobs.set(key, group.open);
+        });
+        group.append(el("summary", null, `${name} · ${items.length}`));
+        if (!items.length) group.append(el("p", "sub", "None"));
+        groups.set(name, group);
+        section.append(group);
+      }
       for (const job of reply.jobs) {
         state.jobs.set(job.id, job);
         if (job.state !== "running") state.stoppingJobs.delete(job.id);
@@ -1139,9 +1338,15 @@
             old.replaceWith(fresh);
           }
         }
-        section.append(jobView(job));
+        const item = jobView(job);
+        const key = `${row.id}:job:${job.id}`;
+        item.open = state.expandedJobs.get(key) || false;
+        item.addEventListener("toggle", () => {
+          if (item.isConnected) state.expandedJobs.set(key, item.open);
+        });
+        groups.get(job.state === "running" ? "Running" : "Finished").append(item);
       }
-      if (!reply.jobs.length) section.append(el("div", "sub", "No jobs"));
+
     } catch (error) {
       section.append(el("div", "error", error.message));
     }
@@ -1302,6 +1507,12 @@
     $("new-error").hidden = true;
     dialog.showModal();
   }
+
+  $("new-folder-choose").addEventListener("click", () => {
+    chooseWorkspace($("new-folder").value, async (folder) => {
+      $("new-folder").value = folder;
+    });
+  });
 
   $("new-mode").addEventListener("change", () => {
     $("new-mode").title = modeAbout($("new-mode").value);
@@ -1540,54 +1751,100 @@
 
   async function openSettings(view = "Defaults") {
     const dialog = $("settings-dialog");
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) {
+      state.settingsDraft.clear();
+      state.settingsErrors.clear();
+      state.settings = (await look("setting/list")).settings;
+      dialog.showModal();
+    }
+    state.settingsView = view;
     const tabs = $("settings-tabs");
     tabs.replaceChildren();
     for (const name of ["Defaults", "Models", "Advanced"]) {
       const button = el("button", name === view ? "primary" : "", name);
+      button.type = "button";
       button.addEventListener("click", () => {
         openSettings(name).catch((error) => {
-          $("settings-body").textContent = error.message;
+          if (state.settingsView === name && dialog.open) {
+            $("settings-body").textContent = error.message;
+          }
         });
       });
       tabs.append(button);
     }
     const body = $("settings-body");
-    body.replaceChildren(el("p", "sub", view === "Defaults"
-      ? "Defaults for new sessions. Existing sessions keep their settings."
-      : "Changes are saved individually. Limits also apply to open sessions."));
+    body.replaceChildren(el("p", "sub settings-intro", view === "Defaults"
+      ? "Defaults for new sessions. Changes apply when you return to the conversation."
+      : "Changes apply when you return to the conversation."));
     if (view === "Models") return modelServers(body);
-    const reply = await look("setting/list");
-    state.settings = reply.settings;
-    for (const setting of reply.settings.filter((each) => each.shown
+    for (const setting of state.settings.filter((each) => each.shown
       && (view === "Defaults" ? each.group === "Default"
         : each.group !== "Default"))) {
-      const form = el("form", "setting-row");
+      const form = el("div", "setting-row");
       const label = el("label", null, setting.label);
-      const input = fieldInput(setting, setting.value);
+      const value = state.settingsDraft.has(setting.name)
+        ? state.settingsDraft.get(setting.name) : setting.value;
+      const input = fieldInput(setting, value);
+      input.dataset.setting = setting.name;
       label.append(input);
-      const save = el("button", null, "Save");
-      save.type = "submit";
-      const status = el("span", "sub");
-      form.append(label, save, status);
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        save.disabled = true;
-        try {
-          const value = input.value === "" && setting.unset_means ? null
-            : ["int", "number"].includes(setting.kind)
-              ? Number(input.value) : input.value;
-          await change("setting/set", { name: setting.name, value });
-          status.textContent = "Saved";
-        } catch (error) { status.textContent = error.message; }
-        finally { save.disabled = false; }
+      const status = el("span", "error setting-error",
+        state.settingsErrors.get(setting.name) || "");
+      status.hidden = !status.textContent;
+      form.append(label, status);
+      input.addEventListener("input", () => {
+        state.settingsDraft.set(setting.name, input.value);
+        state.settingsErrors.delete(setting.name);
+        status.hidden = true;
       });
       body.append(form);
     }
   }
 
+  async function leaveSettings() {
+    if (state.settingsSaving) return;
+    state.settingsSaving = true;
+    const back = $("settings-close");
+    back.disabled = true;
+    back.textContent = "Updating…";
+    const controls = [...$("settings-dialog").querySelectorAll(
+      "input, select, button")].filter((control) => !control.disabled);
+    for (const control of controls) control.disabled = true;
+    try {
+      for (const [name, raw] of state.settingsDraft) {
+        const setting = state.settings.find((each) => each.name === name);
+        try {
+          let value = raw;
+          if (raw === "" && setting.unset_means) value = null;
+          else if (["int", "number"].includes(setting.kind)) {
+            if (raw === "" || !Number.isFinite(Number(raw))) {
+              throw new Error("Enter a number");
+            }
+            value = Number(raw);
+          }
+          await change("setting/set", { name, value });
+          setting.value = value;
+          state.settingsDraft.delete(name);
+          state.settingsErrors.delete(name);
+        } catch (error) {
+          state.settingsErrors.set(name, error.message);
+          await openSettings(setting.group === "Default" ? "Defaults" : "Advanced");
+          $("settings-body").querySelector(`[data-setting="${name}"]`)?.focus();
+          return;
+        }
+      }
+      $("settings-dialog").close();
+      drawDetails();
+    } finally {
+      state.settingsSaving = false;
+      for (const control of controls) control.disabled = false;
+      back.disabled = false;
+      back.textContent = "Back";
+    }
+  }
+
   async function modelServers(body) {
     const reply = await look("model/server/list");
+    if (state.settingsView !== "Models" || !$("settings-dialog").open) return;
     body.replaceChildren(el("p", "sub",
       "Connecting tests a few tokens with the model server, which may charge."));
     for (const server of [...reply.servers,
@@ -1626,6 +1883,8 @@
           if (key.value) fields.key = key.value;
           await change("model/server/connect", fields);
           key.value = "";
+          state.modelLookup = null;
+          refreshModels();
           status.textContent = "Connected";
         } catch (error) { status.textContent = error.message; }
         finally { connect.disabled = false; }
@@ -1649,7 +1908,11 @@
   $("settings-open").addEventListener("click", () => {
     openSettings().catch((error) => alert(error.message));
   });
-  $("settings-close").addEventListener("click", () => $("settings-dialog").close());
+  $("settings-close").addEventListener("click", leaveSettings);
+  $("settings-dialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    leaveSettings();
+  });
 
   // ------------------------------------------------------------ start
 
@@ -1687,14 +1950,6 @@
       const listed = await look("model/server/list").catch(() => ({ servers: [] }));
       state.models = listed.servers.flatMap((server) =>
         Object.keys(server.models || {}).map((model) => `${server.name}/${model}`));
-      const models = el("datalist");
-      models.id = "models";
-      for (const model of state.models) {
-        const option = el("option");
-        option.value = model;
-        models.append(option);
-      }
-      document.body.append(models);
     } catch (error) {
       $("server-state").textContent = error.message;
       return;

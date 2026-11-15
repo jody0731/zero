@@ -82,6 +82,7 @@ from jobs.hooks import JobLimit, RunningJobs
 from shell import SETTINGS as SHELL_SETTINGS
 from files import SETTINGS as FILE_SETTINGS
 from files.seen import ChangedFiles, SeenFiles
+from files.service import FilesService
 from web import SETTINGS as WEB_SETTINGS
 from web.tool import web_clients
 from judge import SETTINGS as JUDGE_SETTINGS
@@ -700,7 +701,7 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
             ModelService(), ContextService(), RoundsService(),
             SubagentsService(), SessionSearchService(),
             McpServersService(mcp_servers, LiveSettings(config)),
-            SandboxService()]
+            SandboxService(), FilesService()]
 
 
 # What ZERO needs from the machine, each need's check, declared here once

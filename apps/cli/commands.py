@@ -60,6 +60,7 @@ NAME = "ZERO"
 FAMILIES = ("session", "job", "rounds", "grant", "model", "setting", "mcp")
 # The messages with no command, and why: what only a screen needs
 NO_COMMAND = {
+    "workspace/list": "folders for a screen's workspace picker",
     "session/mark_seen": "a person's read mark, which the full screen sends for what "
                     "it has shown; a caller reads a session with session read",
     "session/user_messages": "session rewind ID, with no SEQ, lists them, the "

@@ -710,6 +710,16 @@ MESSAGES = {
         reply={"forgot": STRING},
         changes=True,
     ),
+    "workspace/list": message(
+        "Folders for a person's workspace picker; no file contents are read.",
+        {"path": STRING, "after": STRING},
+        reply={"path": STRING, "parent": maybe(STRING),
+               "folders": {"type": "array", "items": {
+                   "type": "object", "properties": {"name": STRING,
+                                                       "path": STRING},
+                   "required": ["name", "path"], "additionalProperties": False}},
+               "next_after": maybe(STRING)},
+    ),
     "model/list": message(
         "Every server the server can reach, with its models by the names a "
         "session takes, or why it lists none.",

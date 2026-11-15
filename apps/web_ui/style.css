@@ -320,3 +320,85 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 
 .details-back { display: none; }
 @media (max-width: 760px) { .details-back { display: block; margin: 12px; } }
+
+/* Consistent spacing for the session controls and their dialogs. */
+.details > section { padding: 16px; }
+.details h2 { margin-bottom: 12px; }
+.session-settings { display: grid; gap: 12px; }
+.session-settings label { margin: 0; font-size: 12px; }
+.session-settings select {
+  min-height: 34px; padding: 6px 8px; border: 1px solid var(--line);
+  background: var(--bg); width: 100%;
+}
+.field-label { display: block; font-size: 12px; margin-bottom: 6px; }
+.workspace-line { display: flex; align-items: center; gap: 8px; }
+.workspace-path {
+  flex: 1; min-width: 0; overflow-wrap: anywhere; font: 12px monospace;
+}
+.workspace-line button { flex: none; }
+.save-status:empty { display: none; }
+.command-list { scroll-padding: 4px; overscroll-behavior: contain; }
+.command-list button {
+  padding: 8px 10px; text-transform: none; font-size: 13px;
+}
+.job-group { border-top: 1px solid var(--line); margin-top: 8px; }
+.job-group > summary { padding: 10px 0; font-weight: 600; cursor: pointer; }
+.job-group .job { margin: 0 0 8px; padding: 8px; }
+.job-group .job > summary { display: flex; align-items: center; gap: 8px; }
+.job-group .job > summary button { margin-left: auto; }
+.job-group pre { max-height: 240px; overflow: auto; }
+.session-family .tree ul {
+  margin-left: 10px; padding-left: 8px; border-left: 1px solid var(--line);
+}
+.tree-row { display: grid; grid-template-columns: 24px minmax(0, 1fr); }
+.tree .tree-toggle { padding: 7px 2px; text-align: center; font-size: 16px; }
+.tree .tree-session {
+  display: flex; flex-direction: column; padding: 7px 8px; min-width: 0;
+  text-align: left; white-space: normal; text-transform: none;
+}
+.tree-title { overflow-wrap: anywhere; }
+.tree-session .kind { font-size: 10px; }
+ .tree-session[aria-current="true"] .kind { color: inherit; }
+.tree .tree-title { white-space: normal; }
+.tree .kind { margin-left: 0; }
+.settings-dialog header {
+  position: sticky; top: 0; background: var(--bg); padding: 12px 20px;
+}
+.settings-dialog header h2 { margin: 0; padding: 0; }
+#settings-tabs { padding: 12px 20px; gap: 6px; border-bottom: 1px solid var(--line); }
+#settings-body { padding: 4px 20px 20px; }
+.settings-intro { margin: 12px 0; }
+.setting-row { padding: 12px 0; }
+.setting-row label { margin: 0; }
+.setting-row input, .setting-row select {
+  border: 1px solid var(--line); padding: 7px 8px; margin-top: 6px;
+  background: var(--panel);
+}
+.setting-error { display: block; margin-top: 6px; }
+.setting-error[hidden] { display: none; }
+#settings-body > section { border: 1px solid var(--line); padding: 12px; }
+.model-server { padding: 0; }
+.folder-dialog { padding: 16px; max-height: 85dvh; }
+.folder-dialog h2 { margin: 0 0 12px; }
+.folder-navigation, .recent-folders {
+  display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0;
+}
+.folder-current {
+  font: 12px monospace; overflow-wrap: anywhere; padding: 8px;
+  background: var(--panel);
+}
+.folder-list {
+  max-height: 40dvh; overflow: auto; margin: 8px 0;
+  border-block: 1px solid var(--line);
+}
+.folder-choice {
+  display: block; width: 100%; border-bottom: 1px solid var(--line);
+  text-align: left; text-transform: none; font-size: 14px; padding: 10px 8px;
+}
+@media (max-width: 760px) {
+  .frame.show-details > .details { display: block; }
+  .details > section { padding: 14px 16px; }
+  .tree .tree-session { padding-block: 9px; }
+  #settings-tabs { padding-inline: 16px; }
+  #settings-body { padding-inline: 16px; }
+}

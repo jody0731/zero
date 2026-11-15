@@ -58,7 +58,8 @@
 <dialog id="new-dialog" class="dialog">
   <form id="new-form" method="dialog">
     <h2>New session</h2>
-    <label>Folder <input id="new-folder" required></label>
+    <label>Folder <input id="new-folder" required readonly></label>
+    <button id="new-folder-choose" type="button">Choose workspace…</button>
     <label>Mode <select id="new-mode"></select></label>
     <label>Message <textarea id="new-text" rows="4" required></textarea></label>
     <p id="new-error" class="error" hidden></p>

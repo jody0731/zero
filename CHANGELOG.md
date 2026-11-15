@@ -3,6 +3,17 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2.4
+
+- Arrow navigation keeps the selected slash command in view.
+- Background jobs have separate expandable Running and Finished groups.
+- The session tree wraps long names and remembers expanded branches.
+- Model and mode are pick lists. Choose a workspace in the folder browser;
+  no path typing or Apply button. Session changes apply when selected.
+- Settings keep edits across tabs and apply when returning to the conversation.
+  A rejected value stays open with its error. No per-setting Save buttons.
+- Consistent spacing across the side panel, settings and phone layouts.
+
 ## 0.7.6.2.3
 
 The browser feedback release: browser by default (`zero tui` for the terminal),

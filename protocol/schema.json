@@ -88,6 +88,9 @@
       "$ref": "#/$defs/grant.forget"
     },
     {
+      "$ref": "#/$defs/workspace.list"
+    },
+    {
       "$ref": "#/$defs/model.list"
     },
     {
@@ -2521,6 +2524,99 @@
         "replayed": {
           "type": "boolean",
           "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "workspace.list": {
+      "type": "object",
+      "description": "Folders for a person's workspace picker; no file contents are read.",
+      "properties": {
+        "message": {
+          "const": "workspace/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "path": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "workspace.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "path": {
+          "type": "string"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "next_after": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "unknown_fields": {
           "type": "array",

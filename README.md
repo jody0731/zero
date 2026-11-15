@@ -171,9 +171,15 @@ Session menus on the left offer rename, fork, history, archive, copy link and de
 lets you fork or rewind before a message. The right panel edits the session's mode,
 model, thinking and folder, and shows its jobs. Stop one job or all this session's
 running jobs; each stopped job's output and exit status still reach ZERO.
+Running and Finished jobs have separate expandable groups. The session tree wraps
+long titles and lets you expand individual branches. Model and mode are dropdowns;
+**Choose…** opens a folder browser with Home, parent folders and recent workspaces.
+These session controls apply on selection, without an Apply button.
 
 Type `/` for commands. Settings separates new-session defaults, model-server
-connections and advanced settings. Reading settings or model capabilities makes no
+connections and advanced settings. Edits stay while switching tabs and apply on
+**Back** or Escape; rejected values keep the view open with an inline error.
+Reading settings or model capabilities makes no
 paid model call. **Test and connect** explicitly tests a model server with a small
 call, which that server may charge for. Terminal themes and keys remain in the TUI.
 

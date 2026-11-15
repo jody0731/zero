@@ -3,6 +3,16 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2.3
+
+The browser feedback release: browser by default (`zero tui` for the terminal),
+durable browser pairing, expandable turns, background-job stop controls, session
+menus, settings and cache usage. Optional system units give `zero.localhost` its
+address without a port. Model and mode switches stay out of the conversation.
+
+Rename now exits its editor on Enter and Escape; a failed rename keeps the name
+available to retry. This completes the changes described under 0.7.6.2.2 below.
+
 ## 0.7.6.2.2
 
 - `zero` opens the browser; `zero tui` opens the terminal. Browser pairing has no

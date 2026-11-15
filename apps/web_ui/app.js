@@ -1198,13 +1198,26 @@
         input.focus();
         input.select();
         input.addEventListener("keydown", async (event) => {
-          if (event.key === "Escape") drawSessions();
-          if (event.key === "Enter" && input.value.trim()) {
-            await change("session/rename", {
-              session: row.id, title: input.value.trim(),
-            }).catch((error) => alert(error.message));
+          if (event.key === "Escape") {
+            menu.open = false;
             input.blur();
             drawSessions();
+          }
+          if (event.key === "Enter" && input.value.trim()) {
+            input.disabled = true;
+            try {
+              const title = input.value.trim();
+              await change("session/rename", { session: row.id, title });
+              const current = rowOf(row.id);
+              if (current) current.title = title;
+              menu.open = false;
+              input.blur();
+              drawSessions();
+            } catch (error) {
+              input.disabled = false;
+              input.focus();
+              alert(error.message);
+            }
           }
         });
       }],

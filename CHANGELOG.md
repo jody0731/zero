@@ -3,6 +3,20 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2.5
+
+- A lighter reading layout in light and dark themes, with compact session rows,
+  a tighter tree, restrained red accents and the bold dotted ZERO wordmark.
+- The standalone dotted O is the browser tab icon. Reduced motion stops the
+  wordmark's circulating pulse; the tab icon is always still.
+- Copy each ZERO response as Markdown, without thinking or tool output.
+- Rewind and edit from a user turn. Files and memory stay unchanged; a confirmation
+  explains the conversation change and any replacement of an unsent draft.
+- Unsent drafts stay with their session in this browser across reloads and reopening.
+  Failed sends retain text; delayed replies do not erase newer edits or another draft.
+- Browser commands omit `/quit`. Session actions live in the left menu; response
+  actions live beside their messages. Use the browser's Find for visible text.
+
 ## 0.7.6.2.4
 
 - Arrow navigation keeps the selected slash command in view.

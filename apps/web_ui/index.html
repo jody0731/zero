@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZERO</title>
+<link rel="icon" type="image/svg+xml" href="/ui/favicon-light.svg"
+      media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/svg+xml" href="/ui/favicon-dark.svg"
+      media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="/ui/style.css">
 <script src="/ui/markdown.js" defer></script>
 <script src="/ui/app.js" defer></script>
@@ -12,14 +16,23 @@
 <div id="frame" class="frame">
   <aside id="sessions" class="panel sessions" aria-label="Sessions">
     <header class="panel-head">
-      <span class="brand">ZERO</span>
-      <button id="settings-open" type="button">Settings</button>
-      <button id="new-session" type="button">New</button>
+      <picture class="brand">
+        <source media="(prefers-reduced-motion: reduce) and
+                       (prefers-color-scheme: dark)"
+                srcset="/ui/wordmark-dark-still.svg">
+        <source media="(prefers-reduced-motion: reduce)"
+                srcset="/ui/wordmark-light-still.svg">
+        <source media="(prefers-color-scheme: dark)"
+                srcset="/ui/wordmark-dark.svg">
+        <img src="/ui/wordmark-light.svg" alt="ZERO" width="174" height="64">
+      </picture>
     </header>
-    <input id="search" class="search" type="search"
-           placeholder="Search" aria-label="Search">
+    <button id="new-session" class="new-session" type="button">
+      + New session
+    </button>
     <ul id="session-list" class="session-list" role="list"></ul>
     <button id="archived" type="button">Archived</button>
+    <button id="settings-open" type="button">Settings</button>
     <footer id="server-state" class="server-state" aria-live="polite"></footer>
   </aside>
   <div class="handle" data-handle="left"></div>
@@ -32,7 +45,7 @@
         <div id="session-sub" class="sub"></div>
       </div>
       <button id="details-toggle" class="ghost" type="button"
-              aria-label="Details">ⓘ</button>
+              aria-label="Details">Details</button>
     </header>
     <div id="timeline" class="timeline" tabindex="0"
          aria-label="Timeline"></div>
@@ -45,6 +58,7 @@
                 placeholder="Message" aria-label="Message"></textarea>
       <div class="composer-row">
         <label class="queue"><input id="queue" type="checkbox"> Queue</label>
+        <span id="draft-status" class="sub" role="status"></span>
         <span class="spacer"></span>
         <button id="stop" type="button" hidden>Stop</button>
         <button id="send" class="primary" type="submit">Send</button>

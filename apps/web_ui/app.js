@@ -1,6 +1,6 @@
 /* ZERO's web UI: the sessions, one session's timeline, and its details,
  * all from ZERO's server through the HTTP door; the page keeps nothing of its
- * own but browser pairing and where the panels' edges are.
+ * own but browser pairing, unsent drafts and panel widths.
  *
  * Every request is one protocol message, whole (POST /api/request); one
  * stream (GET /api/events) brings the session list and the open session's
@@ -22,7 +22,7 @@
   const HIDDEN_SECONDS = 60;
   const PAGE_RECORDS = 150;
   const RESULT_CHARS = 20000;
-  const WIDTHS = { left: [280, 200, 460], right: [340, 260, 640] };
+  const WIDTHS = { left: [245, 200, 460], right: [285, 260, 640] };
 
   const state = {
     hello: null, sessions: [], open: null, records: [], earlier: 0,
@@ -34,6 +34,7 @@
     expandedJobs: new Map(), expandedFamilies: new Map(),
     settingsDraft: new Map(), settingsErrors: new Map(), settingsSaving: false,
     settingsView: "Defaults", modelLookup: null,
+    rewindPoints: new Set(), composerDrafts: new Map(),
     jobs: new Map(), settingsDirty: false, features: new Map(), turnStarted: null,
   };
 
@@ -203,6 +204,15 @@
     if (event.settled) {
       clearDraft();
       markSeen();
+      const session = state.open;
+      look("session/user_messages", { session }).then((reply) => {
+        if (state.open !== session) return;
+        state.rewindPoints = new Set(reply.messages.map((item) => item.seq));
+        for (const node of $("timeline").querySelectorAll(".entry.you")) {
+          const record = state.records.find((item) => item.seq === +node.dataset.seq);
+          if (record) node.replaceWith(userEntry(record));
+        }
+      }).catch(() => {});
     }
   }
 
@@ -225,7 +235,6 @@
     const editing = new Map(Array.from(list.children).filter((item) =>
       item.contains(document.activeElement) || item.querySelector("details[open]"))
       .map((item) => [item.dataset.session, item]));
-    const words = $("search").value.trim().toLowerCase();
     const rows = state.sessions.filter(
       (row) => Boolean(row.archived) === state.archived).sort(
       (a, b) => (b.updated_at || 0) - (a.updated_at || 0));
@@ -237,17 +246,13 @@
         children.get(row.parent).push(row);
       }
     }
-    const matches = (row) => !words || [row.title, row.workspace,
-      stateWord(row)].join(" ").toLowerCase().includes(words);
     // The ones that wait for you first, then the rest by their last change
     const tops = rows.filter((row) => !row.parent || !ids.has(row.parent));
     tops.sort((a, b) => (stateWord(b) === "waiting") - (stateWord(a) === "waiting"));
     list.replaceChildren();
     const add = (row, depth) => {
       const kids = children.get(row.id) || [];
-      if (matches(row) || kids.some(matches)) {
-        list.append(editing.get(row.id) || sessionRow(row, depth, kids.length));
-      }
+      list.append(editing.get(row.id) || sessionRow(row, depth, kids.length));
       if (depth < 1 || row.id === state.open || kids.some(
         (kid) => kid.id === state.open)) {
         for (const kid of kids) add(kid, depth + 1);
@@ -263,6 +268,7 @@
     const item = el("li", "row" + (depth ? " child" : "")
       + (row.id === state.open ? " open" : ""));
     item.tabIndex = 0;
+    item.title = `${row.title || "Untitled"} · ${row.workspace || ""}`;
     item.dataset.session = row.id;
     item.style.marginLeft = depth ? `${16 * depth}px` : "";
     const dot = el("span", "dot" + (row.unseen ? " unseen" : ""));
@@ -293,14 +299,6 @@
     return state.sessions.find((row) => row.id === id) || null;
   }
 
-  $("search").addEventListener("input", drawSessions);
-  $("search").addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.target.value = "";
-      drawSessions();
-    }
-  });
-
   // ------------------------------------------------------------ a session
 
   async function openSession(id) {
@@ -308,7 +306,10 @@
     state.openVersion = version;
     if (state.events) state.events.close();
     state.events = null;
+    saveComposerDraft();
     state.open = id;
+    state.rewindPoints = new Set();
+    restoreComposerDraft();
     history.replaceState(null, "", `#session=${encodeURIComponent(id)}`);
     state.turn = null;
     state.settingsDirty = false;
@@ -325,9 +326,12 @@
     const timeline = $("timeline");
     timeline.replaceChildren(el("div", "loading", "…"));
     try {
-      const reply = await look("session/read", { session: id,
-                                                 limit: PAGE_RECORDS });
+      const [reply, points] = await Promise.all([
+        look("session/read", { session: id, limit: PAGE_RECORDS }),
+        look("session/user_messages", { session: id }),
+      ]);
       if (state.open !== id || state.openVersion !== version) return;
+      state.rewindPoints = new Set(points.messages.map((item) => item.seq));
       state.earlier = reply.earlier_count;
       state.runsWith = reply.runs_with;
       state.context = reply.context;
@@ -347,7 +351,9 @@
 
   function closeSession() {
     state.openVersion = (state.openVersion || 0) + 1;
+    saveComposerDraft();
     state.open = null;
+    restoreComposerDraft();
     $("session-title").textContent = "";
     $("session-sub").textContent = "";
     $("timeline").replaceChildren();
@@ -543,6 +549,13 @@
     node.append(who(sourceWho(record.source), record, more));
     if (record.continue && !record.text) return node;
     node.append(el("div", "bubble", record.text || ""));
+    if (state.rewindPoints.has(record.seq)) {
+      const session = state.open;
+      const button = el("button", "message-action", "Rewind and edit");
+      button.type = "button";
+      button.addEventListener("click", () => rewindMessage(session, record.seq));
+      node.append(button);
+    }
     return node;
   }
 
@@ -555,9 +568,20 @@
     const summary = el("summary", null, "Thinking…");
     process.append(summary);
     const replies = el("div", "turn-replies");
-    node.append(process, replies);
+    const copy = el("button", "message-action", "Copy response");
+    copy.type = "button";
+    copy.hidden = true;
+    const texts = [];
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(texts.join("\n\n"));
+        copy.textContent = "Copied";
+        setTimeout(() => { copy.textContent = "Copy response"; }, 1800);
+      } catch (error) { alert(`Could not copy: ${error.message}`); }
+    });
+    node.append(process, replies, copy);
     $("timeline").append(node);
-    state.turn = { node, process, summary, replies };
+    state.turn = { node, process, summary, replies, copy, texts };
     return state.turn;
   }
 
@@ -574,7 +598,11 @@
                   el("div", "body", message.reasoning_content));
       node.append(fold);
     }
-    if (message.content) turn.replies.append(markdown(message.content));
+    if (message.content) {
+      turn.replies.append(markdown(message.content));
+      turn.texts.push(message.content);
+      turn.copy.hidden = false;
+    }
     const summaries = record.call_summaries || {};
     for (const call of message.tool_calls || []) {
       const fn = call.function || {};
@@ -786,7 +814,7 @@
     const box = $("ask");
     const row = rowOf(state.open);
     const ask = row && row.ask;
-    $("composer").hidden = Boolean(ask);
+    $("composer").hidden = !row || Boolean(ask);
     $("stop").hidden = !(row && (row.state === "running" || row.ask));
     if (!ask) {
       box.hidden = true;
@@ -847,20 +875,84 @@
     const text = $("text").value.trim();
     if (await runCommand(text)) return;
     if (!text || !state.open) return;
+    const session = state.open;
+    const original = $("text").value;
     const button = $("send");
     button.disabled = true;
     try {
       await change("session/send", {
-        session: state.open, text, source: "web",
+        session, text, source: "web",
         when_busy: $("queue").checked ? "queue" : "steer",
       });
-      $("text").value = "";
-      sizeComposer();
-      $("queue").checked = false;
+      if (readComposerDraft(session) === original) {
+        writeComposerDraft(session, "");
+      }
+      if (state.open === session && $("text").value === original) {
+        $("text").value = "";
+        saveComposerDraft();
+        sizeComposer();
+        $("queue").checked = false;
+      }
     } catch (error) {
       alert(error.message);
     } finally {
       button.disabled = false;
+    }
+  }
+
+  // Unsent text belongs to this browser and session, never to the server.
+  function readComposerDraft(session) {
+    if (!session) return "";
+    if (state.composerDrafts.has(session)) return state.composerDrafts.get(session);
+    try { return localStorage.getItem(`zero.draft.${session}`) || ""; }
+    catch (error) { return ""; }
+  }
+
+  function writeComposerDraft(session, text) {
+    if (!session) return true;
+    state.composerDrafts.set(session, text);
+    try {
+      const key = `zero.draft.${session}`;
+      if (text) localStorage.setItem(key, text);
+      else localStorage.removeItem(key);
+      return true;
+    } catch (error) { return false; }
+  }
+
+  function saveComposerDraft() {
+    const text = $("text").value;
+    const saved = writeComposerDraft(state.open, text);
+    $("draft-status").textContent = !text ? "" : saved
+      ? "Draft saved" : "Draft kept in this tab only";
+  }
+
+  function restoreComposerDraft() {
+    $("text").value = readComposerDraft(state.open);
+    saveComposerDraft();
+    $("commands").hidden = true;
+    sizeComposer();
+  }
+
+  async function rewindMessage(session, seq) {
+    const viewing = state.open;
+    const draft = readComposerDraft(session);
+    const warning = "Return to before this message? Later conversation is left "
+      + "behind. Files and memory stay unchanged."
+      + (draft ? " This replaces your unsent draft." : "");
+    if (!confirm(warning)) return false;
+    try {
+      const result = await change("session/rewind", { session, seq });
+      writeComposerDraft(session, result.text || "");
+      if (state.open === viewing) {
+        // Restore before reopening so the previous composer cannot overwrite it.
+        if (state.open === session) restoreComposerDraft();
+        await openSession(session);
+        $("text").focus();
+      }
+      return true;
+    } catch (error) {
+      alert(error.message);
+      return false;
     }
   }
 
@@ -875,6 +967,7 @@
   }
 
   $("text").addEventListener("input", () => {
+    saveComposerDraft();
     sizeComposer();
     drawCommands();
   });
@@ -937,7 +1030,18 @@
       return;
     }
     panel.replaceChildren();
-    if (!row) return;
+    if (!row) {
+      if (state.open) return;
+      $("timeline").replaceChildren();
+      const welcome = el("div", "empty-session");
+      welcome.append(el("h2", null, "Ready when you are."),
+        el("p", "sub", "Choose a session or start something new."));
+      const button = el("button", "primary", "New session");
+      button.addEventListener("click", openNew);
+      welcome.append(button);
+      $("timeline").append(welcome);
+      return;
+    }
     const back = el("button", "details-back", "Back to conversation");
     back.addEventListener("click", () => showPanel("session"));
     panel.append(back, runsWithSection(row));
@@ -1448,6 +1552,10 @@
       const button = el("button", null, name);
       button.type = "button";
       button.addEventListener("click", () => {
+        if (name !== "Rename") {
+          menu.open = false;
+          button.blur();
+        }
         Promise.resolve(action()).catch((error) => alert(error.message));
       });
       menu.append(button);
@@ -1596,12 +1704,23 @@
     });
   }
 
+  function browserCommands() {
+    const descriptions = {
+      "/fork": "fork this session into a new one",
+      "/settings": "new-session defaults, model servers and advanced settings",
+      "/help": "browser commands; Enter sends, Shift+Enter adds a line",
+    };
+    return Object.entries(state.hello?.commands || {}).filter(
+      ([name]) => name !== "/quit").map(([name, about]) =>
+      [name, descriptions[name] || about]);
+  }
+
   function drawCommands(reset = true) {
     const list = $("commands");
     const text = $("text").value;
     list.replaceChildren();
     if (reset) state.commandIndex = 0;
-    const matches = Object.entries(state.hello.commands || {}).filter(
+    const matches = browserCommands().filter(
       ([name]) => text.startsWith("/") && !text.includes(" ")
         && name.startsWith(text));
     list.hidden = !matches.length;
@@ -1611,6 +1730,7 @@
       button.type = "button";
       button.addEventListener("click", () => {
         $("text").value = `${name} `;
+        saveComposerDraft();
         list.hidden = true;
         $("text").focus();
       });
@@ -1620,7 +1740,12 @@
 
   async function runCommand(text) {
     const [name] = text.split(/\s+/);
-    if (!Object.hasOwn(state.hello.commands || {}, name)) return false;
+    if (name === "/quit") {
+      alert("Close the browser tab to leave. ZERO keeps working.");
+      return true;
+    }
+    if (!browserCommands().some(([command]) => command === name)) return false;
+    const entered = $("text").value;
     const value = text.slice(name.length).trim();
     const session = state.open;
     try {
@@ -1629,11 +1754,10 @@
         case "/sessions": showPanel("sessions"); break;
         case "/settings": await openSettings(); break;
         case "/help":
-          alert(Object.entries(state.hello.commands).map(
+          alert(browserCommands().map(
             ([command, about]) => `${command}: ${about}`).join("\n"));
           break;
         case "/jobs": showPanel("details"); break;
-        case "/quit": closeSession(); break;
         case "/mode": case "/model": case "/cd":
           if (!value) { showPanel("details"); break; }
           await change("session/set", { session,
@@ -1664,7 +1788,7 @@
           if (last) await navigator.clipboard.writeText(last.message.content);
           break;
         }
-        case "/rewind": await historyActions(session); break;
+        case "/rewind": await historyActions(session); return true;
         case "/permissions":
           if (value.startsWith("forget ")) {
             const reply = await look("grant/list", { session });
@@ -1684,9 +1808,13 @@
         }
         default: throw new Error("Unknown command");
       }
-      $("text").value = "";
-      sizeComposer();
-      $("commands").hidden = true;
+      if (readComposerDraft(session) === entered) writeComposerDraft(session, "");
+      if (state.open === session && $("text").value === entered) {
+        $("text").value = "";
+        saveComposerDraft();
+        sizeComposer();
+        $("commands").hidden = true;
+      }
     } catch (error) {
       alert(error.message);
     }
@@ -1712,20 +1840,11 @@
     for (const message of reply.messages) {
       const section = el("section");
       section.append(el("p", null, message.text));
-      for (const action of ["Fork", "Rewind"]) {
-        const button = el("button", null, action);
-        button.addEventListener("click", async () => {
-          try {
-            const result = await change(action === "Fork"
-              ? "session/fork" : "session/rewind", { session, seq: message.seq });
-            dialog.close();
-            await openSession(action === "Fork" ? result.session.id : session);
-            $("text").value = result.text || "";
-            sizeComposer();
-          } catch (error) { alert(error.message); }
-        });
-        section.append(button);
-      }
+      const button = el("button", null, "Rewind and edit");
+      button.addEventListener("click", async () => {
+        if (await rewindMessage(session, message.seq)) dialog.close();
+      });
+      section.append(button);
       dialog.append(section);
     }
   }
@@ -1942,6 +2061,7 @@
   async function start() {
     showPanel("sessions");
     drawDetails();
+    drawAsk();
     try {
       await pairBrowser();
       state.hello = await look("server/hello");
@@ -1979,8 +2099,9 @@
       }
       await openSession(target);
     } else connect();
-    if (state.launch.view === "new" || (!target && state.launch.workspace
-        && state.launch.view !== "sessions")) openNew();
+    if (!state.open && !$("new-dialog").open
+        && (state.launch.view === "new" || (!target && state.launch.workspace
+        && state.launch.view !== "sessions"))) openNew();
     sizeComposer();
   }
 

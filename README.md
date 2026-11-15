@@ -168,15 +168,28 @@ and the cached input-token share of the last model call, not a percentage of req
 
 Session menus on the left offer rename, fork, history, archive, copy link and delete
 (to the trash). Archived sessions have a separate view and can be restored. History
-lets you fork or rewind before a message. The right panel edits the session's mode,
+lets you rewind before a message; Fork creates a new session from the left menu. The right panel edits the session's mode,
 model, thinking and folder, and shows its jobs. Stop one job or all this session's
 running jobs; each stopped job's output and exit status still reach ZERO.
-Running and Finished jobs have separate expandable groups. The session tree wraps
-long titles and lets you expand individual branches. Model and mode are dropdowns;
+Running and Finished jobs have separate expandable groups. The compact session tree truncates
+long titles, shows their full name on hover and lets you expand branches. Model and mode are dropdowns;
 **Choose…** opens a folder browser with Home, parent folders and recent workspaces.
 These session controls apply on selection, without an Apply button.
 
-Type `/` for commands. Settings separates new-session defaults, model-server
+**Copy response** copies one ZERO turn's answer as Markdown, excluding its process.
+**Rewind and edit** returns to before a user turn and puts its message back in the
+composer. Confirming it leaves later conversation behind; files and memory do not
+rewind. Unsent text is saved per session in this browser, including across reopening.
+A draft clears only after a successful send; newer edits stay. If browser storage is
+unavailable, the composer says the draft is kept only in the current tab.
+
+The page follows the system's light or dark theme. Its dotted wordmark respects
+reduced-motion preferences, and the standalone O marks the browser tab. Session
+rows are compact, with extra detail on the selected row. Browser Find searches
+loaded conversation text; ZERO can retrieve context from other sessions itself.
+
+Type `/` for commands; `/quit` belongs to the terminal, so close the browser tab to
+leave the web app. Settings separates new-session defaults, model-server
 connections and advanced settings. Edits stay while switching tabs and apply on
 **Back** or Escape; rejected values keep the view open with an inline error.
 Reading settings or model capabilities makes no

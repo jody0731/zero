@@ -99,10 +99,18 @@ def ensure_door(paths, command=None, popen=subprocess.Popen,
     raise NotRunning(f"ZERO's HTTP door didn't answer on 127.0.0.1:{port}")
 
 
+def web_url(paths):
+    from apps.http_door.systemd_units import clean_address_installed
+
+    if clean_address_installed(paths):
+        return "http://zero.localhost"
+    return f"http://zero.localhost:{paths.http_door_port}"
+
+
 def sign_in_url(paths):
     """The page's one-use sign-in link (guard.py), from the app token."""
     token = read_token(paths.app_token)
     if token is None:
         raise NotRunning(f"no app token at {paths.app_token}: ZERO's server "
                          "makes it when it starts")
-    return f"{url(paths)}/?sign_in={guard.sign_in_code(token)}"
+    return f"{web_url(paths)}/?sign_in={guard.sign_in_code(token)}"

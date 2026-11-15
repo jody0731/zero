@@ -121,24 +121,61 @@ Its models are then `myserver/<model>`. A server that speaks the Responses API t
 
 </details>
 
-### TUI
+### Browser and terminal
 
 ```bash
-zero                 # this folder's latest session, or a new one on your first line
-zero new             # a new session here
-zero -r              # the session list (--resume)
-zero -p "a question" # one question, for scripts (--print)
+zero
+zero web
+zero new
+zero -r
+zero tui
+zero tui new
+zero -p "a question"
 ```
 
-Inside, `/help` lists the keys and `/` the commands; `/model` sets the session's model and its thinking; `/compact` compacts the session's context now; `/rewind` and `/fork` go back to one of your messages; `/settings` sets this session, what new sessions start with, the theme, the models and keys and the key bindings, and in **Advanced…** the judge, the limits (**Compact at (tokens)** among them) and the server. The status line shows the context's size against its line and the share of the last call the server's cache served, as `context 42k/1M · cache 96%`.
+`zero` and `zero web` open your default browser, at this folder's latest session.
+`zero new` opens a new-session form; `zero -r` opens the session list. `zero tui`
+opens the terminal app. `zero -p` remains the plain command for scripts.
 
-### Web UI
+A browser is paired on its first `zero web`. Its pairing has no time limit: opening
+its saved address restores access even after the short-lived login cookie expires.
+Clearing the browser's site data, using another browser profile, or replacing ZERO's
+app token requires pairing again. The browser holds a separate browser credential,
+never the app token or a model server key. Treat a paired browser profile as access
+to ZERO. Host and Origin checks apply to every request.
+
+The browser address is `http://zero.localhost:4747/`. On Linux, the optional clean
+address is `http://zero.localhost/`. Prepare its systemd files for review with:
 
 ```bash
-zero web             # the web UI in your browser, signed in
+zero http-door system-units --output /tmp/zero-web-units
 ```
 
-Your sessions and their subagents, each turn as it happens, an ask answered in place of the input, a session's mode, model, folder, context and running work beside it; a new session in any folder. It is served by ZERO's HTTP door on `127.0.0.1:4747`, which systemd starts at the first knock and which leaves after five idle minutes; an open page doesn't keep ZERO's server running. Only your browser, signed in by `zero web`'s link, gets in: the door takes no other host or site, and the link works once, for two minutes.
+The command prints the administrator installation and removal commands. Only the
+system holds port 80; the HTTP door still runs as your user and starts on demand.
+Port 80 must be available on loopback. The existing MCP address on port 4747 remains
+available. Without administrator setup, keep the address with the port. Do not run
+ZERO itself as root to obtain the clean address.
+
+The OS holds the listening port while ZERO sleeps. Opening the page starts the HTTP
+door and the server as needed; both leave when idle. A visible page's light watches
+alone do not keep the server awake.
+
+Each turn has one ZERO heading. Its thinking, tool calls and background notices sit
+inside an expandable process; replies remain visible. The process starts collapsed.
+The input grows to ten lines, then scrolls. The line below it reports context usage
+and the cached input-token share of the last model call, not a percentage of requests.
+
+Session menus on the left offer rename, fork, history, archive, copy link and delete
+(to the trash). Archived sessions have a separate view and can be restored. History
+lets you fork or rewind before a message. The right panel edits the session's mode,
+model, thinking and folder, and shows its jobs. Stop one job or all this session's
+running jobs; each stopped job's output and exit status still reach ZERO.
+
+Type `/` for commands. Settings separates new-session defaults, model-server
+connections and advanced settings. Reading settings or model capabilities makes no
+paid model call. **Test and connect** explicitly tests a model server with a small
+call, which that server may charge for. Terminal themes and keys remain in the TUI.
 
 ### CLI
 

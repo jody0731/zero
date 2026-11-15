@@ -16,47 +16,15 @@ from apps.tui import keybindings
 from client import render
 from client.session_list import short_path
 from client.session_state import SessionState
+from client.commands import COMMANDS, INIT
 
 # Typed alone, these leave the session as Ctrl+D does
 LEAVE = ("exit", "quit", "/bye")
 WAITING = "Nothing is running: a question is waiting. Answer it, or type a message."
 # How long after the last keystroke an ask's box may take the input's place
 BOX_DELAY_SECONDS = 1.0
-COMMANDS = {
-    "/new": "a new session (asks for its workspace)",
-    "/continue": "go on with a turn that ended without an answer",
-    "/sessions": "the session list (also Ctrl+O)",
-    "/rename": "rename this session: /rename TITLE",
-    "/compact": "compact this session's context: now, or before the next step "
-                "while a turn runs; /compact INSTRUCTIONS says what its handoff keeps",
-    "/rewind": "go back to before one of your messages, its text back in the "
-               "input; what came after is left behind, files stay as they are",
-    "/fork": "a new session from this conversation, up to one of your messages "
-             "or all of it",
-    "/archive": "archive this session (or bring it back)",
-    "/delete": "move this session to the trash (asked first)",
-    "/jobs": "this session's background jobs",
-    "/copy": "copy ZERO's last answer, as its Markdown",
-    "/permissions": "what runs without asking (a plan's calls aside); "
-                    "/permissions forget N takes one back",
-    "/mode": "the mode, from the next turn: /mode NAME, or pick (Shift+Tab cycles)",
-    "/model": "the model and its thinking, from the next turn: /model NAME, "
-              "or pick",
-    "/cd": "the folder its commands run in, from the next turn: /cd FOLDER",
-    "/settings": "this session, new sessions' defaults, the TUI, models and "
-                 "keys, key bindings, Advanced",
-    "/init": "ZERO looks over you and this machine and fills in its ZERO.md",
-    "/help": "keys and commands",
-    "/quit": "leave; turns and jobs go on in ZERO",
-}
 # What /init sends: the user's own request, so each change it leads to is
 # asked about as any other
-INIT = (
-    "Get to know me and this machine: look around (who I am, from what's here; "
-    "the hardware, the system, the main tools and services I use) and add what "
-    "you find to the “The user” and “Machines” sections of my "
-    "ZERO.md with the memory tool, one short entry per fact."
-)
 HELP = """Sending: a new turn, or a steer while one runs; a \\ just before the
 send key starts a new line too. A follow-up waits for the answer. /mode, /model
 and /cd change the session from its next turn; /settings sets this session, what

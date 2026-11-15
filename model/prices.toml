@@ -58,6 +58,7 @@
 "gemini-embedding-2" = [0.2, 0.2, 0]
 "gemini-flash-latest" = [0.075, 0.75, 3.75]
 "gemini-flash-lite-latest" = [0.03, 0.3, 2.5]
+"gemini-omni-flash-preview" = [1.5, 1.5, 17.5]
 "gemini-pro-latest" = [0.2, 2, 12]
 
 [kimi]

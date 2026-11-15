@@ -1,9 +1,10 @@
-"""ZERO's command line: the plain commands, and the words that start the full
-screen, `zero mcp serve` and the server, each an entry of its own.
+"""ZERO's command line: the browser, terminal and plain commands,
+`zero mcp serve` and the server, each an entry of its own.
 
 Usage:
-    zero                     open this folder's latest session (at /: the last
-                             one you worked in), or a new one on your first line
+    zero                     open this folder's latest session in the browser,
+                             or a new session on your first visit
+    zero tui                 open the terminal app
     zero new                 a new session, this folder its workspace
     zero -r                  open the session list
     zero -p TEXT [--json | --events] [--session ID] [--cd DIR] ...
@@ -38,7 +39,7 @@ Usage:
     zero update              an installed ZERO to its newest release
     zero --version           this copy of ZERO's version
 
-Full screen. Inside, Enter sends (a steer while a turn runs), Shift+Enter
+Terminal app. Inside, Enter sends (a steer while a turn runs), Shift+Enter
 starts a new line, Ctrl+J or Alt+Enter queues a follow-up, Tab (or Ctrl+O) goes
 to the sessions and back, Shift+Tab steps the mode (/mode, /model and /cd
 change a session from its next turn), Alt+Down goes to the next session that
@@ -421,12 +422,12 @@ def run_doctor():
 COMMANDS = ("zero", "zero new", "zero -r", "zero -p TEXT", "zero session …",
             "zero job …", "zero grant …", "zero model …", "zero setting …",
             "zero server hello|stop|status|run", "zero mcp serve|list|get|add|remove",
-            "zero web", "zero http-door serve|install|uninstall|status",
+            "zero web", "zero tui", "zero http-door serve|install|uninstall|status",
             "zero install|uninstall", "zero update", "zero doctor")
 OWN_COMMANDS = ("server", "mcp", "install", "uninstall", "update", "doctor",
                 "web", "http-door")
 # The full screen's word; its flags are its own (apps/tui/main.py)
-TUI_COMMANDS = ("new",)
+TUI_COMMANDS = ("new", "tui")
 
 
 def parser_for(argv):
@@ -463,11 +464,20 @@ def parser_for(argv):
                                 help="serve: ZERO as an MCP server on stdio")
         elif argv[0] == "http-door":
             parser.add_argument("action", choices=(
-                "serve", "install", "uninstall", "status"),
+                "serve", "install", "uninstall", "status", "system-units"),
                 help="serve: the door here; install: systemd holds its port; "
                      "status: where it is, and the lines for other agents")
+            parser.add_argument("--output")
             parser.add_argument("--idle-seconds", type=float,
                                 help="serve: seconds idle before it leaves")
+        elif argv[0] == "web":
+            parser.add_argument("new", nargs="?", choices=("new",))
+            parser.add_argument("-r", "--resume", action="store_true")
+            parser.add_argument("--session")
+            parser.add_argument("--cd")
+            parser.add_argument("--mode")
+            parser.add_argument("--model")
+            parser.add_argument("--thinking-effort", "--effort")
         elif argv[0] == "install":
             parser.add_argument("--bin", metavar="DIR",
                                 help="where the zero command goes (~/.local/bin)")
@@ -559,15 +569,19 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
     if args.command == "mcp":
         return run_mcp()
     if args.command == "web":
-        return run_http_door(["web"])
+        return run_http_door(["web", *argv_of(argv)[1:]])
     if args.command == "http-door":
         more = ([] if args.idle_seconds is None
                 else ["--idle-seconds", str(args.idle_seconds)])
+        if args.output:
+            more += ["--output", args.output]
         return run_http_door([args.action, *more])
     if args.command == "doctor":
         return run_doctor()
+    if args.command == "tui" and argv_of(argv)[:1] == ["tui"]:
+        return run_tui(argv_of(argv)[1:])
     if args.command == "tui" or (args.command is None and args.p is None):
-        return run_tui(argv_of(argv))
+        return run_http_door(["web", *argv_of(argv)])
     paths = Paths()
     options = {"command": start_command, "popen": start_popen, "systemd": systemd,
                "report": lambda text: print(text, file=sys.stderr)}

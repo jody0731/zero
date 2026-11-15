@@ -34,7 +34,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlencode, parse_qs, urlsplit
 
 from apps.http_door.guard import Guard, Refused
 from apps.mcp.server import McpServer, ZeroTools, answer_text
@@ -83,15 +83,6 @@ LISTEN_FDS_START = 3
 # Names in the session list a source takes
 WEB_SOURCE = "web"
 MCP_SOURCE = "mcp"
-
-SIGNED_OUT_PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>ZERO</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="/ui/style.css"></head>
-<body class="signed-out"><main><h1>ZERO</h1>
-<p>{why}</p></main></body></html>
-"""
-
 
 def handed_socket(environ=os.environ):
     """The listening socket systemd handed over (LISTEN_FDS), or None."""
@@ -277,6 +268,20 @@ class Handler(BaseHTTPRequestHandler):
                                    "of the server's own, no sessions",
                                    allow="POST")
             return self.mcp_post(self.prove())
+        if path == "/api/browser" and method == "POST":
+            guard.place(self.headers)
+            if self.headers.get("Origin") not in guard.origins:
+                raise Refused(403, "browser pairing needs this page's origin")
+            payload = self.json_body()
+            if not isinstance(payload, dict):
+                raise Refused(400, "browser pairing is a JSON object")
+            value = guard.restore_browser(payload.get("key"))
+            self.send_response(204)
+            self.send_header("Set-Cookie", guard.set_cookie(value))
+            self.send_header("Content-Length", "0")
+            self.security_headers()
+            self.end_headers()
+            return
         if path == "/api/request" and method == "POST":
             return self.api_request(self.prove())
         if path == "/api/events" and method == "GET":
@@ -300,7 +305,11 @@ class Handler(BaseHTTPRequestHandler):
         if code is not None:
             value = guard.sign_in(code)
             self.send_response(303)
-            self.send_header("Location", "/")
+            launch = {name: values[0] for name, values in query.items()
+                      if name in ("workspace", "session", "model", "mode",
+                                  "thinking_effort", "view") and values}
+            launch["pair"] = guard.browser_key()
+            self.send_header("Location", "/#" + urlencode(launch))
             self.send_header("Set-Cookie", guard.set_cookie(value))
             self.send_header("Content-Length", "0")
             self.security_headers()
@@ -309,8 +318,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.prove()
         except Refused as refusal:
-            body = SIGNED_OUT_PAGE.format(why=str(refusal)).encode()
-            return self.send_body(401, body, FILE_TYPES[".html"])
+            if refusal.status != 401:
+                raise
+            # The public shell restores an already-paired browser. No
+            # session data is returned before the cookie has been restored.
         return self.file("index.html")
 
     def file(self, name):
@@ -533,7 +544,7 @@ class Stream:
         self.events = queue.Queue()
         try:
             watches = [("list", self.connection.stream(build(
-                "session/list", watch=True, keeps_server_up=False)))]
+                "session/list", watch=True, archived=None, keeps_server_up=False)))]
             if self.session:
                 watches.append(("session", self.connection.stream(build(
                     "session/watch", session=self.session, after=self.after,

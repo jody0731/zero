@@ -15,6 +15,7 @@ the home they serve. On macOS (launchd's Sockets) and Windows these are
 """
 
 import os
+import pwd
 import shlex
 import shutil
 import subprocess
@@ -175,3 +176,77 @@ def held(paths, run=subprocess.run):
         return False
     ok, said = systemctl("is-active", f"{paths.http_door_unit}.socket", run=run)
     return ok and said == "active"
+
+
+CLEAN_ADDRESS_UNIT = "zero-web"
+
+
+def clean_address_texts(paths, command=None):
+    """System units: root holds port 80; the door runs as its home owner.
+
+    These are generated for review, never installed by ZERO. An administrator
+    installs them and enables only the socket. The existing MCP port stays.
+    """
+    user = pwd.getpwuid(os.getuid())
+    unit = CLEAN_ADDRESS_UNIT
+    command = unit_escaped(shlex.join(command or door_command()))
+    environment = "".join(
+        f"Environment={unit_escaped(shlex.quote(f'{name}={value}'))}\n"
+        for name, value in paths.environment().items())
+    environment += f"Environment=XDG_RUNTIME_DIR=/run/user/{user.pw_uid}\n"
+    environment += f"Environment=HOME={unit_escaped(user.pw_dir)}\n"
+    service = SERVICE_TEXT.format(
+        description=DESCRIPTION, home=unit_escaped(str(paths.home)),
+        unit=unit, command=command, environment=environment)
+    service = service.replace("[Service]\n", f"[Service]\nUser={user.pw_uid}\n")
+    return {
+        f"{unit}.socket": SOCKET_TEXT.format(
+            description=DESCRIPTION, home=unit_escaped(str(paths.home)), port=80),
+        f"{unit}.service": service,
+    }
+
+
+def clean_address_installed(paths, folder=Path("/etc/systemd/system"),
+                            run=subprocess.run):
+    """Only our administrator-installed units select the clean address."""
+    for name, expected in clean_address_texts(paths).items():
+        path = folder / name
+        try:
+            metadata = path.stat()
+            if metadata.st_uid != 0 or metadata.st_mode & 0o022:
+                return False
+            if path.read_text() != expected:
+                return False
+        except OSError:
+            return False
+    try:
+        result = run(["systemctl", "is-active", f"{CLEAN_ADDRESS_UNIT}.socket"],
+                     capture_output=True, text=True, timeout=5)
+        return result.returncode == 0 and result.stdout.strip() == "active"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def export_clean_address(paths, folder):
+    """Write reviewable units; print explicit install and rollback commands."""
+    folder = Path(folder).resolve()
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, text in clean_address_texts(paths).items():
+        destination = folder / name
+        if destination.exists() and destination.read_text() != text:
+            raise ValueError(f"refusing to replace {destination}")
+        write_whole(destination, text)
+    sources = " ".join(shlex.quote(str(folder / name))
+                       for name in clean_address_texts(paths))
+    return [
+        "Review the two units first. The door runs as you, never as root.",
+        f"sudo install -m 644 {sources} /etc/systemd/system/",
+        "sudo systemctl daemon-reload",
+        f"sudo systemctl enable --now {CLEAN_ADDRESS_UNIT}.socket",
+        "Rollback (the original MCP port stays available):",
+        f"sudo systemctl disable --now {CLEAN_ADDRESS_UNIT}.socket",
+        f"sudo systemctl stop {CLEAN_ADDRESS_UNIT}.service",
+        f"sudo rm /etc/systemd/system/{CLEAN_ADDRESS_UNIT}.socket "
+        f"/etc/systemd/system/{CLEAN_ADDRESS_UNIT}.service",
+        "sudo systemctl daemon-reload",
+    ]

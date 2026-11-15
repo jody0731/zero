@@ -101,7 +101,8 @@ class JobStore:
                 row = db.execute(
                     "SELECT session, started_from_seq FROM jobs WHERE id = ?", (id,)
                 ).fetchone()
-                payload = {"text": text, "summary": summary, "job": id}
+                payload = {"text": text, "summary": summary, "job": id,
+                           "reference": id}
                 if row["started_from_seq"] is not None:
                     # Where it started, for a notice from a part left behind
                     payload["started_from_seq"] = row["started_from_seq"]

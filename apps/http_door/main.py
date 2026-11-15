@@ -16,6 +16,7 @@ never loads the door and the door never loads the command line.
 import argparse
 import sys
 import webbrowser
+from urllib.parse import urlencode
 from pathlib import Path
 
 if __name__ == "__main__":
@@ -69,7 +70,7 @@ def serve(paths, idle_seconds):
     return 0
 
 
-def web(paths, opener=webbrowser.open):
+def web(paths, opener=webbrowser.open, launch=None):
     """The page, opened signed in."""
     report = (lambda text: print(text, file=sys.stderr))
     try:
@@ -78,10 +79,12 @@ def web(paths, opener=webbrowser.open):
                    ).hello()
         launcher.ensure_door(paths)
         link = launcher.sign_in_url(paths)
+        if launch:
+            link += "&" + urlencode(launch)
     except NotRunning as error:
         print(error, file=sys.stderr)
         return 1
-    print(f"ZERO's web UI: {launcher.url(paths)}")
+    print(f"ZERO's web UI: {launcher.web_url(paths)}")
     if not opener(link):
         print("No browser opened here: zero web on a machine with one, or "
               "open the address above and sign in from there.",
@@ -107,16 +110,39 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(prog="zero http-door")
     parser.add_argument("action", choices=("serve", "install", "uninstall",
-                                           "status", "web"))
+                                           "status", "web", "system-units"))
     parser.add_argument("--idle-seconds", type=float, default=IDLE_SECONDS,
                         help="serve: seconds with nothing to do before it "
                              "leaves")
+    parser.add_argument("--output", help="system-units: review folder")
+    parser.add_argument("new", nargs="?", choices=("new",))
+    parser.add_argument("-r", "--resume", action="store_true")
+    parser.add_argument("--session")
+    parser.add_argument("--cd")
+    parser.add_argument("--model")
+    parser.add_argument("--mode")
+    parser.add_argument("--thinking-effort", "--effort")
     args = parser.parse_args(argv)
     paths = Paths()
+    if args.action == "system-units":
+        if not args.output:
+            parser.error("system-units needs --output FOLDER")
+        for line in systemd_units.export_clean_address(paths, args.output):
+            print(line)
+        return 0
     if args.action == "serve":
         return serve(paths, args.idle_seconds)
     if args.action == "web":
-        return web(paths)
+        launch = {"workspace": str(Path(args.cd or Path.cwd()).resolve())}
+        for name in ("session", "model", "mode", "thinking_effort"):
+            value = getattr(args, name)
+            if value:
+                launch[name] = value
+        if args.resume:
+            launch["view"] = "sessions"
+        if args.new:
+            launch["view"] = "new"
+        return web(paths, launch=launch)
     if args.action == "status":
         return status(paths)
     if args.action == "install":

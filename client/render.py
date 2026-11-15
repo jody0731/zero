@@ -198,6 +198,9 @@ class Renderer:
     def event(self, event):
         record = event.get("record", {})
         kind = record.get("type")
+        if record.get("audience") == "model":
+            self.restarts += record.get("kind") == "restarted"
+            return []
         if kind == "user":
             if not record.get("steer"):
                 self.started, self.restarts = record.get("time"), 0

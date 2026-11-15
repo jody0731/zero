@@ -70,6 +70,9 @@
       "$ref": "#/$defs/job.list"
     },
     {
+      "$ref": "#/$defs/job.read"
+    },
+    {
       "$ref": "#/$defs/job.stop"
     },
     {
@@ -252,6 +255,15 @@
               "type": "null"
             }
           ]
+        },
+        "commands": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "init_request": {
+          "type": "string"
         },
         "unknown_fields": {
           "type": "array",
@@ -847,6 +859,10 @@
               "type": {
                 "type": "string"
               },
+              "audience": {
+                "type": "string",
+                "description": "model: internal context, not shown in a person's conversation"
+              },
               "time": {
                 "type": "string",
                 "description": "when it was written (ISO 8601, with its offset)"
@@ -1024,6 +1040,10 @@
             },
             "type": {
               "type": "string"
+            },
+            "audience": {
+              "type": "string",
+              "description": "model: internal context, not shown in a person's conversation"
             },
             "time": {
               "type": "string",
@@ -1643,6 +1663,10 @@
             "type": {
               "type": "string"
             },
+            "audience": {
+              "type": "string",
+              "description": "model: internal context, not shown in a person's conversation"
+            },
             "time": {
               "type": "string",
               "description": "when it was written (ISO 8601, with its offset)"
@@ -2144,6 +2168,64 @@
         "ok"
       ]
     },
+    "job.read": {
+      "type": "object",
+      "description": "A background job's state and retained output, without changing what the model has read.",
+      "properties": {
+        "message": {
+          "const": "job/read"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "job": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "job"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "job.read.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "job": {
+          "$ref": "#/$defs/row.job"
+        },
+        "output": {
+          "type": "string"
+        },
+        "omitted_bytes": {
+          "type": "integer"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
     "job.stop": {
       "type": "object",
       "description": "Stop a background job.",
@@ -2507,7 +2589,7 @@
     },
     "model.features": {
       "type": "object",
-      "description": "What a model honours of its API's features (thinking_off, thinking_on, strict_json, json_mode), as measured: each true or false, null where never measured. Measured now when none are kept or `test` is true, a few small calls to the model.",
+      "description": "What a model honours of its API's features (thinking_off, thinking_on, strict_json, json_mode), as measured: each true or false, null where never measured. Measured now when none are kept or `test` is true, a few small calls to the model. With `cached_only`, read stored results only; no model calls.",
       "properties": {
         "message": {
           "const": "model/features"
@@ -2535,6 +2617,9 @@
           "type": "string"
         },
         "test": {
+          "type": "boolean"
+        },
+        "cached_only": {
           "type": "boolean"
         }
       },
@@ -3640,6 +3725,10 @@
         "type": {
           "type": "string"
         },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -3661,6 +3750,10 @@
         },
         "type": {
           "const": "session"
+        },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
         },
         "time": {
           "type": "string",
@@ -3684,6 +3777,10 @@
         "type": {
           "const": "user"
         },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -3700,6 +3797,16 @@
               "type": "null"
             }
           ]
+        },
+        "notice": {
+          "type": "boolean"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "notice_source": {
+          "type": "string",
+          "description": "what sent this notice; it is not a person's message"
         },
         "inbox": {
           "type": "string",
@@ -3726,6 +3833,10 @@
         },
         "type": {
           "const": "assistant"
+        },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
         },
         "time": {
           "type": "string",
@@ -3858,6 +3969,10 @@
         "type": {
           "const": "ask"
         },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -3908,6 +4023,10 @@
         "type": {
           "const": "answer"
         },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -3942,6 +4061,10 @@
         "type": {
           "const": "note"
         },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -3965,6 +4088,10 @@
         },
         "type": {
           "const": "switch"
+        },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
         },
         "time": {
           "type": "string",
@@ -3990,6 +4117,10 @@
         },
         "type": {
           "const": "compaction"
+        },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
         },
         "time": {
           "type": "string",
@@ -4032,6 +4163,10 @@
         "type": {
           "const": "compaction_failed"
         },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -4056,6 +4191,10 @@
         "type": {
           "const": "nothing_to_compact"
         },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -4076,6 +4215,10 @@
         },
         "type": {
           "const": "rewind"
+        },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
         },
         "time": {
           "type": "string",
@@ -4102,6 +4245,10 @@
         },
         "type": {
           "const": "turn_end"
+        },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
         },
         "time": {
           "type": "string",

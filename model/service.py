@@ -71,7 +71,9 @@ class ModelService(Service):
             server, server_model = servers.resolve(model)
             api = server.api
             row = features.record(model, api)
-            if row is None or request.get("test") is True:
+            if request.get("cached_only"):
+                row = row or {"features": {}}
+            elif row is None or request.get("test") is True:
                 client = servers.make_client(model, FEATURE_SECONDS)
                 row = features.measure(model, api, client, server_model,
                                        FEATURE_SECONDS)

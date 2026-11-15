@@ -431,6 +431,10 @@ class Connection:
         return self.stream(build("session/list", watch=True, archived=archived,
                                  workspace=workspace))
 
+    def read_job(self, job):
+        """A job's retained output without consuming its notice to ZERO."""
+        return self.call(build("job/read", job=job))
+
     def stop_job(self, job):
         """Whether the job was running and is stopped now."""
         return self.call(build("job/stop", job=job))

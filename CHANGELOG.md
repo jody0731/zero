@@ -3,6 +3,20 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2.2
+
+- `zero` opens the browser; `zero tui` opens the terminal. Browser pairing has no
+  expiry. Optional systemd files provide `http://zero.localhost/`, with explicit
+  administrator install and rollback commands; existing MCP URLs still work.
+- One expandable process per turn, with background jobs shown as jobs, and internal
+  model notes kept out of user-facing transcripts. Replies stay visible.
+- A growing ten-line composer, slash commands, cache usage, session action menus and
+  editable session settings. Settings has Defaults, Models and Advanced views.
+- Stop a background job or this session's running jobs. Each job's exit and output
+  still reach ZERO. `zero job read JOB` reads output without consuming its notice.
+- Model capability reads can explicitly use cached results without a paid call.
+- Clarified the MCP reply tool's input: `choice` is one choice from the ask's list.
+
 ## 0.7.6.2.1
 
 - **Another agent finds its way in.** `zero --help` ends with how another agent connects:

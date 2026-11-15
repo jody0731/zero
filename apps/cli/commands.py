@@ -115,6 +115,9 @@ def history_text(info, records, working=True, runs_with=None, context=None):
     started = None
     restarts = 0
     for record in records:
+        if record.get("audience") == "model":
+            restarts += record.get("kind") == "restarted"
+            continue
         clock = datetime.fromisoformat(record["time"]).strftime("%H:%M:%S")
         if record["type"] == "session" and record.get("note"):
             lines.append(f"--- {record['note']} ---")
@@ -514,6 +517,10 @@ def parser(prog="zero"):
     listing.add_argument("--session", metavar="ID")
     json_flag(listing)
     listing.set_defaults(handler=job_list_command)
+    read = actions.add_parser("read", help="a job's retained output")
+    read.add_argument("job", metavar="JOB")
+    json_flag(read)
+    read.set_defaults(handler=job_read_command)
     stop = actions.add_parser("stop", help="stop a job")
     stop.add_argument("job", metavar="JOB", help="a job's id or the start of it")
     json_flag(stop)
@@ -872,6 +879,11 @@ def job_list_command(connection, args, out):
     jobs = connection.jobs(sid)
     text = jobs_text(jobs, sessions=sid is None) or "No jobs."
     return print_reply(args, out, {"ok": True, "jobs": jobs}, text)
+
+
+def job_read_command(connection, args, out):
+    reply = connection.read_job(args.job)
+    return print_reply(args, out, reply, reply["output"])
 
 
 def job_stop_command(connection, args, out):

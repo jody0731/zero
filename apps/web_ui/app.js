@@ -1,6 +1,6 @@
 /* ZERO's web UI: the sessions, one session's timeline, and its details,
  * all from ZERO's server through the HTTP door; the page keeps nothing of its
- * own but where the panels' edges are.
+ * own but browser pairing and where the panels' edges are.
  *
  * Every request is one protocol message, whole (POST /api/request); one
  * stream (GET /api/events) brings the session list and the open session's
@@ -28,7 +28,10 @@
     hello: null, sessions: [], open: null, records: [], earlier: 0,
     runsWith: null, context: null, events: null, asleep: false,
     calls: new Map(), lastSeq: 0, lastTime: null, draft: null,
-    hiddenTimer: null, seenSent: 0,
+    hiddenTimer: null, seenSent: 0, turn: null, archived: false,
+    stoppingJobs: new Set(), detailsVersion: 0,
+    settings: [], models: [], commandIndex: 0, launch: {},
+    jobs: new Map(), settingsDirty: false, features: new Map(), turnStarted: null,
   };
 
   // ------------------------------------------------------------ requests
@@ -38,7 +41,7 @@
     return String(Date.now()) + Math.random().toString(16).slice(2);
   }
 
-  async function post(payload) {
+  async function post(payload, restored = false) {
     const reply = await fetch("/api/request", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -46,8 +49,13 @@
       credentials: "same-origin",
     });
     if (reply.status === 401) {
-      location.reload();
-      throw new Error("signed out");
+      if (!restored) {
+        await pairBrowser();
+        return post(payload, true);
+      }
+      const error = new Error("This browser is not paired. Run zero web once.");
+      error.status = 401;
+      throw error;
     }
     const body = await reply.json();
     if (!reply.ok) throw new Error(body.error || `HTTP ${reply.status}`);
@@ -69,7 +77,7 @@
     try {
       reply = await post(payload);
     } catch (error) {
-      if (error.message === "signed out") throw error;
+      if (error.status === 401) throw error;
       reply = await post(payload);
     }
     wake();
@@ -149,8 +157,9 @@
         if (!document.hidden) markSeen();
       }
     });
-    events.addEventListener("session", (event) => sessionEvent(
-      JSON.parse(event.data)));
+    events.addEventListener("session", (event) => {
+      if (state.events === events) sessionEvent(JSON.parse(event.data));
+    });
     events.addEventListener("asleep", () => {
       state.asleep = true;
       drawServer();
@@ -210,8 +219,12 @@
 
   function drawSessions() {
     const list = $("session-list");
+    const editing = new Map(Array.from(list.children).filter((item) =>
+      item.contains(document.activeElement) || item.querySelector("details[open]"))
+      .map((item) => [item.dataset.session, item]));
     const words = $("search").value.trim().toLowerCase();
-    const rows = state.sessions.slice().sort(
+    const rows = state.sessions.filter(
+      (row) => Boolean(row.archived) === state.archived).sort(
       (a, b) => (b.updated_at || 0) - (a.updated_at || 0));
     const ids = new Set(rows.map((row) => row.id));
     const children = new Map();
@@ -230,7 +243,7 @@
     const add = (row, depth) => {
       const kids = children.get(row.id) || [];
       if (matches(row) || kids.some(matches)) {
-        list.append(sessionRow(row, depth, kids.length));
+        list.append(editing.get(row.id) || sessionRow(row, depth, kids.length));
       }
       if (depth < 1 || row.id === state.open || kids.some(
         (kid) => kid.id === state.open)) {
@@ -247,6 +260,7 @@
     const item = el("li", "row" + (depth ? " child" : "")
       + (row.id === state.open ? " open" : ""));
     item.tabIndex = 0;
+    item.dataset.session = row.id;
     item.style.marginLeft = depth ? `${16 * depth}px` : "";
     const dot = el("span", "dot" + (row.unseen ? " unseen" : ""));
     const title = el("span", "title", row.title || "(untitled)");
@@ -262,10 +276,12 @@
       row.started_by === "zero" ? "subagent" : (row.parent ? "fork" : ""),
       ...badges].filter(Boolean).join(" · "));
     where.title = row.workspace || "";
-    item.append(dot, title, status, where);
-    item.addEventListener("click", () => openSession(row.id));
+    item.append(dot, title, status, where, sessionActions(row));
+    item.addEventListener("click", (event) => {
+      if (!event.target.closest("button, input, details")) openSession(row.id);
+    });
     item.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") openSession(row.id);
+      if (event.key === "Enter" && event.target === item) openSession(row.id);
     });
     return item;
   }
@@ -285,7 +301,15 @@
   // ------------------------------------------------------------ a session
 
   async function openSession(id) {
+    const version = (state.openVersion || 0) + 1;
+    state.openVersion = version;
+    if (state.events) state.events.close();
+    state.events = null;
     state.open = id;
+    history.replaceState(null, "", `#session=${encodeURIComponent(id)}`);
+    state.turn = null;
+    state.settingsDirty = false;
+    state.turnStarted = null;
     state.records = [];
     state.calls = new Map();
     state.lastSeq = 0;
@@ -300,7 +324,7 @@
     try {
       const reply = await look("session/read", { session: id,
                                                  limit: PAGE_RECORDS });
-      if (state.open !== id) return;
+      if (state.open !== id || state.openVersion !== version) return;
       state.earlier = reply.earlier_count;
       state.runsWith = reply.runs_with;
       state.context = reply.context;
@@ -309,6 +333,7 @@
       for (const record of reply.records) addRecord(record, false);
       scrollToEnd();
     } catch (error) {
+      if (state.openVersion !== version) return;
       timeline.replaceChildren(el("div", "loading", error.message));
     }
     drawDetails();
@@ -318,6 +343,7 @@
   }
 
   function closeSession() {
+    state.openVersion = (state.openVersion || 0) + 1;
     state.open = null;
     $("session-title").textContent = "";
     $("session-sub").textContent = "";
@@ -343,17 +369,34 @@
     const reply = await look("session/read", { session: id, before: first,
                                                limit: PAGE_RECORDS });
     if (state.open !== id) return;
+    const expanded = new Set(Array.from($("timeline").querySelectorAll(
+      ".process[open] [data-seq]")).map((node) => node.dataset.seq));
+    const folds = new Set(Array.from($("timeline").querySelectorAll(
+      "details[open][data-fold]")).map((node) => node.dataset.fold));
+    const calls = new Set(Array.from($("timeline").querySelectorAll(
+      "details[open][data-call]")).map((node) => node.dataset.call));
     // Drawn again whole, the earlier ones first
     const records = reply.records.concat(state.records);
     state.earlier = reply.earlier_count;
     state.records = [];
     state.calls = new Map();
     state.lastTime = null;
+    state.lastSeq = 0;
+    state.turn = null;
     const timeline = $("timeline");
     const height = timeline.scrollHeight;
     timeline.replaceChildren();
     if (state.earlier) timeline.append(earlierButton());
     for (const record of records) addRecord(record, false);
+    for (const process of timeline.querySelectorAll(".process")) {
+      process.open = Array.from(process.querySelectorAll("[data-seq]"))
+        .some((node) => expanded.has(node.dataset.seq));
+    }
+    for (const fold of timeline.querySelectorAll("details")) {
+      if (folds.has(fold.dataset.fold) || calls.has(fold.dataset.call)) {
+        fold.open = true;
+      }
+    }
     timeline.scrollTop = timeline.scrollHeight - height;
   }
 
@@ -399,19 +442,33 @@
     const following = live && atEnd();
     state.lastSeq = record.seq;
     state.records.push(record);
-    if (UNDRAWN.has(record.type)) return;
+    if (UNDRAWN.has(record.type) || record.audience === "model") return;
+    if (record.type === "user" && !record.steer) {
+      state.turn = null;
+      state.turnStarted = record.time;
+    }
     clearDraft();
     const timeline = $("timeline");
     if (record.time) {
       const at = new Date(record.time).getTime() / 1000;
-      if (state.lastTime !== null && at - state.lastTime > GAP_SECONDS) {
+      if (!state.turn && state.lastTime !== null
+          && at - state.lastTime > GAP_SECONDS) {
         timeline.append(el("div", "divider",
           `${seconds(at - state.lastTime)} later`));
       }
       state.lastTime = at;
     }
     const node = entryFor(record);
-    if (node) timeline.append(node);
+    if (node) {
+      if (record.type === "user" && !record.notice && !record.steer) {
+        timeline.append(node);
+      } else if (record.type === "answer" || record.type === "user") {
+        const turn = turnFor(record);
+        (record.notice ? turn.process : turn.replies).append(node);
+      } else {
+        timeline.append(node);
+      }
+    }
     if (following) scrollToEnd();
     else if (live) $("follow").hidden = false;
   }
@@ -461,6 +518,24 @@
 
   function userEntry(record) {
     const node = el("div", "entry you");
+    node.dataset.seq = record.seq;
+    if (record.notice) {
+      node.className = "entry notice";
+      const name = record.notice_source || "Background notice";
+      node.append(who(name, record));
+      node.append(el("div", "bubble", record.text || ""));
+      if (record.reference) {
+        const link = el("button", null, "Show job");
+        link.addEventListener("click", () => {
+          showPanel("details");
+          const view = Array.from(document.querySelectorAll("[data-job]"))
+            .find((item) => item.dataset.job === record.reference);
+          if (view) { view.open = true; view.scrollIntoView(); }
+        });
+        node.append(link);
+      }
+      return node;
+    }
     const more = record.steer ? "steer" : (record.continue ? "go on" : "");
     node.append(who(sourceWho(record.source), record, more));
     if (record.continue && !record.text) return node;
@@ -468,17 +543,35 @@
     return node;
   }
 
+  function turnFor(record) {
+    if (state.turn) return state.turn;
+    const node = el("article", "entry zero turn");
+    node.append(who("ZERO", { time: state.turnStarted || record.time },
+      record.notice ? `Following up on ${record.notice_source}` : ""));
+    const process = el("details", "process");
+    const summary = el("summary", null, "Thinking…");
+    process.append(summary);
+    const replies = el("div", "turn-replies");
+    node.append(process, replies);
+    $("timeline").append(node);
+    state.turn = { node, process, summary, replies };
+    return state.turn;
+  }
+
   function assistantEntry(record) {
     const message = record.message || {};
-    const node = el("div", "entry zero");
-    node.append(who("ZERO", record));
+    const turn = turnFor(record);
+    const node = el("div", "process-step");
+    node.dataset.seq = record.seq;
+    turn.process.append(node);
     if (message.reasoning_content) {
       const fold = el("details", "thinking");
+      fold.dataset.fold = `thinking-${record.seq}`;
       fold.append(el("summary", null, "Thinking"),
                   el("div", "body", message.reasoning_content));
       node.append(fold);
     }
-    if (message.content) node.append(markdown(message.content));
+    if (message.content) turn.replies.append(markdown(message.content));
     const summaries = record.call_summaries || {};
     for (const call of message.tool_calls || []) {
       const fn = call.function || {};
@@ -488,14 +581,22 @@
       fold.dataset.call = call.id;
       state.calls.set(call.id, fold);
       node.append(fold);
+      turn.summary.textContent = line;
     }
     if (!message.content && !(message.tool_calls || []).length
         && !message.reasoning_content) return null;
-    return node;
+    return null;
   }
 
   function toolResult(fold, record) {
     const summary = fold.querySelector("summary");
+    const job = record.fields && record.fields.job_id;
+    if (job) {
+      const view = jobView({ id: job, command: summary.textContent,
+        state: "running", state_text: "Running", exit_code: null });
+      view.dataset.job = job;
+      fold.append(view);
+    }
     for (const [flag, word] of [["denied", "refused"], ["failed", "failed"],
                                 ["bad_call", "bad call"]]) {
       if (record[flag]) summary.append(el("span", `tag ${flag === "bad_call"
@@ -517,12 +618,13 @@
       return null;
     }
     // Its call came before the records on the page
-    const node = el("div", "entry zero");
+    const node = el("div", "process-step");
     const alone = el("details", "call");
     alone.append(el("summary", null, `${record.tool} ${record.arguments || ""}`));
     toolResult(alone, record);
     node.append(alone);
-    return node;
+    turnFor(record).process.append(node);
+    return null;
   }
 
   function askEntry(record) {
@@ -550,7 +652,11 @@
     const failed = record.outcome === "failed" || record.error;
     const text = [record.outcome, seconds(record.seconds),
       record.error || record.detail || ""].filter(Boolean).join(" · ");
-    return el("div", "turn-end" + (failed ? " failed" : ""), text);
+    const turn = turnFor(record);
+    turn.summary.textContent = text || "Completed";
+    if (failed) turn.summary.classList.add("failed");
+    state.turn = null;
+    return null;
   }
 
   function noteEntry(record) {
@@ -568,14 +674,16 @@
     clearDraft();
     const node = el("div", "entry zero draft");
     node.id = "draft";
-    node.append(who("ZERO", null));
     if (draft.text) node.append(markdown(draft.text));
     else if (draft.reasoning) node.append(el("div", "sub", "…"));
     if ((draft.calls || []).length) {
       node.append(el("div", "sub", `${draft.calls.join(", ")} …`));
     }
     const following = atEnd();
-    $("timeline").append(node);
+    const turn = turnFor({});
+    turn.summary.textContent = (draft.calls || []).length
+      ? draft.calls.join(", ") : "Thinking…";
+    (draft.text ? turn.replies : turn.process).append(node);
     if (following) scrollToEnd();
   }
 
@@ -734,6 +842,7 @@
   async function send(event) {
     if (event) event.preventDefault();
     const text = $("text").value.trim();
+    if (await runCommand(text)) return;
     if (!text || !state.open) return;
     const button = $("send");
     button.disabled = true;
@@ -743,6 +852,7 @@
         when_busy: $("queue").checked ? "queue" : "steer",
       });
       $("text").value = "";
+      sizeComposer();
       $("queue").checked = false;
     } catch (error) {
       alert(error.message);
@@ -751,8 +861,42 @@
     }
   }
 
+  function sizeComposer() {
+    const input = $("text");
+    const style = getComputedStyle(input);
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const limit = parseFloat(style.lineHeight) * 10 + padding;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, limit)}px`;
+    input.style.overflowY = input.scrollHeight > limit ? "auto" : "hidden";
+  }
+
+  $("text").addEventListener("input", () => {
+    sizeComposer();
+    drawCommands();
+  });
+  window.addEventListener("resize", sizeComposer);
   $("composer").addEventListener("submit", send);
   $("text").addEventListener("keydown", (event) => {
+    if (!$("commands").hidden) {
+      const choices = $("commands").querySelectorAll("button");
+      if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+        event.preventDefault();
+        state.commandIndex = (state.commandIndex
+          + (event.key === "ArrowDown" ? 1 : choices.length - 1)) % choices.length;
+        drawCommands(false);
+        return;
+      }
+      if (event.key === "Escape") {
+        $("commands").hidden = true;
+        return;
+      }
+      if (event.key === "Enter" && choices[state.commandIndex]) {
+        event.preventDefault();
+        choices[state.commandIndex].click();
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       send(event);
     }
@@ -770,9 +914,21 @@
   async function drawDetails() {
     const panel = $("details");
     const row = rowOf(state.open);
+    drawUsage();
+    const version = ++state.detailsVersion;
+    if (row && (state.settingsDirty || panel.contains(document.activeElement))) {
+      const work = await workSection(row);
+      if (version === state.detailsVersion && state.open === row.id) {
+        const old = panel.querySelector("#background-jobs");
+        if (old) old.replaceWith(work);
+      }
+      return;
+    }
     panel.replaceChildren();
     if (!row) return;
-    panel.append(runsWithSection(row));
+    const back = el("button", "details-back", "Back to conversation");
+    back.addEventListener("click", () => showPanel("session"));
+    panel.append(back, runsWithSection(row));
     const family = familySection(row);
     if (family) panel.append(family);
     const context = state.context;
@@ -792,46 +948,113 @@
       }
       panel.append(section);
     }
-    if (row.jobs || row.rounds) panel.append(await workSection(row));
-    panel.append(actionsSection(row));
+    const work = await workSection(row);
+    if (version === state.detailsVersion && state.open === row.id) {
+      panel.append(work);
+    }
+  }
+
+  function fieldInput(setting, value) {
+    let input;
+    if (setting.kind === "choice" || setting.kind === "mode") {
+      input = el("select");
+      const choices = setting.kind === "mode"
+        ? (state.hello.modes || []).map((mode) => mode.name) : setting.choices;
+      if (setting.unset_means) {
+        const unset = el("option", null, setting.unset_means);
+        unset.value = "";
+        input.append(unset);
+      }
+      for (const choice of choices || []) {
+        const option = el("option", null, choice);
+        option.value = choice;
+        input.append(option);
+      }
+    } else {
+      input = el("input");
+      if (["int", "number"].includes(setting.kind)) {
+        input.type = "number";
+        input.step = setting.kind === "int" ? "1" : "any";
+        input.min = setting.minimum;
+        if (setting.maximum !== null) input.max = setting.maximum;
+      }
+      if (setting.kind === "model") input.setAttribute("list", "models");
+    }
+    input.value = value === null || value === undefined ? "" : value;
+    input.setAttribute("aria-label", setting.label);
+    return input;
   }
 
   function runsWithSection(row) {
     const section = el("section");
     section.append(el("h2", null, "Session"));
-    const list = el("dl");
-    const mode = el("select");
-    mode.setAttribute("aria-label", "Mode");
-    for (const each of (state.hello && state.hello.modes) || []) {
-      const option = el("option", null, each.name);
-      option.value = each.name;
-      option.title = each.about;
-      if (each.name === row.mode) option.selected = true;
-      mode.append(option);
+    const form = el("form", "session-settings");
+    const runs = state.runsWith || {};
+    const inputs = {};
+    form.addEventListener("input", () => { state.settingsDirty = true; });
+    for (const [name, label, value] of [
+      ["mode", "Mode", row.mode], ["model", "Model", row.model],
+      ["workspace", "Folder", row.workspace],
+      ["thinking_effort", "Thinking", runs.thinking_effort],
+    ]) {
+      const setting = state.settings.find((each) => each.name === name)
+        || { kind: name === "mode" ? "mode" : name === "model" ? "model"
+          : "text", label };
+      const input = fieldInput({ ...setting, label }, value);
+      const wrapper = el("label", null, label);
+      wrapper.append(input);
+      form.append(wrapper);
+      inputs[name] = input;
     }
-    mode.addEventListener("change", async () => {
+    const status = el("div", "sub");
+    status.setAttribute("aria-live", "polite");
+    const save = el("button", null, "Apply");
+    save.type = "submit";
+    form.append(save, status);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      save.disabled = true;
       try {
-        await change("session/set", { session: row.id, mode: mode.value });
+        const fields = Object.fromEntries(Object.entries(inputs)
+          .map(([name, input]) => [name, input.value.trim()])
+          .filter(([, value]) => value !== ""));
+        const reply = await change("session/set", { session: row.id, ...fields });
+        state.runsWith = { ...runs, ...reply.set };
+        Object.assign(row, reply.set);
+        state.settingsDirty = false;
+        status.textContent = reply.next_turn ? "Applies next turn" : "Saved";
       } catch (error) {
-        alert(error.message);
+        status.textContent = error.message;
+      } finally {
+        save.disabled = false;
       }
     });
-    const runs = state.runsWith || {};
-    mode.title = modeAbout(row.mode);
-    const pairs = [["Mode", mode], ["Model", row.model], ["Folder", row.workspace],
-      ["Thinking", runs.thinking_effort || ""]];
+    const capabilities = async () => {
+      const model = inputs.model.value.trim();
+      if (!model) return;
+      const setting = state.settings.find((each) => each.name === "thinking_effort")
+        || { needs: [] };
+      try {
+        if (!state.features.has(model)) {
+          state.features.set(model, change("model/features", {
+            model, cached_only: true,
+          }));
+        }
+        const reply = await state.features.get(model);
+        if (model !== inputs.model.value.trim()) return;
+        for (const option of inputs.thinking_effort.options || []) {
+          const need = (setting.needs || []).find(([value]) => value === option.value);
+          option.disabled = Boolean(need && reply.features[need[1]] === false);
+          option.title = option.disabled ? "Not supported by this model" : "";
+        }
+      } catch (error) { status.textContent = error.message; }
+    };
+    inputs.model.addEventListener("change", capabilities);
+    capabilities();
+    section.append(form);
     if (row.pending && row.pending.length) {
-      pairs.push(["Next", row.pending.join(", ")]);
+      section.append(el("p", "sub", `Next turn: ${row.pending.join(", ")}`));
     }
-    for (const [name, value] of pairs) {
-      if (value === "" || value === undefined) continue;
-      list.append(el("dt", null, name));
-      const dd = el("dd");
-      if (value instanceof Node) dd.append(value);
-      else dd.textContent = value;
-      list.append(dd);
-    }
-    section.append(list);
     return section;
   }
 
@@ -873,46 +1096,155 @@
     return section;
   }
 
+  async function stopJob(job, button) {
+    state.stoppingJobs.add(job.id);
+    button.disabled = true;
+    button.textContent = "Stopping…";
+    try {
+      await change("job/stop", { job: job.id });
+    } catch (error) {
+      state.stoppingJobs.delete(job.id);
+      alert(error.message);
+    } finally {
+      button.blur();
+      drawDetails();
+    }
+  }
+
   async function workSection(row) {
     const section = el("section");
-    section.append(el("h2", null, "Background"));
-    const list = el("ul", "small-list");
+    section.id = "background-jobs";
+    section.append(el("h2", null, "Background jobs"));
     try {
-      if (row.jobs) {
-        const reply = await look("job/list", { session: row.id });
-        for (const job of reply.jobs.filter((each) => each.state === "running")) {
-          list.append(el("li", null, job.command));
-        }
+      const reply = await look("job/list", { session: row.id });
+      const running = reply.jobs.filter((job) => job.state === "running");
+      if (running.length > 1) {
+        const all = el("button", null, "Stop all");
+        all.type = "button";
+        all.addEventListener("click", async () => {
+          all.disabled = true;
+          all.textContent = "Stopping…";
+          await Promise.all(running.map((job) => stopJob(job, all)));
+        });
+        section.append(all);
       }
-      if (row.rounds) list.append(el("li", null, `rounds · ${row.rounds}`));
+      for (const job of reply.jobs) {
+        state.jobs.set(job.id, job);
+        if (job.state !== "running") state.stoppingJobs.delete(job.id);
+        for (const old of $("timeline").querySelectorAll("[data-job]")) {
+          if (old.dataset.job === job.id) {
+            const fresh = jobView(job);
+            fresh.dataset.job = job.id;
+            fresh.open = old.open;
+            old.replaceWith(fresh);
+          }
+        }
+        section.append(jobView(job));
+      }
+      if (!reply.jobs.length) section.append(el("div", "sub", "No jobs"));
     } catch (error) {
-      list.append(el("li", "error", error.message));
+      section.append(el("div", "error", error.message));
     }
-    section.append(list);
     return section;
   }
 
-  function actionsSection(row) {
-    const section = el("section");
-    const rename = el("button", null, "Rename");
-    rename.type = "button";
-    rename.addEventListener("click", async () => {
-      const title = prompt("Title", row.title || "");
-      if (title && title.trim()) {
-        await change("session/rename", { session: row.id, title: title.trim() })
-          .catch((error) => alert(error.message));
-      }
+  function jobView(job) {
+    const item = el("details", "job");
+    item.dataset.job = job.id;
+    const status = job.stopped_by === "user" ? "Stopped by you"
+      : job.state_text;
+    item.append(el("summary", null, `${job.command} · ${status}`));
+    item.append(el("div", "sub", job.id));
+    if (job.exit_code !== null) {
+      item.append(el("div", null, `Exit: ${job.exit_code}`));
+    }
+    if (job.state === "running") {
+      const stop = el("button", null,
+        state.stoppingJobs.has(job.id) ? "Stopping…" : "Stop");
+      stop.type = "button";
+      stop.disabled = state.stoppingJobs.has(job.id);
+      stop.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        stopJob(job, stop);
+      });
+      item.querySelector("summary").append(stop);
+    }
+    const output = el("pre");
+    item.append(output);
+    item.addEventListener("toggle", async () => {
+      if (!item.open) return;
+      try {
+        const reply = await look("job/read", { job: job.id });
+        output.textContent = (reply.omitted_bytes
+          ? `${reply.omitted_bytes} earlier bytes no longer retained.\n` : "")
+          + (reply.output || "No output");
+      } catch (error) { output.textContent = error.message; }
     });
-    const archive = el("button", null, row.archived ? "Unarchive" : "Archive");
-    archive.type = "button";
-    archive.addEventListener("click", async () => {
-      await change(row.archived ? "session/unarchive" : "session/archive",
-                   { session: row.id }).catch((error) => alert(error.message));
-    });
-    const wrap = el("div", "composer-row");
-    wrap.append(rename, archive);
-    section.append(wrap, el("div", "sub", row.id));
-    return section;
+    return item;
+  }
+
+  function sessionActions(row) {
+    const menu = el("details", "session-actions");
+    const summary = el("summary", null, "⋯");
+    summary.setAttribute("aria-label", `Actions for ${row.title || row.id}`);
+    menu.append(summary);
+    const actions = [
+      ["Rename", async () => {
+        const input = el("input", "rename");
+        input.value = row.title || "";
+        input.setAttribute("aria-label", "Session name");
+        menu.replaceChildren(input);
+        input.focus();
+        input.select();
+        input.addEventListener("keydown", async (event) => {
+          if (event.key === "Escape") drawSessions();
+          if (event.key === "Enter" && input.value.trim()) {
+            await change("session/rename", {
+              session: row.id, title: input.value.trim(),
+            }).catch((error) => alert(error.message));
+            input.blur();
+            drawSessions();
+          }
+        });
+      }],
+      ["History…", () => historyActions(row.id)],
+      ["Fork", async () => {
+        const reply = await change("session/fork", {
+          session: row.id, source: "web",
+        });
+        await openSession(reply.session.id);
+      }],
+      [row.archived ? "Restore" : "Archive", () => change(
+        row.archived ? "session/unarchive" : "session/archive",
+        { session: row.id })],
+      ["Copy link", () => navigator.clipboard.writeText(
+        `${location.origin}/#session=${encodeURIComponent(row.id)}`)],
+      ["Delete", async () => {
+        if (confirm("Move this session to the trash?")) {
+          await change("session/delete", { session: row.id });
+        }
+      }],
+    ];
+    for (const [name, action] of actions) {
+      const button = el("button", null, name);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        Promise.resolve(action()).catch((error) => alert(error.message));
+      });
+      menu.append(button);
+    }
+    return menu;
+  }
+
+  function drawUsage() {
+    const context = state.context || {};
+    const cache = context.cached_share;
+    $("usage").textContent = `Context ${tokens(context.tokens)}`
+      + (context.line ? ` / ${tokens(context.line)}` : "")
+      + ` · Cache ${cache === null || cache === undefined
+        ? "—" : `${Math.round(cache * 100)}%`}`;
+    $("usage").title = "Cached input tokens in the last model call";
   }
 
   // ------------------------------------------------------------ server state
@@ -950,7 +1282,10 @@
     }
     select.title = modeAbout(select.value);
     const row = rowOf(state.open);
-    if (row && !$("new-folder").value) $("new-folder").value = row.workspace;
+    if (!$("new-folder").value) {
+      $("new-folder").value = state.launch.workspace || (row && row.workspace) || "/";
+    }
+    if (state.launch.mode) select.value = state.launch.mode;
     $("new-error").hidden = true;
     dialog.showModal();
   }
@@ -967,6 +1302,9 @@
       const reply = await change("session/send", {
         text: $("new-text").value.trim(), workspace: $("new-folder").value.trim(),
         mode: $("new-mode").value, source: "web",
+        ...(state.launch.model ? { model: state.launch.model } : {}),
+        ...(state.launch.thinking_effort
+          ? { thinking_effort: state.launch.thinking_effort } : {}),
       });
       $("new-dialog").close();
       $("new-text").value = "";
@@ -983,6 +1321,7 @@
     const frame = $("frame");
     frame.classList.remove("show-sessions", "show-session", "show-details");
     frame.classList.add(`show-${name}`);
+    if (name === "details") frame.classList.remove("no-details");
   }
 
   $("back").addEventListener("click", () => showPanel("sessions"));
@@ -1033,19 +1372,355 @@
     });
   }
 
+  function drawCommands(reset = true) {
+    const list = $("commands");
+    const text = $("text").value;
+    list.replaceChildren();
+    if (reset) state.commandIndex = 0;
+    const matches = Object.entries(state.hello.commands || {}).filter(
+      ([name]) => text.startsWith("/") && !text.includes(" ")
+        && name.startsWith(text));
+    list.hidden = !matches.length;
+    for (const [index, [name, about]] of matches.entries()) {
+      const button = el("button", index === state.commandIndex ? "primary" : "",
+        `${name} · ${about}`);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        $("text").value = `${name} `;
+        list.hidden = true;
+        $("text").focus();
+      });
+      list.append(button);
+    }
+  }
+
+  async function runCommand(text) {
+    const [name] = text.split(/\s+/);
+    if (!Object.hasOwn(state.hello.commands || {}, name)) return false;
+    const value = text.slice(name.length).trim();
+    const session = state.open;
+    try {
+      switch (name) {
+        case "/new": openNew(); break;
+        case "/sessions": showPanel("sessions"); break;
+        case "/settings": await openSettings(); break;
+        case "/help":
+          alert(Object.entries(state.hello.commands).map(
+            ([command, about]) => `${command}: ${about}`).join("\n"));
+          break;
+        case "/jobs": showPanel("details"); break;
+        case "/quit": closeSession(); break;
+        case "/mode": case "/model": case "/cd":
+          if (!value) { showPanel("details"); break; }
+          await change("session/set", { session,
+            [name === "/cd" ? "workspace" : name.slice(1)]: value });
+          break;
+        case "/rename":
+          if (!value) throw new Error("Use /rename followed by a name");
+          await change("session/rename", { session, title: value }); break;
+        case "/archive":
+          await change(rowOf(session).archived
+            ? "session/unarchive" : "session/archive", { session }); break;
+        case "/delete":
+          if (confirm("Move this session to the trash?")) {
+            await change("session/delete", { session });
+          }
+          break;
+        case "/fork": {
+          const reply = await change("session/fork", { session, source: "web" });
+          await openSession(reply.session.id); break;
+        }
+        case "/compact":
+          await change("session/compact", { session, instructions: value }); break;
+        case "/continue":
+          await change("session/continue", { session, source: "web" }); break;
+        case "/copy": {
+          const last = state.records.findLast((record) =>
+            record.type === "assistant" && record.message.content);
+          if (last) await navigator.clipboard.writeText(last.message.content);
+          break;
+        }
+        case "/rewind": await historyActions(session); break;
+        case "/permissions":
+          if (value.startsWith("forget ")) {
+            const reply = await look("grant/list", { session });
+            const index = Number(value.slice(7));
+            const grant = Number.isInteger(index) && reply.grants[index - 1];
+            if (!grant) throw new Error("Choose a listed permission number");
+            await change("grant/forget", { session, grant: grant.id });
+          } else await permissionsView(session);
+          break;
+        case "/init": {
+          const reply = await change("session/send", {
+            ...(session ? { session } : {}),
+            source: "web", text: state.hello.init_request,
+          });
+          if (!session) await openSession(reply.session);
+          break;
+        }
+        default: throw new Error("Unknown command");
+      }
+      $("text").value = "";
+      sizeComposer();
+      $("commands").hidden = true;
+    } catch (error) {
+      alert(error.message);
+    }
+    return true;
+  }
+
+  function actionDialog(title) {
+    const dialog = el("dialog", "dialog");
+    dialog.append(el("h2", null, title));
+    const close = el("button", null, "Back");
+    close.addEventListener("click", () => dialog.close());
+    dialog.append(close);
+    dialog.addEventListener("close", () => dialog.remove());
+    document.body.append(dialog);
+    dialog.showModal();
+    return dialog;
+  }
+
+  async function historyActions(session) {
+    const reply = await look("session/user_messages", { session });
+    const dialog = actionDialog("Conversation history");
+    dialog.append(el("p", "sub", "Rewind leaves files and memory unchanged."));
+    for (const message of reply.messages) {
+      const section = el("section");
+      section.append(el("p", null, message.text));
+      for (const action of ["Fork", "Rewind"]) {
+        const button = el("button", null, action);
+        button.addEventListener("click", async () => {
+          try {
+            const result = await change(action === "Fork"
+              ? "session/fork" : "session/rewind", { session, seq: message.seq });
+            dialog.close();
+            await openSession(action === "Fork" ? result.session.id : session);
+            $("text").value = result.text || "";
+            sizeComposer();
+          } catch (error) { alert(error.message); }
+        });
+        section.append(button);
+      }
+      dialog.append(section);
+    }
+  }
+
+  async function permissionsView(session) {
+    const reply = await look("grant/list", { session });
+    const dialog = actionDialog("Permissions");
+    for (const grant of reply.grants) {
+      const section = el("section");
+      section.append(el("p", null, grant.description));
+      const forget = el("button", null, "Forget");
+      forget.addEventListener("click", async () => {
+        try {
+          await change("grant/forget", { session, grant: grant.id });
+          section.remove();
+        } catch (error) { alert(error.message); }
+      });
+      section.append(forget);
+      dialog.append(section);
+    }
+    if (!reply.grants.length) dialog.append(el("p", null, "No saved grants"));
+  }
+
+  async function openSettings(view = "Defaults") {
+    const dialog = $("settings-dialog");
+    if (!dialog.open) dialog.showModal();
+    const tabs = $("settings-tabs");
+    tabs.replaceChildren();
+    for (const name of ["Defaults", "Models", "Advanced"]) {
+      const button = el("button", name === view ? "primary" : "", name);
+      button.addEventListener("click", () => {
+        openSettings(name).catch((error) => {
+          $("settings-body").textContent = error.message;
+        });
+      });
+      tabs.append(button);
+    }
+    const body = $("settings-body");
+    body.replaceChildren(el("p", "sub", view === "Defaults"
+      ? "Defaults for new sessions. Existing sessions keep their settings."
+      : "Changes are saved individually. Limits also apply to open sessions."));
+    if (view === "Models") return modelServers(body);
+    const reply = await look("setting/list");
+    state.settings = reply.settings;
+    for (const setting of reply.settings.filter((each) => each.shown
+      && (view === "Defaults" ? each.group === "Default"
+        : each.group !== "Default"))) {
+      const form = el("form", "setting-row");
+      const label = el("label", null, setting.label);
+      const input = fieldInput(setting, setting.value);
+      label.append(input);
+      const save = el("button", null, "Save");
+      save.type = "submit";
+      const status = el("span", "sub");
+      form.append(label, save, status);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        try {
+          const value = input.value === "" && setting.unset_means ? null
+            : ["int", "number"].includes(setting.kind)
+              ? Number(input.value) : input.value;
+          await change("setting/set", { name: setting.name, value });
+          status.textContent = "Saved";
+        } catch (error) { status.textContent = error.message; }
+        finally { save.disabled = false; }
+      });
+      body.append(form);
+    }
+  }
+
+  async function modelServers(body) {
+    const reply = await look("model/server/list");
+    body.replaceChildren(el("p", "sub",
+      "Connecting tests a few tokens with the model server, which may charge."));
+    for (const server of [...reply.servers,
+      { name: "", title: "Add a model server", url: "", key_state: "" }]) {
+      const section = el("section");
+      section.append(el("h3", null, server.title || server.name),
+        el("p", "sub", `${server.url} · ${server.key_state}`));
+      const form = el("form", "model-server");
+      const name = el("input");
+      name.placeholder = "Server name";
+      name.setAttribute("aria-label", "Server name");
+      const url = el("input");
+      url.type = "url";
+      url.placeholder = "API URL";
+      url.setAttribute("aria-label", "API URL");
+      if (!server.name) form.append(name, url);
+      const model = el("input");
+      model.placeholder = "Model name";
+      model.setAttribute("aria-label", "Model name");
+      const key = el("input");
+      key.type = "password";
+      key.autocomplete = "off";
+      key.placeholder = "New key (blank keeps the existing key)";
+      key.setAttribute("aria-label", "Model server key");
+      const connect = el("button", null, "Test and connect");
+      connect.type = "submit";
+      const status = el("div", "sub");
+      form.append(model, key, connect, status);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        connect.disabled = true;
+        try {
+          const fields = { name: server.name || name.value.trim(),
+            model: model.value.trim() };
+          if (!server.name) fields.url = url.value.trim();
+          if (key.value) fields.key = key.value;
+          await change("model/server/connect", fields);
+          key.value = "";
+          status.textContent = "Connected";
+        } catch (error) { status.textContent = error.message; }
+        finally { connect.disabled = false; }
+      });
+      section.append(form);
+      if (server.name) {
+        const disconnect = el("button", null, "Disconnect");
+        disconnect.addEventListener("click", async () => {
+          if (!confirm(`Remove the saved connection to ${server.name}?`)) return;
+          try {
+            await change("model/server/disconnect", { name: server.name });
+            await openSettings("Models");
+          } catch (error) { status.textContent = error.message; }
+        });
+        section.append(disconnect);
+      }
+      body.append(section);
+    }
+  }
+
+  $("settings-open").addEventListener("click", () => {
+    openSettings().catch((error) => alert(error.message));
+  });
+  $("settings-close").addEventListener("click", () => $("settings-dialog").close());
+
   // ------------------------------------------------------------ start
+
+  async function pairBrowser() {
+    const fragment = new URLSearchParams(location.hash.slice(1));
+    state.launch = Object.fromEntries(fragment);
+    delete state.launch.pair;
+    const paired = fragment.get("pair");
+    if (paired) {
+      localStorage.setItem("zero.browser", paired);
+      fragment.delete("pair");
+      history.replaceState(null, "", location.pathname
+        + (fragment.size ? `#${fragment}` : ""));
+    }
+    const key = localStorage.getItem("zero.browser");
+    if (!key) return;
+    const response = await fetch("/api/browser", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key }),
+    });
+    if (!response.ok) {
+      throw new Error("This browser is not paired. Run zero web once.");
+    }
+  }
 
   async function start() {
     showPanel("sessions");
     drawDetails();
     try {
+      await pairBrowser();
       state.hello = await look("server/hello");
+      const settings = await look("setting/list").catch(() => ({ settings: [] }));
+      state.settings = settings.settings;
+      const listed = await look("model/server/list").catch(() => ({ servers: [] }));
+      state.models = listed.servers.flatMap((server) =>
+        Object.keys(server.models || {}).map((model) => `${server.name}/${model}`));
+      const models = el("datalist");
+      models.id = "models";
+      for (const model of state.models) {
+        const option = el("option");
+        option.value = model;
+        models.append(option);
+      }
+      document.body.append(models);
     } catch (error) {
       $("server-state").textContent = error.message;
+      return;
     }
     drawServer();
-    connect();
+    const selected = new URLSearchParams(location.hash.slice(1)).get("session");
+    const listed = await look("session/list", { archived: null });
+    state.sessions = listed.sessions;
+    drawSessions();
+    let target = selected;
+    if (!target && state.launch.view !== "new"
+        && state.launch.view !== "sessions") {
+      const workspace = state.launch.workspace;
+      const rows = listed.sessions.filter((row) => !row.archived
+        && (!workspace || workspace === "/" || row.workspace === workspace));
+      rows.sort((a, b) => b.updated_at - a.updated_at);
+      target = rows[0] && rows[0].id;
+    }
+    if (target) {
+      const matches = listed.sessions.filter((row) => row.id.startsWith(target));
+      if (matches.length === 1) target = matches[0].id;
+      const fields = Object.fromEntries(["model", "mode", "thinking_effort"]
+        .filter((name) => state.launch[name])
+        .map((name) => [name, state.launch[name]]));
+      if (Object.keys(fields).length) {
+        await change("session/set", { session: target, ...fields });
+      }
+      await openSession(target);
+    } else connect();
+    if (state.launch.view === "new" || (!target && state.launch.workspace
+        && state.launch.view !== "sessions")) openNew();
+    sizeComposer();
   }
+
+  $("archived").addEventListener("click", () => {
+    state.archived = !state.archived;
+    $("archived").textContent = state.archived ? "Active sessions" : "Archived";
+    drawSessions();
+  });
 
   start();
 })();

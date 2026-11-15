@@ -404,7 +404,7 @@ def is_notice(message):
 # record: the record its sender started from (`started_from_seq`, for a
 # notice from a part a rewind left behind) and, for a notice that quotes
 # output, what it says without it (`summary`, which the judge reads)
-MESSAGE_FIELDS = ("started_from_seq", "summary")
+MESSAGE_FIELDS = ("started_from_seq", "summary", "reference")
 
 
 def steer_fields(steer):

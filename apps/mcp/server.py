@@ -230,10 +230,10 @@ TOOLS = (
      }, ("session",)),
      "outputSchema": result_schema("zero_wait")},
     {"name": "zero_reply", "description": (
-        "Answer the question waiting in a ZERO session, in words (`text`) or "
-        "with one of the choices its ask lists (`choices`, each with its "
-        "words in `choice_labels`). With no question waiting, `text` is a "
-        "follow-up message. Then zero_wait."),
+        "Answer the question waiting in a ZERO session: `text` in words, or "
+        "`choice`, one of the `choices` its ask in zero_wait's result lists "
+        "(their words in `choice_labels`). With no question waiting, `text` "
+        "is a follow-up message. Then zero_wait."),
      "inputSchema": arguments_schema("zero_reply", {
          "session": {"title": "Session", "type": "string"},
          "text": optional("string", "Text"),

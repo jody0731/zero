@@ -128,7 +128,7 @@ class SessionJobs:
 
 class JobsService(Service):
     name = "jobs"
-    looking_messages = ("job/list",)
+    looking_messages = ("job/list", "job/read")
     schema = SCHEMA
     renamed_columns = RENAMED_COLUMNS
     added_columns = ADDED_COLUMNS
@@ -158,7 +158,8 @@ class JobsService(Service):
         self.wake = runtime.wake
 
     def messages(self):
-        return {"job/list": self.list_message, "job/stop": self.stop_message}
+        return {"job/list": self.list_message, "job/stop": self.stop_message,
+                "job/read": self.read_message}
 
     def command_started(self, pid, sid):
         """Keep a session's command, which leads Unix session `pid`; past
@@ -194,6 +195,18 @@ class JobsService(Service):
         if sid is not None and not isinstance(sid, str):
             raise Refused("session must be a string")
         return {"ok": True, "jobs": self.rows(sid)}
+
+    def read_message(self, request):
+        """A person's read never advances the model's output cursor."""
+        identifier = request.get("job")
+        if not isinstance(identifier, str):
+            raise Refused("job/read needs the job's id")
+        row = self.store.job(identifier)
+        if row is None:
+            raise Refused("no such job")
+        output, omitted_bytes = self.files(identifier).read(0)
+        return {"ok": True, "job": listed_row(row, time.time()),
+                "output": output, "omitted_bytes": omitted_bytes}
 
     def stop_message(self, request):
         job = request.get("job")

@@ -1,6 +1,6 @@
 """The door's guard: every request is checked here before anything runs.
 
-1. **Host** is the door's own (`127.0.0.1:PORT`, `localhost:PORT`): a page of
+1. **Host** is the door's own (`127.0.0.1`, `localhost`, `zero.localhost`): a page of
    another site whose name was pointed at this machine (DNS rebinding) names
    its own host, and is refused.
 2. **Origin**, where a browser sends one, is the door's own page, and a
@@ -32,14 +32,16 @@ from apps.http_door import tcp_peer
 from client.connection import read_token
 
 # The names the door answers to; the port is the door's own
-LOOPBACK_NAMES = ("127.0.0.1", "localhost")
+LOOPBACK_NAMES = ("127.0.0.1", "localhost", "zero.localhost")
 # What a browser's Sec-Fetch-Site may say: the door's own page, or the
 # user's own navigation (typed, a bookmark, a link from the terminal)
 FETCH_SITES = ("same-origin", "none")
 # How long a sign-in link opens the door, once
 SIGN_IN_SECONDS = 120
-# How long a browser stays signed in
+# Cookie lifetime; durable browser pairing renews it without a terminal
 COOKIE_SECONDS = 30 * 24 * 3600
+# Browser pairing has no clock. It restores the cookie after it expires.
+BROWSER_PURPOSE = "zero web browser pairing"
 # What each derived value is for, so one can't stand for the other
 COOKIE_PURPOSE = "zero web ui cookie"
 SIGN_IN_PURPOSE = "zero web ui sign-in"
@@ -101,6 +103,8 @@ class Guard:
         self.make_token = make_token
         self.peer_of = peer_of
         self.hosts = {f"{name}:{port}" for name in LOOPBACK_NAMES}
+        if port == 80:
+            self.hosts.update(LOOPBACK_NAMES)
         self.origins = {f"http://{host}" for host in self.hosts}
         # Each sign-in code's nonce, kept until its code ends: used once
         self.used = {}
@@ -186,6 +190,16 @@ class Guard:
                           "again with zero web")
         self.used[nonce] = ends
         return derived(token, COOKIE_PURPOSE)
+
+    def browser_key(self):
+        """A browser-only credential, valid until the app token changes."""
+        return derived(self.token(), BROWSER_PURPOSE)
+
+    def restore_browser(self, key):
+        """Exchange a paired browser's credential for its HttpOnly cookie."""
+        if not same(key, self.browser_key()):
+            raise Refused(401, "This browser is not paired. Run zero web once.")
+        return derived(self.token(), COOKIE_PURPOSE)
 
     def set_cookie(self, value):
         """The Set-Cookie header's value: the page's alone, never sent by

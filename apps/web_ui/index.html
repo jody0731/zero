@@ -13,11 +13,13 @@
   <aside id="sessions" class="panel sessions" aria-label="Sessions">
     <header class="panel-head">
       <span class="brand">ZERO</span>
+      <button id="settings-open" type="button">Settings</button>
       <button id="new-session" type="button">New</button>
     </header>
     <input id="search" class="search" type="search"
            placeholder="Search" aria-label="Search">
     <ul id="session-list" class="session-list" role="list"></ul>
+    <button id="archived" type="button">Archived</button>
     <footer id="server-state" class="server-state" aria-live="polite"></footer>
   </aside>
   <div class="handle" data-handle="left"></div>
@@ -38,6 +40,7 @@
             aria-label="Newest">↓</button>
     <section id="ask" class="ask" hidden aria-live="polite"></section>
     <form id="composer" class="composer" autocomplete="off">
+      <div id="commands" class="command-list" hidden></div>
       <textarea id="text" rows="2"
                 placeholder="Message" aria-label="Message"></textarea>
       <div class="composer-row">
@@ -46,6 +49,7 @@
         <button id="stop" type="button" hidden>Stop</button>
         <button id="send" class="primary" type="submit">Send</button>
       </div>
+      <div id="usage" class="sub"></div>
     </form>
   </main>
   <div class="handle" data-handle="right"></div>
@@ -64,6 +68,14 @@
       <button value="start" class="primary" type="submit">Start</button>
     </div>
   </form>
+</dialog>
+<dialog id="settings-dialog" class="dialog settings-dialog">
+  <header class="panel-head">
+    <h2>Settings</h2>
+    <button id="settings-close" type="button">Back</button>
+  </header>
+  <nav id="settings-tabs" aria-label="Settings views"></nav>
+  <section id="settings-body"></section>
 </dialog>
 </body>
 </html>

@@ -45,6 +45,7 @@ from server import peers, replies
 from server.idempotency import MessageReplies
 from server.services import Refused
 from server.runtime import Message
+from protocol.commands import COMMANDS, INIT
 from protocol import messages, older, version
 
 # How long a stop waits for running turns
@@ -539,6 +540,7 @@ class Server:
             "mode": self.runtime.mode, "model": self.runtime.model,
             # What a client offers and shows without loading the harness
             "modes": [dict(row) for row in self.runtime.mode_rows],
+            "commands": COMMANDS, "init_request": INIT,
             "default_model": self.runtime.default_model,
         }
 

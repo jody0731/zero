@@ -227,6 +227,9 @@ class Transcript(VerticalScroll):
         """The widgets a record adds; a tool or ask record changes its call's
         block in place instead."""
         kind = record.get("type")
+        if record.get("audience") == "model":
+            self.restarts += record.get("kind") == "restarted"
+            return []
         if kind in ("user", "answer"):
             if kind == "user" and not record.get("steer"):
                 self.started, self.restarts = record.get("time"), 0

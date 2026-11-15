@@ -14,7 +14,7 @@ ask's answers with their words (`choice_labels`). A component's own rows
 
 import json
 
-from core import asking, tools
+from core import asking, history, tools
 
 
 def ask_row(ask):
@@ -80,6 +80,13 @@ def call_summaries(message):
 def record(record):
     """A log's record as an app reads it."""
     kind = record.get("type")
+    if kind in ("note", "switch"):
+        # Harness notes belong to the model's context. Operational state
+        # reaches people through turn outcomes, asks, jobs and session rows.
+        return {**record, "audience": "model"}
+    if kind == "user" and history.is_notice(record):
+        return {**record, "notice": True,
+                "notice_source": history.NOTICES[record["source"]]}
     if kind == "assistant" and (record.get("message") or {}).get("tool_calls"):
         return {**record, "call_summaries": call_summaries(record["message"])}
     if kind == "ask":

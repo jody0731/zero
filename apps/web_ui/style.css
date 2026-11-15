@@ -289,3 +289,34 @@ details.call pre { background: var(--panel); padding: 8px 10px;
   .frame.no-details > .details, .frame.no-details > .handle[data-handle="right"] {
     display: none; }
 }
+
+/* A turn owns its process; individual model calls have no message heading. */
+.process { border-left: 2px solid currentColor; padding-left: 12px; }
+.process > summary { list-style: none; cursor: pointer; }
+.process > summary::before { content: "+ "; }
+.process[open] > summary::before { content: "− "; }
+.process-step { margin: 12px 0; }
+.turn-replies { margin-top: 12px; }
+#text { resize: none; line-height: 1.5; min-height: 0; max-height: none; }
+.session-actions { grid-column: 3; grid-row: 1 / span 2; }
+.session-actions > summary { list-style: none; cursor: pointer; padding: 4px; }
+.session-actions button { display: block; width: 100%; text-align: left; }
+.session-actions[open] { position: relative; z-index: 2; }
+.job { margin: 12px 0; overflow-wrap: anywhere; }
+#usage { padding-top: 8px; }
+
+.session-settings label, .setting-row label { display: block; margin: 10px 0; }
+.session-settings input, .session-settings select { width: 100%; }
+.command-list { max-height: 240px; overflow: auto; }
+.command-list button { display: block; width: 100%; text-align: left; }
+.settings-dialog { width: min(720px, 95vw); max-height: 90dvh; overflow: auto; }
+#settings-tabs { display: flex; gap: 8px; margin: 12px 0; }
+.setting-row { border-bottom: 1px solid var(--line); padding: 12px 0; }
+.setting-row input, .setting-row select { display: block; width: 100%; }
+.model-server { display: grid; gap: 8px; }
+@media (max-width: 760px) {
+  .settings-dialog { width: 100vw; max-width: none; height: 100dvh; margin: 0; }
+}
+
+.details-back { display: none; }
+@media (max-width: 760px) { .details-back { display: block; margin: 12px; } }

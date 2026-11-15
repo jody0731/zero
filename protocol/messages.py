@@ -246,6 +246,8 @@ ROWS = {
 RECORD_FIELDS = {
     "seq": {**INTEGER, "description": "its place in the session's log"},
     "type": STRING,
+    "audience": {**STRING, "description": "model: internal context, not "
+                 "shown in a person's conversation"},
     "time": {**STRING, "description": "when it was written (ISO 8601, with "
              "its offset)"},
 }
@@ -258,6 +260,10 @@ RECORDS = {
     },
     "user": {
         "text": STRING, "source": maybe(STRING),
+        "notice": BOOLEAN,
+        "reference": STRING,
+        "notice_source": {**STRING, "description": "what sent this notice; "
+                          "it is not a person's message"},
         "inbox": {**STRING, "description": "the message's id"},
         "steer": {**BOOLEAN, "description": "sent while a turn ran"},
         "continue": {**BOOLEAN, "description": "a turn went on with no new "
@@ -420,6 +426,8 @@ MESSAGES = {
             "modes": {"type": "array", "items": row("mode"),
                       "description": "the modes, least to most permissive"},
             "default_model": maybe(STRING),
+            "commands": {"type": "object", "additionalProperties": STRING},
+            "init_request": STRING,
         },
     ),
     "server/stop": message(
@@ -664,6 +672,12 @@ MESSAGES = {
         {"session": SESSION},
         reply={"jobs": rows("job", "one row a job")},
     ),
+    "job/read": message(
+        "A background job's state and retained output, without changing "
+        "what the model has read.",
+        {"job": STRING}, required=("job",),
+        reply={"job": row("job"), "output": STRING, "omitted_bytes": INTEGER},
+    ),
     "job/stop": message(
         "Stop a background job.",
         {"job": STRING}, required=("job",),
@@ -706,8 +720,10 @@ MESSAGES = {
         "What a model honours of its API's features (thinking_off, "
         "thinking_on, strict_json, json_mode), as measured: each true or "
         "false, null where never measured. Measured now when none are kept "
-        "or `test` is true, a few small calls to the model.",
-        {"model": STRING, "test": BOOLEAN}, required=("model",),
+        "or `test` is true, a few small calls to the model. With "
+        "`cached_only`, read stored results only; no model calls.",
+        {"model": STRING, "test": BOOLEAN, "cached_only": BOOLEAN},
+        required=("model",),
         reply={"model": STRING, "api": STRING, "measured_at": maybe(STRING),
                "features": OBJECT},
         changes=True,

@@ -8,6 +8,9 @@ between two (a fourth number); versions below 1.0 may change anything.
 - Advanced settings have labeled subsections, including Judge, Limits and Server.
   Model and Thinking effort under Judge clearly belong to the judge. Edits still
   stay across tabs and apply when leaving settings.
+- Model requests avoid an unnecessary SDK conversion of already prepared JSON,
+  reducing delays when many sessions call their models at once. Authentication,
+  timeouts, error handling and streamed reply parsing still use the SDK.
 
 ## 0.7.6.2.8
 

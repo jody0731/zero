@@ -3,12 +3,16 @@ nearly every model server speaks: Ollama, llama-server, vLLM, and the
 OpenAI-shaped doors of the big servers.
 
 ZERO's messages are kept in this API's shape (core/llm.py, Draft.message),
-so they go as they are. Its stream is chunks: deltas of text, reasoning and
+so they go as JSON through the SDK's public post method, without a second
+walk through its request types. Its stream is chunks: deltas of text, reasoning and
 tool calls, a finish reason, then the usage (asked for with
 stream_options). Reasoning isn't in the API's own reference; servers that
 show it send `reasoning_content` (llama-server, DeepSeek) or `reasoning`
 (Ollama, vLLM, OpenRouter), and both are read.
 """
+
+from openai import Stream
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from core.llm import CutShort
 
@@ -69,9 +73,12 @@ def request(model, messages, *, tools=None, effort=None, json_schema=None,
 
 
 def open_stream(client, model, messages, **standard):
-    """The streamed request, on the SDK's client."""
-    return client.chat.completions.create(
-        **request(model, messages, **standard)
+    """Send prepared JSON; the SDK handles HTTP and parses streamed chunks."""
+    body = request(model, messages, **standard)
+    body.update(body.pop("extra_body", {}))
+    return client.post(
+        "/chat/completions", body=body, cast_to=ChatCompletion,
+        stream=True, stream_cls=Stream[ChatCompletionChunk],
     )
 
 

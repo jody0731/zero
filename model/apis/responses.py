@@ -10,7 +10,12 @@ and each result a `function_call_output`, paired by `call_id`. Its stream is
 typed events: deltas of text, reasoning and a call's arguments, each output
 item whole when it is done, then the response completed, incomplete (the
 output limit, or another reason) or failed, with its usage.
+The prepared JSON goes through the SDK's public post method; its transport
+and typed event parser remain the SDK's, without a second request-type walk.
 """
+
+from openai import Stream
+from openai.types.responses import Response, ResponseStreamEvent
 
 from core.llm import CutShort
 
@@ -105,8 +110,11 @@ def request(model, messages, *, tools=None, effort=None, json_schema=None,
 
 
 def open_stream(client, model, messages, **standard):
-    """The streamed request, on the SDK's client."""
-    return client.responses.create(**request(model, messages, **standard))
+    """Send prepared JSON; the SDK handles HTTP and parses streamed events."""
+    return client.post(
+        "/responses", body=request(model, messages, **standard),
+        cast_to=Response, stream=True, stream_cls=Stream[ResponseStreamEvent],
+    )
 
 
 def usage(draft, response):

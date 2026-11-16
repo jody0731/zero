@@ -111,7 +111,8 @@ class Server:
         # Proves the user where the socket can't
         self.app_token = peers.AppToken(paths.app_token)
         self.workflow_credentials = WorkflowCredentials(
-            paths.socket.with_name("workflow.sock"))
+            paths.socket.with_name("workflow.sock"),
+            lambda sid: runtime.store.session(sid) is not None)
         runtime.command_access = self.workflow_credentials.for_session
         # Each message that changes something, run once by its id
         self.message_replies = MessageReplies(runtime.store)

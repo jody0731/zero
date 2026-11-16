@@ -3,6 +3,12 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.2.1
+
+- Workflow credentials no longer accumulate in server memory as sessions run.
+  Credentials for deleted sessions are rejected; other workflow behavior stays
+  unchanged, including revocation when the server restarts.
+
 ## 0.7.7.2
 
 - Default mode asks once before starting a subagent, rounds, or a workflow's

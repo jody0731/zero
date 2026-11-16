@@ -270,6 +270,10 @@ class Runtime(SessionActions):
     def mode(self):
         return self._mode or self.config()["mode"]
 
+    def unattended(self, sid):
+        return any(service.unattended(sid)
+                   for service in self.services.values())
+
     def check_mode(self, mode):
         """The mode, if the server has it; Refused if not."""
         if mode not in self.modes:

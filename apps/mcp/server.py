@@ -89,7 +89,8 @@ class ZeroTools:
         if working_for is not None:
             # A workflow's call: a subagent of the session whose command
             # this is, in its workspace, mode and model
-            reply = self.connection.send_for(task, working_for)
+            reply = self.connection.send_for(
+                task, working_for, mode=mode, model=model)
         else:
             reply = self.connection.send(task, workspace=str(folder.resolve()),
                                          mode=mode, model=model)

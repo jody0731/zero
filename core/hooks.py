@@ -70,6 +70,15 @@ class Park:
         self.reason = reason
 
 
+class ModelAsk(Park):
+    """A durable ask before a model call, without a fabricated tool call."""
+
+    def __init__(self, why, command, notes, about=None):
+        super().__init__(why, about)
+        self.command = command
+        self.notes = notes
+
+
 class Retry:
     """Retry the failed model call after `delay` seconds."""
 

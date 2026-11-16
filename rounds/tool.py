@@ -78,10 +78,11 @@ DESCRIPTION = (
     "`done_check` is a command the server runs where this session's commands "
     "run when you report done, and exit code 0 is done. The turn that calls "
     "it is round 1; the server starts each next one, until the work is done, "
-    "stuck or stopped by the user. While rounds go on, what would ask the "
+    "stuck or stopped by the user. In default mode the hand-off asks the "
+    "user once before rounds start. While rounds go on, what would ask the "
     "user in default mode goes to the judge instead, which reads the user's "
     "words. The estimate (rounds, minutes of your own working time, "
-    "weighted tokens) is yours: the work starts at once, nothing stops at "
+    "weighted tokens) is yours: nothing stops at "
     "the estimate, and one note comes if the work passes it."
 )
 
@@ -112,6 +113,9 @@ def check_estimate(rounds, minutes, weighted_tokens):
 
 @tool(
     DESCRIPTION,
+    hands_off=lambda args: bool(str(args.get("objective", "")).strip())
+        and check_estimate(args.get("rounds"), args.get("minutes"),
+                           args.get("weighted_tokens")) is None,
     optional=("done_check",),
     summary=start_summary,
     # A means only where the session's server carries rounds on

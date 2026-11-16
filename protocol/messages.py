@@ -52,6 +52,8 @@ them, is said by whoever serves them (server/server.py, a part's `looking`).
 # The variable every command ZERO runs finds its session's id in: a
 # workflow's zero names that session in `for_session` (subagent/send)
 SESSION_ID_ENV = "ZERO_SESSION_ID"
+WORKFLOW_SOCKET_ENV = "ZERO_WORKFLOW_SOCKET"
+WORKFLOW_TOKEN_ENV = "ZERO_WORKFLOW_TOKEN"
 
 STRING = {"type": "string"}
 INTEGER = {"type": "integer"}
@@ -652,6 +654,8 @@ MESSAGES = {
         "command it is.",
         {
             "text": STRING,
+            "mode": maybe(STRING),
+            "model": maybe(STRING),
             "for_session": {**SESSION, "description": "the session the "
                             "workflow works for: its commands find its id in "
                             f"${SESSION_ID_ENV}"},

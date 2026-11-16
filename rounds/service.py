@@ -234,6 +234,9 @@ class RoundsService(Service):
             self.store.withdraw(run["round_inbox"])
         return True
 
+    def unattended(self, sid):
+        return self.store.open_run(sid) is not None
+
     def session_built(self, sid, session):
         folder = session.tool_context.get("results")
         if folder is not None:

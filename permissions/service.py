@@ -74,9 +74,16 @@ class PermissionsService(Service):
         if info is None:
             raise Refused(f"no session {sid!r}")
         path = self.saved_permissions and self.saved_permissions()
-        held = grants.listing(
-            self.runtime.log(sid).branch(), path, info["mode"] in JUDGED
-        )
+        records = list(self.runtime.log(sid).branch())
+        for service in self.runtime.services.values():
+            records.extend(service.permission_records(sid))
+        other_session_asks = {
+            r["ask"] for r in records if r["type"] == "ask"
+            and r.get("notes", {}).get("handoff_scope") not in (None, sid)
+        }
+        records = [r for r in records if r.get("ask") not in other_session_asks]
+        records.sort(key=lambda record: record["time"])
+        held = grants.listing(records, path, info["mode"] in JUDGED)
         return [{**g, "description": grants.describe(g["grant"])} for g in held]
 
     def forget_grant(self, sid, grant_id):

@@ -164,7 +164,8 @@ def describe_start(limits, context=None):
         "session's use, and what it found and didn't send stays in its "
         "session. It runs in this session's workspace, on "
         "its files, with this session's model; nobody watches it, so in "
-        "default mode what would ask the user goes to the judge, which reads "
+        "default mode the hand-off asks the user once before work starts; "
+        "then what would ask the user goes to the judge, which reads "
         "the user's words, and other modes run as here. It returns the "
         "subagent's id at once. Its first message holds `task`, then names "
         "this session and asks it to report back here with send_message when "
@@ -187,8 +188,10 @@ def describe_start(limits, context=None):
         f"`{zero} -p TEXT` there starts one with TEXT as its task alone and "
         "no estimate, and prints its answer (`--json`: with its session's id; "
         "`--session ID`: more to that one); its answers go to the command, "
-        "its asks where these subagents' go. ZERO's socket is hidden in the "
-        f"sandbox, so that command runs outside it. {deepest}"
+        "its asks where these subagents' go. The workflow runs in the "
+        "sandbox with a credential for this session alone. --model chooses "
+        "its model and --mode can choose a stricter mode for a new subagent. "
+        f"A pending hand-off waits for the user before work starts. {deepest}"
     )
 
 
@@ -224,8 +227,25 @@ MEANS = (
 )
 
 
+def start_problem(task, start_from, title, minutes, weighted_tokens):
+    if start_from not in START_FROM:
+        return "Error: start_from is fork or handoff."
+    for name, value in (("minutes", minutes),
+                        ("weighted_tokens", weighted_tokens)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"Error: {name} must be a number."
+        if value <= 0:
+            return f"Error: {name} must be more than 0."
+    if not str(task).strip():
+        return "Error: task is empty."
+    if not str(title).strip():
+        return "Error: title is empty."
+    return None
+
+
 @tool(
     describe_start,
+    hands_off=lambda args: start_problem(**args) is None,
     summary=start_summary,
     ready=can_start,
     means=MEANS,
@@ -244,18 +264,9 @@ def start_subagent(task, start_from, title, minutes, weighted_tokens,
     """`session_subagents`: the session's, from its server (service.py)."""
     if session_subagents is None:
         return "Subagents aren't available in this session."
-    if start_from not in START_FROM:
-        return "Error: start_from is fork or handoff."
-    for name, value in (("minutes", minutes),
-                        ("weighted_tokens", weighted_tokens)):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return f"Error: {name} must be a number."
-        if value <= 0:
-            return f"Error: {name} must be more than 0."
-    if not str(task).strip():
-        return "Error: task is empty."
-    if not str(title).strip():
-        return "Error: title is empty."
+    problem = start_problem(task, start_from, title, minutes, weighted_tokens)
+    if problem:
+        return problem
     found, why = session_subagents.start(
         str(task).strip(), start_from, " ".join(str(title).split()),
         float(minutes), float(weighted_tokens),

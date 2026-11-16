@@ -22,7 +22,9 @@ from server.services import Service, Refused
 from jobs import process
 from jobs import tool as jobtools
 from jobs.store import ADDED_COLUMNS, RENAMED_COLUMNS, SCHEMA, JobStore
-from protocol.messages import SESSION_ID_ENV
+from protocol.messages import (
+    SESSION_ID_ENV, WORKFLOW_SOCKET_ENV, WORKFLOW_TOKEN_ENV,
+)
 
 # The sessions' commands kept for command_session before those whose leader
 # has gone are let go (design rule 12: nothing grows without a cap)
@@ -72,6 +74,12 @@ class SessionJobs:
         (command_session)."""
         env = dict(options.get("env") or os.environ)
         env[SESSION_ID_ENV] = self.sid
+        access = getattr(getattr(self.service, "runtime", None),
+                         "command_access", None)
+        if access is not None:
+            credential = access(self.sid)
+            env[WORKFLOW_SOCKET_ENV] = str(credential.socket)
+            env[WORKFLOW_TOKEN_ENV] = credential.token
         options["env"] = env
         proc = process.SPAWNER.popen(argv, **options)
         if options.get("start_new_session"):
@@ -228,6 +236,11 @@ class JobsService(Service):
     def session_built(self, sid, session):
         """The session's tools start jobs through the server, up to its limit
         as it stands."""
+        access = getattr(self.runtime, "command_access", None)
+        if access is not None:
+            box = session.tool_context.get("sandbox")
+            if hasattr(box, "shown"):
+                box.shown.append(lambda: access(sid).socket)
         session.tool_context["jobs"] = self.session(
             sid, session.tool_context["limits"], lambda: session.log)
 

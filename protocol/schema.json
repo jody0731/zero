@@ -2043,6 +2043,26 @@
         "text": {
           "type": "string"
         },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "for_session": {
           "type": "string",
           "description": "the session the workflow works for: its commands find its id in $ZERO_SESSION_ID"

@@ -3,6 +3,19 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.2
+
+- Default mode asks once before starting a subagent, rounds, or a workflow's
+  turn. Choose Yes, or allow further hand-offs for that session.
+  The judge answers permission asks during approved work; readOnly stays strict.
+- Workflows run inside the sandbox through a separate session-scoped credential.
+  They can start and follow their session's subagents, but cannot approve asks,
+  change settings or read unrelated sessions. Their command waits for approval.
+- A workflow's `--model` chooses another model, and `--mode` can choose a
+  stricter mode for a new subagent. Existing subagents retain their settings.
+- Hand-off asks and session permissions survive restart. Log format 5 adds
+  asks before the first model call; older logs upgrade without changing text.
+
 ## 0.7.7.1.1
 
 - Bash's description explicitly connects local inspection, such as listing

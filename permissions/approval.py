@@ -99,7 +99,7 @@ class DefaultApproval(Hook):
         self.judge.turn_start(turn)
 
     def approve(self, call):
-        if self.unattended(call.turn):
+        if not call.notes.get("handoff") and self.unattended(call.turn):
             return self.judge.approve(call)
         return self.user.approve(call)
 

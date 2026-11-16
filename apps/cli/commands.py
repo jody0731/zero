@@ -209,12 +209,8 @@ def ending(record, started=None, restarts=0):
 # ------------------------------------------------------- send and follow
 
 
-# What a workflow's follow says of a question its subagent waits on
-WORKFLOW_ASK = ("It waits for the user's answer, which ZERO shows them; a "
-                "workflow answers no question.")
 # The flags a workflow's send refuses, and their names in the arguments
 WORKFLOW_REFUSES = (
-    ("--mode", "mode"), ("--model", "model"),
     ("--thinking-effort", "thinking_effort"), ("--cd", "cd"),
     ("--when-busy", "when_busy"), ("--choice", "choice"),
     ("--rounds", "rounds"),
@@ -231,8 +227,8 @@ def text_of(value, stdin=None):
 def follow(connection, sid, after, args, out, user_answers=True):
     """Follow a session from `after` until it settles: the answer, the
     result object (`--json`) or every event (`--events`). Exits 0 answered,
-    1 not, 2 when a question waits (printed, with how to answer it, or, for
-    a workflow, `user_answers` False, who does)."""
+    1 not, 2 when a question waits. A workflow keeps following while the
+    user answers through their app; it cannot answer for them."""
     as_json = getattr(args, "json", False)
     events = getattr(args, "events", False)
     result = Result(sid)
@@ -242,17 +238,18 @@ def follow(connection, sid, after, args, out, user_answers=True):
                 out(json.dumps(event, ensure_ascii=False))
             if not result.add(event):
                 continue
+            if result.ask is not None and not user_answers:
+                result.settled = False
+                result.ask = None
+                continue
             if as_json:
                 out(json.dumps(result.as_json(), ensure_ascii=False))
             elif not events:
                 if result.ask is not None:
                     out(render.ask_line(result.ask))
-                    if user_answers:
-                        offered = "|".join(result.ask.get("choices") or ())
-                        out(f"Answer with: zero -p [TEXT] --session {sid}"
-                            + (f", or --choice {offered}" if offered else ""))
-                    else:
-                        out(WORKFLOW_ASK)
+                    offered = "|".join(result.ask.get("choices") or ())
+                    out(f"Answer with: zero -p [TEXT] --session {sid}"
+                        + (f", or --choice {offered}" if offered else ""))
                 elif result.last is None:
                     out("(nothing ran)")
                 else:
@@ -267,14 +264,14 @@ def follow(connection, sid, after, args, out, user_answers=True):
 def print_workflow_turn(connection, args, for_session, out=print):
     """`zero -p` in one of a session's commands, a workflow: `subagent/send`
     for that session (a new subagent, or more to one with --session), then
-    follow the subagent until it settles. The flags that set a new session's
-    mode, model, folder or thinking, or answer a question, are refused: a
-    subagent takes its session's, and a workflow answers no question."""
+    follow the subagent until it settles. A new subagent may choose its model
+    and a stricter mode. It keeps the parent's folder and thinking setting;
+    a workflow cannot answer a permission question."""
     given = [flag for flag, name in WORKFLOW_REFUSES
              if getattr(args, name, None) not in (None, False)]
     if given:
         print(f"zero: {', '.join(given)} can't go with --for-session: a "
-              "subagent runs in its session's workspace, mode and model, and "
+              "subagent keeps its session's workspace and thinking setting; "
               "a workflow answers no question.", file=sys.stderr)
         return 2
     sid, after = None, 0
@@ -282,7 +279,10 @@ def print_workflow_turn(connection, args, for_session, out=print):
         sid = match_session(connection.sessions(), args.session)["id"]
         records, _ = connection.history(sid, limit=1)
         after = records[-1]["seq"] if records else 0
-    reply = connection.send_for(text_of(args.p), for_session, session=sid)
+    reply = connection.send_for(
+        text_of(args.p), for_session, session=sid,
+        mode=getattr(args, "mode", None), model=getattr(args, "model", None),
+    )
     sid = reply["session"]
     if getattr(args, "no_wait", False):
         out(json.dumps(reply) if getattr(args, "json", False) else sid)

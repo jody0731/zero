@@ -81,7 +81,8 @@ def labels_of(ask):
     """An `ask` record's answers with their words, as the asks table keeps
     them (JSON)."""
     labels = asking.choice_labels(ask.get("choices") or asking.PLAIN_CHOICES,
-                                  (ask.get("notes") or {}).get("offer_text"))
+                                  (ask.get("notes") or {}).get("offer_text"),
+                                  (ask.get("notes") or {}).get("session_scope"))
     return json.dumps(labels)
 
 

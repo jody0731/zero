@@ -92,7 +92,8 @@ def record(record):
     if kind == "ask":
         offer = (record.get("notes") or {}).get("offer_text")
         choices = record.get("choices") or asking.PLAIN_CHOICES
-        return {**record, "choice_labels": asking.choice_labels(choices, offer)}
+        return {**record, "choice_labels": asking.choice_labels(
+            choices, offer, (record.get("notes") or {}).get("session_scope"))}
     return record
 
 

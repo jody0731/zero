@@ -21,7 +21,7 @@ from core.asking import (
 )
 from core.control import Stopped
 from core.history import LOG_FORMAT, NewerLog, OldLog, log_format
-from core.hooks import Deny, HookRunner, Park, Stop
+from core.hooks import Deny, HookRunner, ModelAsk, Park, Stop
 from core.llm import MODEL_ERRORS
 from core.records import Call, ModelFailure, Step, Turn
 
@@ -476,6 +476,15 @@ class Session:
                 step.turn.control.check()
                 self.take_steers(step.turn)
             stop = self.hooks.decide("before_model", step)
+            if isinstance(stop, ModelAsk):
+                record = self.write(
+                    "ask", ask=f"ask-{secrets.token_hex(4)}", step=step.number,
+                    call="", tool="", command=stop.command, why=stop.why,
+                    reason="", about=stop.about,
+                    notes={**stop.notes, "before_model": True},
+                    choices=choices(stop.notes),
+                )
+                raise Parked(record)
             if stop is not None:
                 return stop
             try:
@@ -721,6 +730,9 @@ class Session:
         earlier = sum(r.get("waited", 0) for r in pending if r["type"] == "answer")
         turn.started -= before + waited
         turn.waiting = waited + earlier
+        if ask.get("notes", {}).get("before_model"):
+            self.write("answer", call="", waited=round(waited, 1), **fields)
+            return turn
         step = Step(turn, ask["step"])
         message = next(
             r["message"] for r in pending

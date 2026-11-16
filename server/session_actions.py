@@ -449,10 +449,11 @@ class SessionActions:
             return new
         raise FileExistsError(f"{ID_TRIES} new session ids were all taken")
 
-    def new_child(self, sid, title, source, rows_beside=None):
+    def new_child(self, sid, title, source, rows_beside=None,
+                  mode=None, model=None):
         """A new session under this one, its log empty: the same workspace,
-        mode and model, and the thinking effort the parent runs with, which
-        its first turn takes as a switch; ZERO's, a subagent's handoff.
+        mode and model unless explicitly selected, and the thinking effort
+        the parent runs with, which its first turn takes as a switch.
         `rows_beside(db, id)`: rows its maker writes in the same transaction
         as its own. Returns its id."""
         info = self.store.session(sid)
@@ -460,8 +461,8 @@ class SessionActions:
             raise Refused(f"no session {sid!r}")
         effort = history.running_with(self.log(sid).branch()).get("thinking_effort")
         row = {
-            "title": title, "source": source, "model": info["model"],
-            "mode": info["mode"], "workspace": info["workspace"],
+            "title": title, "source": source, "model": model or info["model"],
+            "mode": mode or info["mode"], "workspace": info["workspace"],
             "switch": json.dumps({"thinking_effort": effort}) if effort else None,
             "parent": sid, "started_by": "zero",
         }

@@ -89,6 +89,7 @@ from judge import SETTINGS as JUDGE_SETTINGS
 from judge.hooks import JudgeApproval
 from judge.verdict import Judge
 from permissions import SETTINGS as PERMISSION_SETTINGS
+from permissions.handoffs import HandoffApproval
 from permissions.approval import (
     READ_ONLY, DefaultApproval, UserApproval, PermissionAsks, Refuse, ask_user,
 )
@@ -228,7 +229,10 @@ def session_hooks(
     mode = canonical(mode)
     runs_as = canonical(runs_as or mode)
     spec = MODES[runs_as]
-    hooks = [Means(limits, token_weights(server.price)),
+    hooks = [HandoffApproval(
+                 lambda turn: running_round(turn) is not None,
+                 enabled=runs_as == "default"),
+             Means(limits, token_weights(server.price)),
              Environment(sandbox, answers_line(mode, runs_as))]
     if own is not None:
         hooks.append(own)

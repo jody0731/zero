@@ -42,6 +42,7 @@ from contextlib import contextmanager
 import settings
 from core import history
 from server import peers, replies
+from server.credentials import WorkflowCredentials
 from server.idempotency import MessageReplies
 from server.services import Refused
 from server.runtime import Message
@@ -109,6 +110,9 @@ class Server:
         self.peers = peers.Peers()
         # Proves the user where the socket can't
         self.app_token = peers.AppToken(paths.app_token)
+        self.workflow_credentials = WorkflowCredentials(
+            paths.socket.with_name("workflow.sock"))
+        runtime.command_access = self.workflow_credentials.for_session
         # Each message that changes something, run once by its id
         self.message_replies = MessageReplies(runtime.store)
         # The release it runs, for hello and a restart's check
@@ -121,6 +125,12 @@ class Server:
         lock = self.take_lock()
         try:
             listener = self.listen()
+            workflow_listener = self.listen(self.workflow_credentials.socket)
+            workflow_thread = threading.Thread(
+                target=self.accept_workflows, args=(workflow_listener,),
+                daemon=True,
+            )
+            workflow_thread.start()
             try:
                 self.runtime.start()
                 self.app_token.make()
@@ -136,12 +146,16 @@ class Server:
                 # Stop listening before letting go of the lock: a client that
                 # connects now is refused and starts the next server
                 listener.close()
+                workflow_listener.close()
+                workflow_thread.join(1)
+                self.workflow_credentials.socket.unlink(missing_ok=True)
                 self.paths.socket.unlink(missing_ok=True)
             if self.stopping.is_set():
                 print(f"ZERO's server: stopping ({self.reason}).", flush=True)
             self.runtime.stop(DRAIN_SECONDS)
             self.runtime.close_watchers(self.reason)
             self.wait_for_connections(2)
+            self.workflow_credentials.close()
         finally:
             # Closing the file lets go of the lock
             lock.close()
@@ -195,8 +209,8 @@ class Server:
                         ) from None
                     time.sleep(0.05)
 
-    def listen(self):
-        path = self.paths.socket
+    def listen(self, path=None):
+        path = path or self.paths.socket
         # One left by a server that died: the lock says nobody else uses it
         path.unlink(missing_ok=True)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -286,11 +300,25 @@ class Server:
         while self.connections and time.monotonic() < deadline:
             time.sleep(0.02)
 
-    def handle(self, conn):
+    def accept_workflows(self, listener):
+        while not self.stopping.is_set():
+            try:
+                conn, _ = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            with self.connection_lock:
+                self.connections += 1
+            threading.Thread(
+                target=self.handle, args=(conn, True), daemon=True,
+            ).start()
+
+    def handle(self, conn, workflow=False):
         """One request, one reply, then the connection closes; or a watch."""
         try:
             with conn:
-                self.serve_connection(conn)
+                self.serve_connection(conn, workflow)
         finally:
             with self.connection_lock:
                 self.connections -= 1
@@ -300,7 +328,7 @@ class Server:
     # the schema (None: no check)
     reply_check = None
 
-    def serve_connection(self, conn):
+    def serve_connection(self, conn, workflow=False):
         conn.settimeout(10)
         name, protocol = None, version.PROTOCOL
         try:
@@ -313,7 +341,16 @@ class Server:
             token = request.pop("token", None)
             relayed_for = request.pop("relayed_for_pid", None)
             try:
-                pid = peers.proven(conn, token, self.app_token)
+                if workflow:
+                    scope = self.workflow_credentials.owner(token)
+                    pid, uid = peers.peer_of(conn)
+                    if uid is not None and uid != os.getuid():
+                        raise PermissionError(peers.OTHER_USER)
+                    self.check_workflow_scope(name, request, scope)
+                    relayed_for = None
+                else:
+                    scope = None
+                    pid = peers.proven(conn, token, self.app_token)
                 # A relay's client, checked as a socket's own peer is
                 pid = peers.relayed(pid, relayed_for, self.peers)
             except PermissionError as why:
@@ -321,7 +358,7 @@ class Server:
             # ZERO's own commands may look, never act; a workflow sends for
             # its own session alone
             looking = (*LOOKING_MESSAGES, *self.runtime.looking_messages)
-            if name not in looking and pid is not None:
+            if scope is None and name not in looking and pid is not None:
                 if self.peers.is_zero_command(pid):
                     self.check_workflow(name, request, pid, looking)
             if name == "session/watch":
@@ -333,6 +370,11 @@ class Server:
                     self.watch_list(conn, request, protocol)
                 return
             reply = self.reply_to(name, request, protocol)
+            if scope is not None and name == "session/list" and reply.get("ok"):
+                reply["sessions"] = [
+                    row for row in reply["sessions"]
+                    if self.in_workflow_scope(row["id"], scope)
+                ]
         except Refused as e:
             reply = error(str(e))
         except (OSError, ValueError) as e:
@@ -412,6 +454,31 @@ class Server:
         except Exception as e:
             traceback.print_exc()
             return {"ok": False, "error": f"internal error: {type(e).__name__}"}
+
+    def in_workflow_scope(self, sid, scope):
+        seen = set()
+        while sid and sid not in seen:
+            seen.add(sid)
+            row = self.runtime.store.session(sid)
+            if row is None or row.get("started_by") != "zero":
+                return False
+            sid = row.get("parent")
+            if sid == scope:
+                return True
+        return False
+
+    def check_workflow_scope(self, name, request, scope):
+        """No approval, configuration, global watch or unrelated history."""
+        if name == "session/list" and not request.get("watch"):
+            return
+        if name in self.runtime.workflow_messages:
+            if request.get("for_session") != scope:
+                raise Refused("the workflow credential belongs to another session")
+            return
+        if name in ("session/read", "session/watch"):
+            if self.in_workflow_scope(request.get("session"), scope):
+                return
+        raise Refused("the workflow credential does not permit this request")
 
     def check_workflow(self, name, request, pid, looking):
         """Refused unless one of ZERO's own commands sends a workflow's
@@ -664,6 +731,9 @@ class Server:
         try:
             # Subscribed first, so a record appended meanwhile is in the queue
             # and the seq check drops the copy
+            # Read settlement first: if a turn finishes during the history
+            # read, its queued records must precede its queued settled event.
+            settled = self.runtime.settled(sid)
             records, earlier_count = self.runtime.history(sid, after, limit)
             if earlier_count:
                 emit({"earlier_count": earlier_count})
@@ -674,7 +744,6 @@ class Server:
             for record in records:
                 emit({"record": record})
                 after = record["seq"]
-            settled = self.runtime.settled(sid)
             if settled is not None:
                 emit({"settled": settled})
             # A watch that starts mid-reply gets the reply so far

@@ -144,10 +144,54 @@ class SubagentsService(Service):
         super().attach(runtime)
         self.store = SubagentStore(runtime.store)
 
+    def unattended(self, sid):
+        return self.store.subagent(sid) is not None
+
+    def handoff_records(self, sid):
+        row = self.store.subagent(sid)
+        scope = row["parent"] if by_workflow(row) else sid
+        records = list(self.runtime.log(scope).branch())
+        for child in self.store.children(scope):
+            if not by_workflow(child):
+                continue
+            branch = self.runtime.log(child["session"]).branch()
+            asks = {r["ask"] for r in branch if r["type"] == "ask"
+                    and r.get("notes", {}).get("handoff_scope") == scope}
+            records.extend(r for r in branch
+                           if r.get("ask") in asks
+                           and r["type"] in ("ask", "answer"))
+        return sorted(records, key=lambda record: record["time"])
+
+    def permission_records(self, sid):
+        # A workflow's admission grant belongs to its parent, not this child.
+        if by_workflow(self.store.subagent(sid)):
+            return []
+        own = self.runtime.log(sid).branch()
+        records = self.handoff_records(sid)
+        asks = {r["ask"] for r in records if r["type"] == "ask"
+                and r.get("notes", {}).get("handoff")}
+        return [r for r in records if r not in own
+                and (r.get("ask") in asks or r.get("grant") in asks)]
+
+    def workflow_handoff(self, sid, turn):
+        row = self.store.subagent(sid)
+        if not by_workflow(row) or turn.source != subtools.ACROSS:
+            return None
+        parent = self.runtime.store.session(row["parent"])
+        if parent is None:
+            raise Refused("the workflow's parent session no longer exists")
+        if parent["mode"] != "default" or self.runtime.unattended(row["parent"]):
+            return None
+        return row["parent"]
+
     def session_built(self, sid, session):
         """The session's tools start subagents and message its tree through
         the server; its use counts its subagents'; its judge reads the
         user's words in the whole tree."""
+        session.tool_context["handoff_records"] = lambda: self.handoff_records(sid)
+        if by_workflow(self.store.subagent(sid)):
+            session.tool_context["workflow_handoff"] = (
+                lambda turn: self.workflow_handoff(sid, turn))
         session.tool_context["session_subagents"] = SessionSubagents(
             self, sid, lambda: session)
         use = session.tool_context.get("session_use")
@@ -318,7 +362,8 @@ class SubagentsService(Service):
         }
         return self.made(sid, title, start_from, row, text, "zero")
 
-    def made(self, sid, title, start_from, row, text, source):
+    def made(self, sid, title, start_from, row, text, source,
+             mode=None, model=None):
         """A subagent's session made under `sid` with `row` (its subagents
         row, less the session) and its task's notice `text`, in one
         transaction; (its id, None), or (None, why it wasn't started)."""
@@ -333,7 +378,8 @@ class SubagentsService(Service):
                 child = self.runtime.fork_finished(sid, title, source,
                                                    rows_beside)
             else:
-                child = self.runtime.new_child(sid, title, source, rows_beside)
+                child = self.runtime.new_child(
+                    sid, title, source, rows_beside, mode=mode, model=model)
         except Refused as error:
             return None, f"Not started: {error}."
         self.runtime.wake()
@@ -349,7 +395,7 @@ class SubagentsService(Service):
         for name in names:
             if not isinstance(request.get(name), str) or not request[name]:
                 raise Refused(f"subagent/send needs {name}, a string")
-        for name in ("session", "title"):
+        for name in ("session", "title", "mode", "model"):
             value = request.get(name)
             if value is not None and not isinstance(value, str):
                 raise Refused(f"subagent/send's {name} must be a string")
@@ -359,8 +405,20 @@ class SubagentsService(Service):
             raise Refused(f"no session {sid!r}")
         if not text:
             raise Refused("subagent/send's text is empty")
+        mode, model = request.get("mode"), request.get("model")
+        if mode is not None:
+            self.runtime.check_mode(mode)
+            modes = self.runtime.modes
+            if modes.index(mode) > modes.index(info["mode"]):
+                raise Refused("a workflow can only choose a stricter mode")
+        if model is not None:
+            model = model.strip()
+            if not model:
+                raise Refused("a model needs a name")
         to = request.get("session")
         if to is not None:
+            if mode is not None or model is not None:
+                raise Refused("mode and model apply to a new subagent only")
             if to not in [row["session"] for row in self.below(sid)]:
                 raise Refused(f"{to} isn't a subagent below session {sid}")
             payload = {"text": subtools.WORKFLOW_MESSAGE.format(
@@ -387,7 +445,8 @@ class SubagentsService(Service):
             "estimate_minutes": 0, "estimate_weighted_tokens": None,
             "estimate_dollars": 0, "started_through": WORKFLOW,
         }
-        child, why = self.made(sid, title, "handoff", row, task, WORKFLOW)
+        child, why = self.made(
+            sid, title, "handoff", row, task, WORKFLOW, mode=mode, model=model)
         if child is None:
             raise Refused(why)
         return {"ok": True, "session": child, "started": True}

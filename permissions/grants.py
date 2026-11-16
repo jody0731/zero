@@ -79,6 +79,8 @@ def covering_grant(grants, call):
 
 def describe(grant):
     """A grant in a few words, its tool's ("`cd` and `git push` commands")."""
+    if grant.get("handoffs"):
+        return "handing work off"
     declared = tools.declared_grant(grant["tool"])
     while declared is not None:
         if declared.field in grant:
@@ -125,7 +127,9 @@ def session_grants(records):
     offers, grants = {}, {}
     for record in records:
         kind = record["type"]
-        if kind == "ask" and record.get("notes", {}).get("offer"):
+        if kind == "ask" and record.get("notes", {}).get("handoff"):
+            offers[record["ask"]] = {"tool": "", "handoffs": True}
+        elif kind == "ask" and record.get("notes", {}).get("offer"):
             offers[record["ask"]] = record["notes"]["offer"]
         elif (kind == "answer" and record.get("yes")
               and record.get("choice") in ("session", "saved")
@@ -144,7 +148,8 @@ def session_grants(records):
                 }
         elif kind == "forget":
             grants.pop(record.get("grant"), None)
-    return list(grants.values())
+    forgotten = {r.get("grant") for r in records if r["type"] == "forget"}
+    return [g for key, g in grants.items() if key not in forgotten]
 
 
 def read_saved(path):

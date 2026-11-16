@@ -15,6 +15,9 @@ agent's reason; format 4 keeps the reason apart (an ask's `reason`, "" for
 none), beside what the ask is `about`. Its upgrade cuts the rule's words off
 an older ask's `why` once, here, and keeps the `why`, which the models read.
 
+Format 5 permits an ask before the first model call, with no tool call to
+resume. Its upgrade changes only the header; existing records keep their text.
+
 Only a runner upgrades files. Readers use migrate() in memory. A failed upgrade
 leaves the old bytes in place, apart from the runtime's appended crash record.
 """
@@ -221,7 +224,14 @@ def from_3(records, header, time):
     return result
 
 
-MIGRATIONS = {1: from_1, 2: from_2, 3: from_3}
+def from_4(records, header, time):
+    """Format 5 can park before a model call; old records keep their text."""
+    first, *rest = records
+    return [{**first, "format": 5,
+             "upgraded_from": first.get("upgraded_from", 4)}, *rest]
+
+
+MIGRATIONS = {1: from_1, 2: from_2, 3: from_3, 4: from_4}
 
 
 def backup_path(path, source):

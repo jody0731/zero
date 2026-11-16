@@ -16,7 +16,7 @@ from datetime import datetime
 
 from core import tools
 
-LOG_FORMAT = 4
+LOG_FORMAT = 5
 UNKNOWN = (
     "Tool call interrupted before a result was recorded; its outcome is unknown."
 )

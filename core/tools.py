@@ -66,7 +66,7 @@ def tool(description, /, optional=(), summary=None, ready=None,
          crossing=None, grant=None, written_files=None, means=None,
          fields=None, result_summary=None, reads_records=False,
          reads_in_parts=None, never_cleared=False, side_by_side=False,
-         calls_by_name=None, **params):
+         calls_by_name=None, hands_off=False, **params):
     """Declare a function as a tool the model can call: the function comes
     back marked with its declaration (`declared`), which the assembly adds to
     the registry (`add`); declaring registers nothing.
@@ -92,6 +92,8 @@ def tool(description, /, optional=(), summary=None, ready=None,
     call it faults is refused before any check or ask (a plan's calls).
     `changing`: True for a tool whose answer changes on its own (a running
     job's output), so the same call made again runs again.
+    `hands_off`: True, or a predicate of the arguments, when this call starts
+    unattended work. Permission hooks use this declaration for user consent.
     `starts_job`: the argument that, true, starts the call as a background
     job, which counts against the session's cap on running jobs (bash's
     `background`); by default none does. Texts about jobs name it as the
@@ -175,6 +177,7 @@ def tool(description, /, optional=(), summary=None, ready=None,
             "extra_arguments": False,
             "side_by_side": side_by_side,
             "calls_by_name": calls_by_name,
+            "hands_off": hands_off,
             # A found tool's (found_tool); ZERO's own are sent wherever ready
             "reachable": None,
             "source": None,

@@ -71,6 +71,14 @@ class Service:
         that command; else None."""
         return None
 
+    def permission_records(self, sid):
+        """Additional consent records belonging to this session."""
+        return []
+
+    def unattended(self, sid):
+        """Whether this session is already doing handed-off work."""
+        return False
+
     def refuse_delete(self, sid):
         """Why the session can't be deleted now, or None."""
         return None

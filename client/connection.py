@@ -11,10 +11,12 @@ NoAnswer: the request may still be running there, so it isn't sent again.
 
 import json
 import os
+from types import SimpleNamespace
 import socket
 import uuid
 from pathlib import Path
 
+from protocol.messages import WORKFLOW_SOCKET_ENV, WORKFLOW_TOKEN_ENV
 from protocol import version
 from protocol.messages import MESSAGES, SESSION_ID_ENV, request as build
 
@@ -163,12 +165,19 @@ class Connection:
     client that each request is sent for, where the kernel named it."""
 
     def __init__(self, paths, ensure=None, source=None, relayed_for_pid=None):
+        socket_path = os.environ.get(WORKFLOW_SOCKET_ENV)
+        workflow_token = os.environ.get(WORKFLOW_TOKEN_ENV)
+        if socket_path and workflow_token:
+            paths = SimpleNamespace(
+                socket=Path(socket_path),
+            )
+            ensure = None
         self.paths = paths
         self.ensure = ensure
         self.source = source or f"terminal-{os.getpid()}"
         self.relayed_for_pid = relayed_for_pid
         self.checked = False
-        self._token = None
+        self._token = workflow_token if socket_path else None
 
     def token(self):
         """The app token, read once there is one to read."""
@@ -228,13 +237,15 @@ class Connection:
             request["rounds"] = True
         return {**self.call(request), "id": msg_id}
 
-    def send_for(self, text, for_session, session=None, title=None):
+    def send_for(self, text, for_session, session=None, title=None,
+                 mode=None, model=None):
         """`subagent/send`, a workflow's message: a new subagent of
         `for_session` with `text` as its task, or `text` to `session`, one
         of its subagents."""
         msg_id = str(uuid.uuid4())
         request = build("subagent/send", id=msg_id, text=text,
                         for_session=for_session, session=session, title=title,
+                        mode=mode, model=model,
                         source=self.source)
         return {**self.call(request), "id": msg_id}
 

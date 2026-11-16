@@ -31,10 +31,11 @@ NOT_ASKED = (
 )
 
 
-# The call's own asks, which a grant in the permissions memory answers, and
-# the caps', which it never does
+# The call's own asks, which a tool grant answers. Caps and hand-offs need
+# their own approval even when an ordinary tool grant covers the call.
 CALL_ASKS = ("rule", "permission")
 LIMIT_ASKS = ("limit",)
+HANDOFF_ASKS = ("handoff",)
 # What the user may answer at the box: "session" and "saved" only when
 # the call's ask has a grant to offer (permissions/grants.py)
 YES, SESSION, SAVED, NO = "yes", "session", "saved", "no"
@@ -57,16 +58,16 @@ def ask_of(call):
     """The ask that wants an answer (permissions/asks.py, auto+'s Permissions
     in permissions/approval.py, the jobs' cap in jobs/hooks.py), or None;
     several at once ask once, with every reason. A call the permissions
-    memory grants (permissions/grants.py) asks only for its caps."""
+    memory grants still asks for caps and hand-off admission."""
     return waiting_ask(call.notes)
 
 
 def waiting_ask(notes, granted=True):
     """ask_of() from a call's notes; with granted=False, as if nothing were
     granted."""
-    names = CALL_ASKS + LIMIT_ASKS
+    names = CALL_ASKS + LIMIT_ASKS + HANDOFF_ASKS
     if granted and notes.get("granted") is not None:
-        names = LIMIT_ASKS
+        names = LIMIT_ASKS + HANDOFF_ASKS
     hits = [notes.get(name) for name in names]
     hits = [hit for hit in hits if hit and hit["action"] == "ask"]
     if len(hits) > 1:
@@ -90,18 +91,24 @@ PARK = _Park()
 def choices(notes):
     """The answers an ask offers: a grant's two only when the call's own ask
     is all that asks and it has one to offer."""
+    if notes.get("handoff"):
+        return [YES, SESSION, NO]
     if notes.get("offer") and not any(notes.get(name)
-                                      for name in LIMIT_ASKS):
+                                      for name in LIMIT_ASKS + HANDOFF_ASKS):
         return list(CHOICES)
     return [YES, NO]
 
 
-def choice_labels(choices, offer_text=None):
+def choice_labels(choices, offer_text=None, session_scope=None):
     """Each of an ask's answers, in its order, with the words its box shows:
     what an app draws, so none keeps its own copy."""
     what = offer_text or OFFER_UNNAMED
-    return {choice: LABELS[choice].format(what=what) for choice in choices
-            if choice in LABELS}
+    labels = {choice: LABELS[choice].format(what=what) for choice in choices
+              if choice in LABELS}
+    if session_scope is not None and SESSION in labels:
+        labels[SESSION] = (f"Yes, and don't ask again for {what} "
+                           f"from session {session_scope}")
+    return labels
 
 
 def put_to_user(call, ask, why):

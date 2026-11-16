@@ -70,6 +70,14 @@ class Park:
         self.reason = reason
 
 
+class Question(Park):
+    """A question's answer is data, never permission to execute a call."""
+
+    def __init__(self, text, labels):
+        super().__init__(text)
+        self.labels = labels
+
+
 class ModelAsk(Park):
     """A durable ask before a model call, without a fabricated tool call."""
 

@@ -32,6 +32,7 @@ from pathlib import Path
 
 import paths
 from core import history
+from prompt.keywords import SHIPPED
 
 HERE = Path(__file__).resolve().parent
 SOUL = HERE / "SOUL.md"
@@ -61,10 +62,11 @@ NO_WEIGHTS = (
 # When to act: sure of the user's wish, from their words, and of the world,
 # from looking; a gap is filled before acting, not guessed over
 INTENT = (
-    "You act when you are sure: sure the user asked for the action, from their "
-    "own words, and sure of what you act on, from looking. Where you aren't, "
-    "you fill the gap before acting: the facts by looking, the user's wish by "
-    "asking."
+    "The user's own words set the task. Facts about the world can be found "
+    "by looking. Questions about the user's intent cost their attention and "
+    "make work wait; the user may be away. Whether uncertainty is worth that "
+    "attention is your judgment. A clear request, or 'end to end', entrusts "
+    "the decisions needed to carry it out to you."
 )
 # How a turn runs and ends, as facts: what a step reads (a plain turn's
 # cost), that its calls run in order but for those that run side by side
@@ -343,7 +345,7 @@ def system_prompt(found, model, weights=None):
     read (`found`, a Read; None for nothing), then how a turn runs and what
     a notice is; the hooks' parts follow."""
     opening = (f"{HARNESS.format(model=model, weights=weights_text(weights))}\n"
-               f"{INTENT}")
+               f"{INTENT}\n\n{SHIPPED}")
     read_in = found.text if found is not None else ""
     ending = f"{TURN_FACTS}{notice_fact()}\n"
     if not read_in:

@@ -1,3 +1,9 @@
+# Keywords
+
+<!-- Your meanings belong here. A meaning here replaces ZERO's shipped meaning
+of the same word. Releases update the shipped meanings beside this file in the
+system message; updates never change this file or your entries. -->
+
 <!--
 ZERO.md: you, your machines, how ZERO should work for you, and what ZERO
 remembers. ZERO reads it when a session starts, so an edit reaches the

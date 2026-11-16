@@ -80,6 +80,8 @@ class KernelRows:
 def labels_of(ask):
     """An `ask` record's answers with their words, as the asks table keeps
     them (JSON)."""
+    if ask.get("kind") == "question":
+        return json.dumps(ask["choice_labels"])
     labels = asking.choice_labels(ask.get("choices") or asking.PLAIN_CHOICES,
                                   (ask.get("notes") or {}).get("offer_text"),
                                   (ask.get("notes") or {}).get("session_scope"))
@@ -144,7 +146,8 @@ def ask_row(ask, turn, answer, parked):
     while its turn waits on it; else cancelled (its turn ended without
     one)."""
     if answer is not None:
-        status = "approved" if answer.get("yes") else "cancelled"
+        status = ("answered" if ask.get("kind") == "question" else
+                  "approved" if answer.get("yes") else "cancelled")
     elif parked is not None and parked["ask"] == ask["ask"]:
         status = "open"
     else:
@@ -159,4 +162,5 @@ def ask_row(ask, turn, answer, parked):
         "reply": answer.get("inbox") if answer else None,
         "source": answer.get("source") if answer else None,
         "choice_labels": labels_of(ask),
+        "kind": ask.get("kind", "permission"),
     }

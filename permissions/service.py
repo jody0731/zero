@@ -53,6 +53,8 @@ class PermissionsService(Service):
         return {"ok": True, **self.forget_grant(sid, grant)}
 
     def reply(self, sid, ask, payload):
+        if ask.get("kind") == "question":
+            return picked(ask, payload), None
         choice, verdict = picked(ask, payload), None
         if payload.get("reply_to") == ask["ask"] and choice is None:
             verdict = self.consent(sid, ask, payload["text"])

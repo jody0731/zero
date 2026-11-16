@@ -129,6 +129,8 @@ def jobs_text(jobs, sessions=False):
 def ask_line(ask):
     """An ask on one line, for plain output: its command and the reason the
     user reads (its record's or its row's `reason`)."""
+    if ask.get("kind") == "question":
+        return f"Question: {ask['command']} (waiting for an answer)"
     reason = ask.get("reason") or ""
     return f"? {ask['tool']}: {ask['command']}" + (f" ({reason})" if reason else "")
 
@@ -228,6 +230,8 @@ class Renderer:
             return [ask_line(record)]
         if kind == "answer":
             by = who(record.get("source"), self.source)
+            if record.get("kind") == "question":
+                return [f"({by} answered: {record['text']})"]
             if record["yes"]:
                 return [f"({by}: approved)"]
             return [f"({by} replied; not run)"]

@@ -539,6 +539,12 @@ class Runtime(SessionActions):
                 sid = new_id()
             state = self.state(sid)
             with state.lock:
+                expected = payload.get("reply_kind")
+                if expected is not None:
+                    ask = self.store.open_ask(sid)
+                    if (ask is None or ask.get("kind") != expected
+                            or ask["id"] != message.reply_to):
+                        raise Refused("the addressed question no longer waits")
                 handled_as = "started" if new else self.handled_as(sid, state, message)
                 said = dict(payload)
                 if handled_as == "queued":
@@ -916,6 +922,13 @@ class Runtime(SessionActions):
             self.store.finish(row["arrival"], sid, "failed")
             return
         ask = history.parked_ask(records)
+        payload = json.loads(row["payload"])
+        if payload.get("reply_kind") is not None and (
+            ask is None or ask.get("kind") != payload["reply_kind"]
+            or ask["ask"] != payload.get("reply_to")
+        ):
+            self.store.mark_steer_done(row["id"])
+            return
         if ask is not None and pending[0].get("inbox") != row["id"]:
             self.take_reply(sid, row, ask, pending[0]["inbox"], log, control)
             return
@@ -1033,8 +1046,12 @@ class Runtime(SessionActions):
         }
         if choice is not None:
             fields["choice"] = choice
+        if ask.get("kind") == "question":
+            fields["kind"] = "question"
+            fields["yes"] = False
+            fields["text"] = ask["choice_labels"].get(choice, text)
         turn = session.reply(fields, control=control)
-        self.store.close_ask(ask["ask"], row["id"], yes, row["source"])
+        self.store.close_ask(ask["ask"], row["id"], fields["yes"], row["source"])
         turn_row = self.store.query("SELECT * FROM inbox WHERE id = ?", turn_id)[0]
         state = self.state(sid)
         with state.lock:

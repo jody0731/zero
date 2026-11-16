@@ -287,7 +287,11 @@ def start_subagent(task, start_from, title, minutes, weighted_tokens,
     "that session as a notice from \"session\", with this session's id and "
     "title: a session at rest starts a turn on it, one with a turn running "
     "reads it at its next step, and one waiting for the user's answer reads "
-    "it once the user has answered. A message never answers a question.",
+    "it once the user has answered. A message with reply_to answers that "
+    "question from a direct helper; it never answers a permission ask or a "
+    "top-level user question.",
+    optional=("reply_to",),
+    reply_to=("string", "The helper question id to answer, when answering one"),
     summary=lambda args: f"message to session {args.get('session')}",
     ready=on_a_server,
     # It changes nothing on the machine
@@ -295,11 +299,14 @@ def start_subagent(task, start_from, title, minutes, weighted_tokens,
     session=("string", "The session's id"),
     text=("string", "The message"),
 )
-def send_message(session, text, session_subagents=None):
+def send_message(session, text, reply_to=None, session_subagents=None):
     if session_subagents is None:
         return "Messages to other sessions aren't available in this session."
     if not str(text).strip():
         return "Error: text is empty."
+    if reply_to is not None:
+        return session_subagents.send(
+            str(session).strip(), str(text).strip(), reply_to=reply_to)
     return session_subagents.send(str(session).strip(), str(text).strip())
 
 

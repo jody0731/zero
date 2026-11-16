@@ -40,13 +40,14 @@ illustrative session data. Run <code>zero</code> to open it;
 - **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
 - **One server:** it runs every session. Turns, background jobs and waiting questions go on after the browser or terminal closes, and every app reaches the server the same way.
 - **Long sessions keep going:** near its line (the model's context window, or the one you set), a session's context is compacted: older outputs are saved to files, then ZERO writes itself a handoff. Nothing ZERO reads has a fixed cap: a long result past its share of the room is saved whole, and ZERO reads its start and end and where the rest is.
-- **Long work in rounds:** leave ZERO a long job (or send it with `--rounds`) and it works in rounds, each a turn that starts fresh from the last one's handoff, until its done check passes, it is stuck, or you stop it. ZERO states its estimate (rounds, time, dollars) and is told once if the work passes it; nothing stops at it. Nothing in a round waits on you: in default mode the judge answers what would have asked you.
+- **Long work in rounds:** leave ZERO a long job (or send it with `--rounds`) and it works in rounds, each a turn that starts fresh from the last one's handoff, until its done check passes, it is stuck, or you stop it. ZERO states its estimate (rounds, time, dollars) and is told once if the work passes it; nothing stops at it. In default mode the judge answers permission asks; a question about your intent still waits for your answer.
 - **Subagents:** ZERO can start a session for part of its work, from a copy of
   the conversation or with its task alone. In default, it asks before handing
   work off: Yes, or don't ask again for hand-offs in this session. Once approved,
   the judge answers its permission asks against your words. The sandbox and
   stricter modes remain in force. The same admission applies to work in rounds.
-  Subagents report back; messages between sessions never answer an ask.
+  Subagents report back. A helper's question goes to its parent, which can
+  answer that question by its id or ask you. Ordinary messages do not answer asks.
 - **Workflows:** a script ZERO writes can call `zero -p TEXT` inside the
   sandbox. Its separate credential permits starting and following its own
   session's subagents, not answering asks or reading unrelated sessions.
@@ -257,7 +258,8 @@ zero doctor                                        # what ZERO needs from the ma
 - A session or a job is named by its id or the start of it.
 - A long text can come from stdin (`-`); a key only does (`--key-stdin`), never as an argument.
 - `--json` prints the server's reply as one JSON object; `session send --json` prints the session, its outcome, the answer, a waiting question, the tokens and the seconds.
-- The exit status is 0 when it worked, 1 when not, 2 when a question waits: answer it with `zero session send TEXT --session ID`, or pick one of its choices with `--choice yes|session|saved|no`.
+- The exit status is 0 when it worked, 1 when not, 2 when a question waits: answer it with `zero session send TEXT --session ID`, or pick its displayed choice with `--choice KEY` (a number for a question;
+  `yes`, `session`, `saved` or `no` for a permission ask).
 - `zero -p TEXT` is short for `zero session send TEXT`.
 
 </details>
@@ -332,7 +334,9 @@ Or tell the agent to use ZERO: `zero --help` ends with these lines, with your po
 | `zero_reply` | answers a waiting question, or sends a follow-up |
 | `zero_stop` | stops the running turn |
 
-The mode decides who answers ZERO's questions: in `default` the calling agent does, with `zero_reply`; in `auto` and `auto+` ZERO's judge does.
+The mode decides who answers permission asks: in `default` the calling agent
+does, with `zero_reply`; in `auto` and `auto+` ZERO's judge does. Questions
+about the task wait for an answer through `zero_reply` in every mode.
 
 ## Apps in any language
 
@@ -396,3 +400,23 @@ It removes the command, the HTTP door's units and `~/.local/share/zero`, once ZE
 ---
 
 <p align="center"><sub>MIT license (a release's Python and packages under their own, inside it) · <a href="CHANGELOG.md">Changelog</a> · <a href="protocol/schema.json">Protocol schema</a></sub></p>
+
+
+### Questions and keywords
+
+ZERO can use `ask_user` when an answer is worth your attention. Questions are
+shown separately from permission asks, with number keys for suggested answers
+and free text for your own answer. The turn waits, including after reconnect
+or restart; the judge cannot supply the answer. `zero -p` reports "waiting for
+an answer" and exits with status 2.
+
+The shipped system message defines two words: `autopilot` asks ZERO to decide,
+keep a list of its decisions and report when done, asking only for what it
+cannot do or find out itself. `override` means you take responsibility for your
+request and want it carried out as asked; that meaning applies only to your
+own message. Permission modes and judging still apply to both.
+
+Add your own meanings under `# Keywords` in ZERO.md. A meaning there replaces
+ZERO's shipped meaning of the same word. The judge reads them too. Updates
+replace the shipped definitions and leave your ZERO.md untouched; the section
+is included at the top of new ZERO.md templates.

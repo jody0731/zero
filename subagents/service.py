@@ -39,6 +39,7 @@ import uuid
 import paths
 from core import history
 from server.services import Refused, Service
+from server.runtime import Message
 from subagents import tool as subtools
 from subagents.store import ADDED_COLUMNS, SCHEMA, WORKFLOW, SubagentStore
 from usage.spend import (
@@ -100,8 +101,8 @@ class SessionSubagents:
                                   title, minutes, weighted_tokens,
                                   self.depth() + 1)
 
-    def send(self, to, text):
-        return self.service.send(self.sid, to, text)
+    def send(self, to, text, reply_to=None):
+        return self.service.send(self.sid, to, text, reply_to=reply_to)
 
     def tree(self):
         return self.service.tree(self.sid)
@@ -451,7 +452,7 @@ class SubagentsService(Service):
             raise Refused(why)
         return {"ok": True, "session": child, "started": True}
 
-    def send(self, sid, to, text):
+    def send(self, sid, to, text, reply_to=None):
         """A message to any other session, by its id, as a notice. A
         subagent's message to its parent carries the record the parent
         started it from, so one reaching a part a rewind left behind is
@@ -460,6 +461,17 @@ class SubagentsService(Service):
             return "Error: that is this session."
         if self.runtime.store.session(to) is None:
             return f"Not sent: no session {to}."
+        if reply_to is not None:
+            child = self.store.subagent(to)
+            ask = self.runtime.store.open_ask(to)
+            if (child is None or child["parent"] != sid or ask is None
+                    or ask.get("kind") != "question" or ask["id"] != reply_to):
+                return "Not sent: no matching question from a direct helper."
+            self.runtime.admit(Message(
+                id=f"question-answer:{reply_to}", session=to,
+                source=subtools.ACROSS, text=text, reply_to=reply_to,
+            ), extra={"reply_kind": "question"})
+            return f"{SENT} {to}."
         info = self.runtime.store.session(sid)
         payload = {"text": subtools.MESSAGE.format(id=sid, title=info["title"],
                                                    text=text)}
@@ -507,8 +519,18 @@ class SubagentsService(Service):
             if ask is None:
                 return
             key, to = ask["ask"], self.root(sid)
-            payload["text"] = subtools.WAITING.format(
-                id=sid, title=info["title"], parent=row["parent"], why=ask["why"])
+            if ask.get("kind") == "question":
+                to = row["parent"]
+                payload["text"] = (
+                    f"Question {key} from helper {sid}: {ask['command']}\n"
+                    f"Choices: {json.dumps(ask.get('choice_labels', {}))}\n"
+                    f"Its turn waits. {subtools.send_message.__name__} with "
+                    f"session={sid} and reply_to={key} answers it."
+                )
+            else:
+                payload["text"] = subtools.WAITING.format(
+                    id=sid, title=info["title"], parent=row["parent"],
+                    why=ask["why"])
         else:
             end = last_end(records)
             if end is None:

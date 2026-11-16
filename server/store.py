@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS asks (
     source TEXT,
     -- Its answers with the words the box shows for each, as JSON (an
     -- object, in order): what apps draw
-    choice_labels TEXT
+    choice_labels TEXT,
+    kind TEXT DEFAULT 'permission'
 );
 CREATE INDEX IF NOT EXISTS asks_open ON asks (session, status);
 CREATE TABLE IF NOT EXISTS message_replies (
@@ -156,12 +157,12 @@ ADDED_COLUMNS = {
     "sessions": {"parent": "TEXT", "started_by": "TEXT",
                  "log_seq": "INTEGER NOT NULL DEFAULT 0"},
     "asks": {"reason": "TEXT NOT NULL DEFAULT ''", "about": "TEXT",
-             "choice_labels": "TEXT"},
+             "choice_labels": "TEXT", "kind": "TEXT DEFAULT 'permission'"},
 }
 # Added columns a session's log fills (0.7.6.1): once added, the sessions
 # with rows in their table are rebuilt from their logs at the server's start
 # (their log_seq set back), so the rows made before carry them too (rule 9)
-FROM_THE_LOG = {"asks": ("choice_labels",)}
+FROM_THE_LOG = {"asks": ("choice_labels", "kind")}
 # Beside the database, a copy of it as it was before a rename
 BACKUP_SUFFIX = ".before-renames-"
 # A user message that waits for the turn's answer instead of steering it
@@ -644,11 +645,12 @@ class Store:
         def change(db):
             db.execute(
                 "INSERT OR IGNORE INTO asks (id, session, call, turn, tool, command, "
-                "why, reason, about, status, created_at, choice_labels) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+                "why, reason, about, status, created_at, choice_labels, kind) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)",
                 (ask["ask"], session, ask["call"], turn, ask["tool"],
                  str(ask["command"]), ask["why"], ask["reason"],
-                 ask.get("about"), created_at, labels_of(ask)),
+                 ask.get("about"), created_at, labels_of(ask),
+                 ask.get("kind", "permission")),
             )
             db.execute(
                 "UPDATE sessions SET state = 'waiting', updated_at = ?, "
@@ -664,7 +666,8 @@ class Store:
 
         def change(db):
             db.execute(
-                "UPDATE asks SET status = ?, closed_at = ?, reply = ?, source = ? "
+                "UPDATE asks SET status = CASE WHEN kind = 'question' "
+                "THEN 'answered' ELSE ? END, closed_at = ?, reply = ?, source = ? "
                 "WHERE id = ?",
                 ("approved" if yes else "cancelled", now, reply, source, ask),
             )
@@ -725,10 +728,10 @@ class Store:
             db.executemany(
                 "INSERT INTO asks (id, session, call, turn, tool, command, why, "
                 "reason, about, status, created_at, closed_at, reply, source, "
-                "choice_labels) "
+                "choice_labels, kind) "
                 "VALUES (:id, :session, :call, :turn, :tool, :command, :why, "
                 ":reason, :about, :status, :created_at, :closed_at, :reply, "
-                ":source, :choice_labels)",
+                ":source, :choice_labels, :kind)",
                 [{**ask, "session": session} for ask in rows.asks],
             )
             for id, status in rows.inbox.items():

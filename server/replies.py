@@ -20,10 +20,11 @@ from core import asking, history, tools
 def ask_row(ask):
     """An open ask, from its row in the asks table."""
     labels = json.loads(ask.get("choice_labels") or "null")
-    if not labels:
+    if labels is None:
         labels = asking.choice_labels(asking.PLAIN_CHOICES)
     return {
         "id": ask["id"], "tool": ask["tool"], "command": ask["command"],
+        "kind": ask.get("kind") or "permission",
         "why": ask["why"], "reason": ask["reason"], "about": ask["about"],
         "created_at": ask["created_at"],
         "choices": list(labels), "choice_labels": labels,
@@ -89,7 +90,7 @@ def record(record):
                 "notice_source": history.NOTICES[record["source"]]}
     if kind == "assistant" and (record.get("message") or {}).get("tool_calls"):
         return {**record, "call_summaries": call_summaries(record["message"])}
-    if kind == "ask":
+    if kind == "ask" and record.get("kind") != "question":
         offer = (record.get("notes") or {}).get("offer_text")
         choices = record.get("choices") or asking.PLAIN_CHOICES
         return {**record, "choice_labels": asking.choice_labels(

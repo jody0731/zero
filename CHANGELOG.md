@@ -3,6 +3,19 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.3
+
+- ZERO can ask a question with numbered choices or a free-text answer. Its
+  turn waits across app closure and server restart; the judge never answers it.
+  A helper asks its parent, which answers or brings the question to you.
+- `zero -p` reports "waiting for an answer" for a question. The browser and
+  terminal distinguish questions from permission asks.
+- Shipped keywords define `autopilot` and `override`. Your Keywords section
+  in ZERO.md can replace their meanings, and the judge reads those definitions
+  too. Keywords express intent; permission modes still apply.
+- Existing ZERO.md files are untouched. Session log format 6 distinguishes
+  answers from permissions; older logs retain their contents when upgraded.
+
 ## 0.7.7.2.1
 
 - Workflow credentials no longer accumulate in server memory as sessions run.

@@ -159,7 +159,7 @@ class JudgeApproval(Hook):
                 self._refusal_streak = 0
 
     def approve(self, call):
-        if not ask_of(call):
+        if "question" in call.notes or not ask_of(call):
             return None
         session = call.turn.session
         records, goal = session.log.branch(), ()

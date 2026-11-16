@@ -21,7 +21,7 @@ from core.asking import (
 )
 from core.control import Stopped
 from core.history import LOG_FORMAT, NewerLog, OldLog, log_format
-from core.hooks import Deny, HookRunner, ModelAsk, Park, Stop
+from core.hooks import Deny, HookRunner, ModelAsk, Park, Question, Stop
 from core.llm import MODEL_ERRORS
 from core.records import Call, ModelFailure, Step, Turn
 
@@ -695,11 +695,16 @@ class Session:
         asked = {}
         if decision.about is not None:
             asked["about"] = decision.about
+        if isinstance(decision, Question):
+            asked["kind"] = "question"
+            asked["choice_labels"] = decision.labels
         reason = decision.reason or str(call.args.get("reason") or "").strip()
         record = self.write(
             "ask", ask=f"ask-{secrets.token_hex(4)}", step=call.step.number,
             call=call.id, tool=call.name, command=command, why=decision.why,
-            reason=reason, notes=call.notes, choices=choices(call.notes),
+            reason=reason, notes=call.notes,
+            choices=(list(decision.labels) if isinstance(decision, Question)
+                     else choices(call.notes)),
             arguments=call.arguments,
             **asked,
         )
@@ -760,13 +765,27 @@ class Session:
         return turn
 
     def finish_parked(self, turn):
-        """The parked call's step, finished: on a yes the call runs (before_tool
-        checks it again) and so do the calls after it; on the box's No
+        """Finish a parked step. A question records its answer before later
+        calls. On permission yes the call runs (before_tool checks it again)
+        and so do the calls after it; on the box's No
         it is declined, the rest are closed unstarted, and the turn ends;
         otherwise the call gets CANCELLED, the rest are closed unstarted, and
         the reply joins the turn."""
         step, call, later, fields = turn.unpark
         turn.unpark = None
+        if "question" in call.notes:
+            def answered_question():
+                labels = call.notes["question"]["choice_labels"]
+                answer = labels.get(fields.get("choice"), fields["text"])
+                call.result = answer
+                call.ran = True
+                self.answer(call)
+
+            labels = call.notes["question"]["choice_labels"]
+            answer = labels.get(fields.get("choice"), fields["text"])
+            self.write_reply({**fields, "text":
+                              call.notes["question"]["text"] + "\n" + answer})
+            return self.run_calls(step, later, answered_question)
         if fields.get("choice") == NO:
             def decline():
                 call.result, call.denied = DECLINED_STOP, True

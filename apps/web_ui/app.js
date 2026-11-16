@@ -701,11 +701,13 @@
   function askEntry(record) {
     const fold = state.calls.get(record.call);
     if (fold) {
-      fold.querySelector("summary").append(el("span", "tag asked", "asked"));
+      fold.querySelector("summary").append(el("span", "tag asked",
+        record.kind === "question" ? "question" : "permission"));
       return null;
     }
     const node = el("div", "notice");
-    node.textContent = `Asked · ${record.command || record.tool || ""}`;
+    const label = record.kind === "question" ? "Question" : "Permission";
+    node.textContent = `${label} · ${record.command || record.tool || ""}`;
     return node;
   }
 
@@ -865,7 +867,8 @@
     box.dataset.ask = ask.id;
     box.hidden = false;
     box.replaceChildren();
-    const head = el("h2", null, "Ask");
+    const head = el("h2", null,
+      ask.kind === "question" ? "Question" : "Permission");
     if (ask.about) head.title = ask.about;
     box.append(head);
     box.append(el("pre", null, ask.command || ask.tool || ""));
@@ -874,7 +877,8 @@
     for (const choice of ask.choices || []) {
       const label = (ask.choice_labels || {})[choice] || choice;
       const button = el("button", choice === (ask.choices || [])[0]
-        ? "primary" : "", label);
+        ? "primary" : "", ask.kind === "question"
+          ? `${choice}. ${label}` : label);
       button.type = "button";
       button.addEventListener("click", () => answer(ask, { choice }));
       choices.append(button);
@@ -890,6 +894,12 @@
     words.addEventListener("submit", (event) => {
       event.preventDefault();
       if (input.value.trim()) answer(ask, { text: input.value.trim() });
+    });
+    input.addEventListener("keydown", (event) => {
+      if (!input.value && (ask.choices || []).includes(event.key)) {
+        event.preventDefault();
+        answer(ask, { choice: event.key });
+      }
     });
     box.append(words);
   }

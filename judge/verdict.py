@@ -193,7 +193,7 @@ class Judge:
     judge_reply_tokens (None: no ceiling)."""
 
     def __init__(self, model, client=None, name=None, *, limits, effort=None,
-                 view_bytes=None, fallback=None):
+                 view_bytes=None, fallback=None, keywords=None):
         self.model = model
         server, self.served_name = resolve(model)
         self.api = server.api
@@ -216,6 +216,7 @@ class Judge:
         self.fallback = fallback
         self.user = name or "the user"
         self.system = prompt(name)
+        self.keywords = keywords
 
     @property
     def timeout(self):
@@ -270,7 +271,8 @@ class Judge:
         counts as an allow."""
         t0 = time.monotonic()
         messages = [
-            {"role": "system", "content": self.system},
+            {"role": "system", "content": self.system + (
+                "\n\n" + self.keywords() if self.keywords else "")},
             {"role": "user", "content": self.message(history, command, offer)},
         ]
         tokens, errors = [0, 0, 0], []

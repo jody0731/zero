@@ -3514,6 +3514,13 @@
       "type": "object",
       "description": "a question waiting for the user's answer",
       "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "permission",
+            "question"
+          ]
+        },
         "id": {
           "type": "string",
           "description": "the ask's id: session/send's reply_to"
@@ -4096,6 +4103,9 @@
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
         },
+        "kind": {
+          "type": "string"
+        },
         "ask": {
           "type": "string",
           "description": "the ask's id"
@@ -4149,6 +4159,9 @@
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "kind": {
+          "type": "string"
         },
         "ask": {
           "type": "string"

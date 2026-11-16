@@ -42,6 +42,8 @@ import shell.tool
 import files.tool
 import memory.tool
 import permissions.tool
+import questions.tool
+from questions.hooks import Questions
 import web.tool
 import skills.tool
 import context.tool
@@ -103,6 +105,8 @@ from permissions.modes import (
 from limits.stops import BrokenReplyLimit
 from prompt import SETTINGS as PROMPT_SETTINGS
 from prompt.hooks import Environment, Means
+from prompt.keywords import definitions
+from prompt.instructions import text as instruction_text
 from prompt.instructions import PROJECT_FILE, read, system_prompt, user_instructions
 from memory.hooks import ZeroFilesGuard
 from skills.found import SkillFolders
@@ -158,7 +162,8 @@ settings.add(
 # them so)
 tools.add(
     *jobs.tool.TOOLS, *shell.tool.TOOLS, *files.tool.TOOLS,
-    *memory.tool.TOOLS, *permissions.tool.TOOLS, *web.tool.TOOLS,
+    *memory.tool.TOOLS, *permissions.tool.TOOLS, *questions.tool.TOOLS,
+    *web.tool.TOOLS,
     *skills.tool.TOOLS, *context.tool.TOOLS, *rounds.tool.TOOLS,
     *subagents.tool.TOOLS, *wait.tool.TOOLS, *usage.tool.TOOLS,
     *session_search.tool.TOOLS, *found_tools.tool.TOOLS,
@@ -176,7 +181,8 @@ HERE = Path(__file__).resolve().parent
 # The files whose code writes the system message: a change in one, or in the
 # tools' schemas, is new code that changes what the model reads (code_mark)
 SYSTEM_MESSAGE_SOURCES = (
-    "prompt/instructions.py", "prompt/hooks.py", "permissions/modes.py",
+    "prompt/instructions.py", "prompt/hooks.py", "prompt/keywords.py",
+    "permissions/modes.py",
     "sandbox/sandbox.py", "memory/hooks.py", "skills/hooks.py",
 )
 
@@ -229,7 +235,7 @@ def session_hooks(
     mode = canonical(mode)
     runs_as = canonical(runs_as or mode)
     spec = MODES[runs_as]
-    hooks = [HandoffApproval(
+    hooks = [Questions(), HandoffApproval(
                  lambda turn: running_round(turn) is not None,
                  enabled=runs_as == "default"),
              Means(limits, token_weights(server.price)),
@@ -470,6 +476,9 @@ def make_session(
                 name, client, limits=limits, effort=judge_thinking_effort,
                 view_bytes=judge_server.context_window // 2 * room.BYTES_PER_TOKEN,
                 fallback=fallback,
+                keywords=lambda: definitions(
+                    instruction_text(instructions.user)
+                    if instructions and instructions.user else ""),
             )
 
         def spare_judge():

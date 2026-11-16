@@ -43,6 +43,8 @@ class Refuse(Hook):
         self.text = text
 
     def approve(self, call):
+        if "question" in call.notes:
+            return None
         hit = ask_of(call)
         if hit:
             return Deny(self.text.format(reason=hit["reason"]))
@@ -72,6 +74,8 @@ class UserApproval(Hook):
         self._ask = ask
 
     def approve(self, call):
+        if "question" in call.notes:
+            return None
         hit = ask_of(call)
         if not hit:
             return None

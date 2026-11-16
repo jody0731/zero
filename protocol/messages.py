@@ -169,6 +169,7 @@ CHOICE_LABELS = {
 # there changes no reply: schema.json names them row.<name>
 ROWS = {
     "ask": shape("a question waiting for the user's answer", {
+        "kind": {"type": "string", "enum": ["permission", "question"]},
         "id": {**STRING, "description": "the ask's id: session/send's "
                "reply_to"},
         "tool": STRING,
@@ -305,6 +306,7 @@ RECORDS = {
                        "(missing: none)"},
     },
     "ask": {
+        "kind": STRING,
         "ask": {**STRING, "description": "the ask's id"},
         "tool": STRING, "command": STRING, "why": STRING, "reason": STRING,
         "about": STRING,
@@ -312,6 +314,7 @@ RECORDS = {
         "choice_labels": CHOICE_LABELS,
     },
     "answer": {
+        "kind": STRING,
         "ask": STRING, "yes": BOOLEAN, "source": maybe(STRING),
     },
     "note": {

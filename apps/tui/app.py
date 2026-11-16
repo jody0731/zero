@@ -1104,16 +1104,19 @@ class ZeroApp(SafeClicks, App):
     def ask_text(self):
         ask = self.client.ask or {}
         # The command, the agent's reason, what the ask is about, then the one
-        # question every ask ends with
-        parts = [(f"$ {ask.get('command', '')}", "bold")]
+        # permission question, where applicable
+        prefix = "Question: " if ask.get("kind") == "question" else "$ "
+        parts = [(f"{prefix}{ask.get('command', '')}", "bold")]
         reason = ask.get("reason")
         if reason:
             parts.append((f"\n{reason}", "dim"))
         if ask.get("about"):
             parts.append((f"\n{ask['about']}", ""))
-        parts += [("\n? ", "bold $text-warning"), (controller.PROCEED, "bold")]
+        if ask.get("kind") != "question":
+            parts += [("\n? ", "bold $text-warning"),
+                      (controller.PROCEED, "bold")]
         # The choices: the picked one marked; words typed below go to
-        # the consent check instead
+        # the consent check only for permission asks
         for n, (_, label) in enumerate(controller.choices(ask), 1):
             mark = "›" if n - 1 == self.picked else " "
             style = "bold $text-accent" if n - 1 == self.picked else ""

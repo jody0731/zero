@@ -15,6 +15,7 @@ ZERO's home (its settings and keys, its history, its socket) and keys are
 hidden from every box by construction, the evals' boxes included.
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -29,7 +30,7 @@ from pathlib import Path
 
 import paths
 from model.servers import ModelServerError, key_envs
-from sandbox import placeholders
+from sandbox import no_changes, placeholders
 
 # Hidden behind an empty folder or file, in the user's home: keys and
 # keyrings, cloud and package registries' logins, browsers' profiles (their
@@ -81,6 +82,7 @@ GIT_DEPTH = 2
 GIT_LOOK_FOLDERS = 1000
 # The stand-ins' runner (placeholders.py), run by path before ZERO loads
 STAND_INS = Path(placeholders.__file__).resolve()
+NO_CHANGES_RUNNER = Path(no_changes.__file__).resolve()
 # The network as the line says it: none, each command in a network of its
 # own, so a server a job runs is out of another command's reach
 NO_NETWORK = (
@@ -209,7 +211,8 @@ class Sandbox:
     sandboxed = True
 
     def __init__(self, workspace, home=None, read_only=False, private=(),
-                 protected=(), scratch=None, shown=(), own_skills=None):
+                 protected=(), scratch=None, shown=(), own_skills=None,
+                 no_changes=False):
         self.workspace = Path(workspace).resolve()
         # The harness owner's own folders (ZERO's home with its keys and
         # history; private_folders): hidden from every command
@@ -222,7 +225,8 @@ class Sandbox:
         # line names: its skills' scripts run in here (None: none shown)
         self.own_skills = own_skills
         # readOnly, or a workspace of /: mounted read-only like the rest
-        self.read_only = read_only or self.workspace == Path("/")
+        self.no_changes = no_changes
+        self.read_only = no_changes or read_only or self.workspace == Path("/")
         self.home = Path(home or Path.home())
         # Files in the workspace kept read-only, as its .git is: the ones a
         # later session reads as instructions (ZERO.md)
@@ -245,9 +249,11 @@ class Sandbox:
         for path in self.covered_folders():
             if path.exists():
                 args += ["--tmpfs", str(path)]
-        args += self.hiding()
+        hidden = self.hiding()
+        if not self.no_changes:
+            args += hidden
         # At its own path, so a path means one place in the box and out
-        args += ["--bind", tmp, tmp]
+        args += ["--ro-bind" if self.no_changes else "--bind", tmp, tmp]
         stand_ins = []
         if self.read_only:
             # Already read-only under / ; bound again only to come back from
@@ -261,12 +267,35 @@ class Sandbox:
                 if not os.path.lexists(path) or placeholders.is_marked(path):
                     stand_ins.append((str(path), kind))
                 args += ["--ro-bind", str(path), str(path)]
+        if self.no_changes:
+            # Restoring the workspace must not expose a private child such
+            # as ZERO's home. Connections are blocked by the filter, so the
+            # strict box needs no temporary-socket covers above its workspace.
+            args += hidden
         args += self.shown_again()
+        if self.no_changes:
+            # Empty covers and the private /dev are mounts too; a read-only
+            # root alone does not make them read-only.
+            mounts = [args[i + 1] for i, value in enumerate(args)
+                      if value == "--tmpfs"]
+            for path in [*mounts, "/dev/shm", "/dev/pts", "/dev", "/proc"]:
+                args += ["--remount-ro", path]
+            args += ["--disable-userns"]
         args += ISOLATION + ["--chdir", ws, "--"]
         if stand_ins:
             args = [sys.executable, "-I", str(STAND_INS), json.dumps(stand_ins),
                     "--", *args]
+        if self.no_changes:
+            args = [sys.executable, "-I", str(NO_CHANGES_RUNNER), *args]
         return args + list(argv)
+
+    def without_changes(self):
+        """This box's visibility, with no writable mounts or connections."""
+        if type(self).command is not Sandbox.command:
+            return None
+        box = copy.copy(self)
+        box.no_changes = box.read_only = True
+        return box
 
     def start_again(self, tries, exit_code, output_head):
         """Whether a command started `tries` times goes again: bwrap stopped
@@ -296,7 +325,9 @@ class Sandbox:
         the harness owner's own folders; only what exists."""
         runtime = Path(f"/run/user/{os.getuid()}")
         hidden = [runtime] + [self.home / name for name in SECRETS]
-        hidden += [Path(path) for path in SOCKETS] + tmp_socket_holders()
+        hidden += [Path(path) for path in SOCKETS]
+        if not self.no_changes:
+            hidden += tmp_socket_holders()
         hidden += self.private
         covers = []
         for path in hidden:
@@ -346,6 +377,8 @@ class Sandbox:
 
     def walls(self):
         """What this sandbox stops, in the words the model reads."""
+        if self.no_changes:
+            return "nothing is writable, and there is no network or connections"
         if self.read_only:
             return "nothing is writable but $TMPDIR, and there is no network"
         return (

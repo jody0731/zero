@@ -25,6 +25,8 @@ names the tools offered, every one without it (Codex's enabled_tools);
 is the MCP SDK's short list (HOME, LOGNAME, PATH, SHELL, TERM, USER) and the
 entry's `env`, never the whole of ZERO's (Codex's, Hermes' and OpenClaw's
 way).
+Commands are read-only and without connections unless `outside_sandbox` is
+true. Remote HTTP servers cannot be confined by ZERO.
 
 Read leniently: what this ZERO can't use is named in a note (`zero doctor`,
 `zero mcp list`) and the rest used; an entry it can't use at all is left
@@ -52,10 +54,12 @@ NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 NAME_RULE = "1 to 32 letters, digits, - or _"
 # What an entry may hold, and the kind of each
 STRINGS, PAIRS, NUMBER, TEXT = "strings", "pairs", "number", "text"
+BOOLEAN = "boolean"
 FIELDS = {
     "command": TEXT, "args": STRINGS, "env": PAIRS, "cwd": TEXT,
     "url": TEXT, "headers": PAIRS, "tools": STRINGS,
     "start_seconds": NUMBER, "call_seconds": NUMBER,
+    "outside_sandbox": BOOLEAN,
 }
 WHERE = "mcp_servers.toml"
 
@@ -75,6 +79,12 @@ class Entry:
     tools: tuple | None = None
     start_seconds: float | None = None
     call_seconds: float | None = None
+    outside_sandbox: bool = False
+
+    @property
+    def sandboxed(self):
+        """Only a local command can be confined by this ZERO."""
+        return self.transport == "stdio" and not self.outside_sandbox
 
     @property
     def transport(self):
@@ -95,7 +105,8 @@ class Entry:
                  "url": self.url, "headers": dict(self.headers) or None,
                  "tools": None if self.tools is None else list(self.tools),
                  "start_seconds": self.start_seconds,
-                 "call_seconds": self.call_seconds}
+                 "call_seconds": self.call_seconds,
+                 "outside_sandbox": True if self.outside_sandbox else None}
         return {k: v for k, v in found.items() if v is not None}
 
     def shown(self):
@@ -105,7 +116,8 @@ class Entry:
         for secret in ("env", "headers"):
             if secret in table:
                 table[secret] = sorted(table[secret])
-        return {"name": self.name, "transport": self.transport, **table}
+        return {"name": self.name, "transport": self.transport,
+                "sandboxed": self.sandboxed, **table}
 
 
 @dataclass
@@ -185,6 +197,7 @@ def entry_of(name, table):
         tools=tuple(values["tools"]) if "tools" in values else None,
         start_seconds=values.get("start_seconds"),
         call_seconds=values.get("call_seconds"),
+        outside_sandbox=values.get("outside_sandbox", False),
     ), notes
 
 
@@ -192,6 +205,8 @@ def checked(value, kind):
     """The value as its kind takes it, or None."""
     if kind == TEXT:
         return value if isinstance(value, str) and value.strip() else None
+    if kind == BOOLEAN:
+        return value if isinstance(value, bool) else None
     if kind == STRINGS:
         ok = isinstance(value, list) and all(isinstance(v, str) for v in value)
         return list(value) if ok else None
@@ -205,7 +220,8 @@ def checked(value, kind):
 
 def kind_words(kind):
     return {TEXT: "a string", STRINGS: "a list of strings",
-            PAIRS: "a table of strings", NUMBER: "a number above 0"}[kind]
+            PAIRS: "a table of strings", NUMBER: "a number above 0",
+            BOOLEAN: "a boolean"}[kind]
 
 
 def toml_value(value):
@@ -213,6 +229,8 @@ def toml_value(value):
     one, a number as itself."""
     if isinstance(value, (str, list)):
         return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return repr(value)

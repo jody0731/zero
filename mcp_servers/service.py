@@ -84,6 +84,11 @@ class McpServersService(Service):
                 if listed.checked(narrowed, listed.STRINGS) is None:
                     raise Refused("tools is a list of strings")
                 entry = dataclasses.replace(entry, tools=tuple(narrowed))
+            if request.get("outside_sandbox") is not None:
+                value = request["outside_sandbox"]
+                if not isinstance(value, bool):
+                    raise Refused("outside_sandbox is a boolean")
+                entry = dataclasses.replace(entry, outside_sandbox=value)
         else:
             table = {key: request[key] for key in listed.FIELDS
                      if request.get(key) is not None}

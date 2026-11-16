@@ -3249,6 +3249,9 @@
         "call_seconds": {
           "type": "number"
         },
+        "outside_sandbox": {
+          "type": "boolean"
+        },
         "from": {
           "enum": [
             "claude",

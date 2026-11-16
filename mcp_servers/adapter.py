@@ -10,7 +10,7 @@ ZERO's parts read, and takes what it doesn't know as a line saying so.
   most 64 of them; one changed to fit ends in a short hash of the whole, so
   two never meet (Pi's and Hermes').
 - Its description: the server's own words, marked as its server's (rule 17),
-  after the fact that it runs in that server's process, outside the sandbox.
+  after the facts of its process's confinement and permission review.
 - Its arguments: the server's schema, which must describe an object (the
   model's API takes nothing else); arguments it doesn't list go through
   unless it says they don't, for the server to judge.
@@ -40,9 +40,16 @@ NAME_CHARACTERS = re.compile(r"[^A-Za-z0-9_-]")
 NAME_MOST = 64
 HASH_CHARS = 8
 DESCRIPTION = (
-    'From the MCP server "{server}", which runs as its own process, outside '
-    "the sandbox; each call goes first to {approver}. In its server's words: "
+    'From the MCP server "{server}". {execution} In its server\'s words: '
     "{description}"
+)
+SANDBOXED = (
+    "Its process runs in a read-only sandbox with nothing writable and no "
+    "network or connections; its calls run without review."
+)
+OUTSIDE = (
+    "Its process runs outside the sandbox; each call goes first to "
+    "{approver}. A remembered permission can cover this whole MCP server."
 )
 NO_DESCRIPTION = "(The server gives no description.)"
 RESULT = '<mcp_result server="{server}" tool="{tool}">\n{text}\n</mcp_result>'
@@ -66,11 +73,12 @@ def tool_name(server, tool):
     return f"{fitted[:NAME_MOST - HASH_CHARS - 1]}_{digest}"
 
 
-def description(server, text):
+def description(server, text, sandboxed=False):
     """The tool's description as the model reads it, marked as its
     server's."""
     words = (text or "").strip() or NO_DESCRIPTION
-    return DESCRIPTION.format(server=server, approver=TO_APPROVER,
+    execution = SANDBOXED if sandboxed else OUTSIDE.format(approver=TO_APPROVER)
+    return DESCRIPTION.format(server=server, execution=execution,
                               description=words)
 
 

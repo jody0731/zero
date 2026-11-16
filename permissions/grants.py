@@ -62,19 +62,28 @@ def offer(call):
 
 def covered(grants, call):
     """Whether these grants (all for the call's tool) cover the call."""
-    want = offer(call)
-    if want is None:
-        return False
-    field = tools.declared_grant(call.name).field
-    have = {x for g in grants for x in g.get(field, ())}
-    return set(want[field]) <= have
+    return covering_grant(grants, call) is not None
+
+
+def covering_grant(grants, call):
+    """The scope that covers this call, including an older narrow grant."""
+    declared = tools.declared_grant(call.name)
+    while declared is not None:
+        wanted = declared.of(call.args or {})
+        have = {x for g in grants for x in g.get(declared.field, ())}
+        if wanted and set(wanted) <= have:
+            return {"tool": call.name, declared.field: list(wanted)}
+        declared = declared.previous
+    return None
 
 
 def describe(grant):
     """A grant in a few words, its tool's ("`cd` and `git push` commands")."""
     declared = tools.declared_grant(grant["tool"])
-    if declared is not None:
-        return declared.words(grant)
+    while declared is not None:
+        if declared.field in grant:
+            return declared.words(grant)
+        declared = declared.previous
     # A saved grant for a tool this ZERO doesn't have
     return f"{grant['tool']} to " + ", ".join(sorted(items(grant)))
 
@@ -277,13 +286,20 @@ class GrantCheck(Hook):
         who = plan_grants(records).get(call.key)
         if who is not None:
             return {"scope": "plan", "by": who}
+        declared = tools.declared_grant(call.name)
         entries = [e for e in listing(records, self.saved, self.judged)
-                   if e["grant"]["tool"] == call.name]
-        if not entries or not covered([e["grant"] for e in entries], call):
+                   if e["grant"]["tool"] == call.name
+                   or (declared is not None and declared.across_tools
+                       and declared.field in e["grant"])]
+        want = covering_grant([e["grant"] for e in entries], call)
+        if want is None:
             return None
         # The grants that cover some part of it: one, or several together
-        want = offer(call)
-        used = [e for e in entries if items(e["grant"]) & items(want)]
+        wanted = items(want)
+        used = [e for e in entries if any(
+            set(e["grant"].get(field, ())) & wanted
+            for field in want if field != "tool"
+        )]
         scope = "saved" if all(e["scope"] == "saved" for e in used) else "session"
         by = "judge" if any(e["by"] == "judge" for e in used) else "user"
         return {"scope": scope, "by": by, "grant": want,

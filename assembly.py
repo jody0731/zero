@@ -418,6 +418,16 @@ def make_session(
                           scratch=scratch, shown=shown, own_skills=own_skills)
     else:
         sandbox = Unsandboxed(workspace)
+    if isinstance(sandbox, Sandbox):
+        read_only_sandbox = sandbox.without_changes()
+    elif box is None:
+        read_only_sandbox = Sandbox(
+            workspace, no_changes=True, private=private_folders(),
+            scratch=scratch, shown=shown, own_skills=own_skills,
+        )
+    else:
+        # A custom execution environment must supply its own confinement.
+        read_only_sandbox = None
     # Where one call runs once its ask to leave the sandbox is approved: only
     # in a mode whose own sandbox has the workspace, never from a box handed
     # in (an eval's also hides the answer key)
@@ -545,6 +555,8 @@ def make_session(
         llm, hooks, prompt, session_log, settings,
         tool_context={
             "sandbox": sandbox, "outside": outside, "limits": limits,
+            "read_only_sandbox": read_only_sandbox,
+            "retry_no_changes": runs_as == "auto+",
             "web": web if web is not None else web_clients(limits),
             "own_files": own_files, "results": results,
             # The share of the context ZERO's own files take, as it stands,

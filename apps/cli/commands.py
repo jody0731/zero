@@ -624,6 +624,8 @@ def parser(prog="zero"):
     add.add_argument("--env", action="append", default=[], metavar="K=V",
                      help="an environment variable for the command")
     add.add_argument("--cwd", metavar="DIR", help="the command's folder")
+    add.add_argument("--outside-sandbox", action="store_true",
+                     help="start this MCP command outside the read-only sandbox")
     add.add_argument("--tools", metavar="T,…",
                      help="only these of its tools (by its names for them)")
     add.add_argument("--start-seconds", type=float, metavar="S")
@@ -1056,6 +1058,7 @@ def mcp_get_command(connection, args, out):
 
 def mcp_add_command(connection, args, out):
     fields = {"url": args.url, "cwd": args.cwd,
+              "outside_sandbox": args.outside_sandbox or None,
               "start_seconds": args.start_seconds,
               "call_seconds": args.call_seconds,
               "headers": pairs(args.header, "--header") or None,
@@ -1066,7 +1069,8 @@ def mcp_add_command(connection, args, out):
         fields["command"], fields["args"] = args.words[0], args.words[1:]
     if args.agent:
         # Copied whole, but for the tools it may narrow to
-        fields = {"from": args.agent, "tools": fields["tools"]}
+        fields = {"from": args.agent, "tools": fields["tools"],
+                  "outside_sandbox": fields["outside_sandbox"]}
     reply = connection.mcp_add(args.name, **fields)
     lines = [mcp_server_text(reply["server"])] if reply.get("server") else []
     lines += [f"! {note}" for note in reply.get("notes", [])]

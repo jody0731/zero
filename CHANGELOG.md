@@ -3,6 +3,19 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.1
+
+- In auto+, bash calls marked `no_changes` run without review in a read-only
+  sandbox with no network or connections. Failed foreground calls retry once
+  unmarked through the judge; background jobs stay confined.
+- Local MCP servers start read-only and without connections by default. Add
+  `--outside-sandbox` for servers that need writes or network access. HTTP
+  servers remain outside. "Don't ask again" can cover a whole named server;
+  existing individual-tool permissions keep their old scope.
+- Read-only confinement uses the system's libseccomp, checked by `zero doctor`.
+  Permission retries survive a parked ask and restart, and a tool changed
+  during permission checks is refused before execution.
+
 ## 0.7.6.2.9
 
 - Advanced settings have labeled subsections, including Judge, Limits and Server.

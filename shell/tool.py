@@ -69,23 +69,40 @@ def describe(limits, context=None):
         "stderr). Each call is a fresh shell in the workspace folder: cd and "
         f"variables do not carry over. A command still running after {after} "
         "moves to the background as a job, where the session has jobs, or is "
-        "killed."
+        "killed. With no_changes=true, the command runs without review in a "
+        "read-only sandbox: nothing writable and no network or connections. "
+        "In auto+, a failed foreground call retries unmarked through the judge."
     )
+
+
+def crossing(args):
+    if args.get("no_changes") is True:
+        return None
+    return outside_crossing(args)
 
 
 @tool(
     describe,
-    optional=(OUTSIDE_ARGUMENT, "reason", "background", "expect_minutes"),
+    optional=(OUTSIDE_ARGUMENT, "reason", "background", "expect_minutes",
+              "no_changes"),
     summary=lambda args: args["command"],
     # A call with `background` starts a job (the jobs' cap)
     starts_job="background",
     fields=FIELDS,
     result_summary=result_summary,
-    crossing=outside_crossing,
+    crossing=crossing,
+    needs_permission=lambda args: args.get("no_changes") is not True,
     # "Don't ask again" grants each part's prefix (shell/commands.py)
     grant=Grant("prefixes", lambda args: prefixes(str(args.get("command", ""))),
                 prefix_words),
     command=("string", "The bash command to run"),
+    no_changes=(
+        "boolean",
+        "Run in a read-only sandbox with nothing writable, including scratch, "
+        "and no network or connections, without review. This takes precedence "
+        "over outside_sandbox. In auto+, a failed foreground call is retried "
+        "without this mark through the judge. A background job stays confined",
+    ),
     **{OUTSIDE_ARGUMENT: (
         "boolean",
         "Run this one command outside the sandbox, as the user with the "
@@ -108,7 +125,7 @@ def describe(limits, context=None):
 def bash(
     command, outside_sandbox=False, reason="", background=False,
     expect_minutes=None, sandbox=None, outside=None, stop=None, jobs=None,
-    limits=None,
+    limits=None, no_changes=False, read_only_sandbox=None, retry_no_changes=False,
 ):
     """`sandbox`, `outside`, `stop`, `jobs` and `limits` come from the session,
     never the model. `outside`: where an approved call to leave the sandbox
@@ -117,9 +134,14 @@ def bash(
     output it keeps, as they stand (every session's tools get them).
     `reason` is for the ask (permissions/asks.py, jobs/hooks.py)."""
     box = sandbox or SANDBOX
+    if no_changes is True:
+        if read_only_sandbox is None:
+            return Result("The read-only sandbox is unavailable; nothing ran.",
+                          failed=True)
+        box = read_only_sandbox
     timeout = limits["bash_foreground_seconds"]
     note = ""
-    if outside_sandbox is True:
+    if outside_sandbox is True and no_changes is not True:
         if outside is not None:
             box = outside
         elif box.sandboxed:
@@ -206,7 +228,14 @@ def bash(
         result = result + "\n\n" + note if result else "\n\n" + note
     # Moved to the background, it goes on: not a failure
     failed = not moved and fields.get("exit_code") != 0
-    return Result(result, head=head, fields=fields, failed=failed)
+    retry = None
+    if (no_changes is True and retry_no_changes and failed
+            and not fields.get("timed_out")):
+        retry = {"command": command, "outside_sandbox": outside_sandbox,
+                 "reason": reason, "background": background,
+                 "expect_minutes": expect_minutes}
+    return Result(result, head=head, fields=fields, failed=failed,
+                  retry_arguments=retry)
 
 
 # What this component offers the model, in the order it reads them; the

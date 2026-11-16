@@ -125,7 +125,7 @@ def search_describe(limits, context=None):
         "site:example.org (OR between sites), -site:, \"exact phrase\", -term, "
         "lang:en, after:2025 and before:2026-06-01 (a year or a date). It runs "
         "outside the sandbox: the sandbox's commands have no network, this tool "
-        "has."
+        "has. Reading the internet with this tool needs no review."
     )
 
 
@@ -236,7 +236,8 @@ FETCH_DESCRIPTION = (
     "the context's room; past it, its start and end come with where the whole "
     "is saved. A local or LAN address (this machine or its network) is fetched "
     f"only with local_network, which goes first to {TO_APPROVER}. It runs "
-    "outside the sandbox: the sandbox's commands have no network, this tool has."
+    "outside the sandbox: the sandbox's commands have no network, this tool has. "
+    "Reading the internet with this tool needs no review."
 )
 
 

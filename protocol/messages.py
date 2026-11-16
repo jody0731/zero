@@ -803,6 +803,7 @@ MESSAGES = {
          "headers": {"type": "object", "additionalProperties": STRING},
          "tools": STRINGS,
          "start_seconds": NUMBER, "call_seconds": NUMBER,
+         "outside_sandbox": BOOLEAN,
          "from": one_of("claude", "codex")},
         required=("name",),
         reply={"server": {"type": "object", "additionalProperties": True},

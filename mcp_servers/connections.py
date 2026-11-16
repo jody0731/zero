@@ -43,6 +43,7 @@ from core import tools
 from core.control import Stopped
 from core.tools import ERROR, Grant, Result
 from mcp_servers import adapter, listed
+from sandbox.sandbox import Sandbox, private_folders
 
 # The share of a session's line its servers' tools sent with each request
 # may take, in characters at the token a byte ZERO's own files count (the
@@ -97,6 +98,9 @@ class Server:
         self.started = threading.Event()
         self.stopping = None
         self.future = None
+        self.sandbox = (Sandbox(entry.cwd or os.getcwd(), no_changes=True,
+                                private=private_folders())
+                        if entry.sandboxed else None)
 
     def heard(self, line):
         """A line it wrote on stderr, kept while it fits STDERR_CHARS."""
@@ -220,9 +224,14 @@ class McpServers:
             async with AsyncExitStack() as stack:
                 if entry.transport == "stdio":
                     reader = StderrReader(server)
+                    command = [entry.command, *entry.args]
+                    env = dict(entry.env)
+                    if server.sandbox is not None:
+                        command = server.sandbox.command(command)
+                        env["TMPDIR"] = server.sandbox.private_tmp()
                     transport = stdio_client(StdioServerParameters(
-                        command=entry.command, args=list(entry.args),
-                        env=dict(entry.env) or None, cwd=entry.cwd,
+                        command=command[0], args=command[1:],
+                        env=env or None, cwd=entry.cwd,
                         encoding_error_handler="replace",
                     ), errlog=reader.stream)
                 else:
@@ -358,22 +367,33 @@ class McpServers:
             if door is None:
                 return Result(ERROR + NOT_LISTED.format(server=server_name),
                               failed=True)
-            return door.call(server_name, tool_name, args, context.get("stop"))
+            return door.call(server_name, tool_name, args, context.get("stop"),
+                             expected=server)
 
         def crossing(args):
+            if server.sandbox is not None:
+                return None
             # No reason argument: the fact is the ask's whole reason
             return {"rule": CROSSING_RULE,
                     "fact": FACT.format(server=server_name)}
 
         return tools.found_tool(
-            name, adapter.description(server_name, tool.description), schema,
+            name, adapter.description(server_name, tool.description,
+                                      server.sandbox is not None), schema,
             run, ready=lambda context: self.offers(name, context),
             reachable=lambda context: self.reaches(name, context),
             source=SOURCE.format(server=server_name), name_at_source=tool_name,
             crossing=crossing, extra_arguments=extra,
-            grant=Grant("tools", lambda args: [name],
-                        lambda grant: "the MCP tools "
-                        + ", ".join(grant["tools"])),
+            needs_permission=lambda args: server.sandbox is None,
+            grant=Grant(
+                "mcp_servers", lambda args: [server_name],
+                lambda grant: (
+                    f"all tools of the MCP servers {', '.join(grant['mcp_servers'])}"
+                ), across_tools=True,
+                previous=Grant("tools", lambda args: [name],
+                               lambda grant: "the MCP tools "
+                               + ", ".join(grant["tools"])),
+            ),
             output_schema=tool.output_schema,
         )
 
@@ -432,12 +452,15 @@ class McpServers:
 
     # --------------------------------------------------------------- calls
 
-    def call(self, server_name, tool_name, args, stop=None):
+    def call(self, server_name, tool_name, args, stop=None, expected=None):
         """Call a server's tool from a session's thread: its Result. A stop
         returns at once (Stopped), and the SDK tells the server the call is
         cancelled. A server gone since its last call starts again first."""
         with self.lock:
             server = self.servers.get(server_name)
+        if expected is not None and server is not expected:
+            return adapter.failure(server_name, tool_name,
+                                   "its configuration changed; nothing ran")
         if server is None:
             return adapter.failure(server_name, tool_name,
                                    NOT_LISTED.format(server=server_name))

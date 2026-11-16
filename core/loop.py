@@ -7,6 +7,7 @@ call gets its error back. Hooks supply limits and decisions.
 """
 
 import copy
+import json
 import secrets
 import time
 import traceback
@@ -557,7 +558,26 @@ class Session:
         if self.decide(call, approved):
             if call.turn.control is not None:
                 call.turn.control.check()
-            self.take_answer(call, self.execute(call))
+            answer = self.execute(call)
+            if answer.retry_arguments is not None:
+                attempt = {
+                    "arguments": call.arguments, "result": answer.text,
+                    "fields": answer.fields, "failed": answer.failed,
+                }
+                call.arguments = json.dumps(answer.retry_arguments)
+                call.args, call.error = tools.check(call.name, call.arguments)
+                call.key = (call.name, tools.normalise(call.arguments))
+                call.notes = {"attempts": [attempt]}
+                call.remarks = []
+                call.ran = False
+                if self.decide(call):
+                    if call.turn.control is not None:
+                        call.turn.control.check()
+                    answer = self.execute(call)
+                else:
+                    self.answer(call)
+                    return
+            self.take_answer(call, answer)
         self.answer(call)
 
     def decide(self, call, approved=None, before_park=None):
@@ -565,6 +585,7 @@ class Session:
         call gets its error and a denied one its reason, and neither runs. A
         call that asks parks the turn here, `before_park()` first.
         `approved`: as run_call's."""
+        call.tool_entry = tools.entry_of(call.name)
         if call.turn.control is not None:
             call.turn.control.check()
         if call.error:
@@ -650,7 +671,8 @@ class Session:
         call.ran = True
         call.started_at = time.monotonic()
         try:
-            return tools.run(call.name, call.args, self.call_context(call))
+            return tools.run(call.name, call.args, self.call_context(call),
+                             expected_entry=call.tool_entry)
         except KeyboardInterrupt as error:
             return error
 
@@ -669,6 +691,7 @@ class Session:
             "ask", ask=f"ask-{secrets.token_hex(4)}", step=call.step.number,
             call=call.id, tool=call.name, command=command, why=decision.why,
             reason=reason, notes=call.notes, choices=choices(call.notes),
+            arguments=call.arguments,
             **asked,
         )
         raise Parked(record)
@@ -712,6 +735,10 @@ class Session:
         answered = {r["call"] for r in pending if r["type"] == "tool"}
         index = next(i for i, c in enumerate(step.calls) if c.id == ask["call"])
         call = step.calls[index]
+        if "arguments" in ask:
+            call.arguments = ask["arguments"]
+            call.args, call.error = tools.check(call.name, call.arguments)
+            call.key = (call.name, tools.normalise(call.arguments))
         call.notes.update(ask.get("notes", {}))
         later = [c for c in step.calls[index + 1:] if c.id not in answered]
         # Written once the step is rebuilt, so the log never holds an answer the
@@ -782,7 +809,8 @@ class Session:
         call.ran = True
         call.started_at = time.monotonic()
         try:
-            return tools.run(call.name, call.args, self.call_context(call))
+            return tools.run(call.name, call.args, self.call_context(call),
+                             expected_entry=call.tool_entry)
         except KeyboardInterrupt as error:
             self.interrupted_call(call, error)
             raise

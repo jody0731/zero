@@ -80,7 +80,9 @@ The unpacked folder can go once it has installed.
 <summary><b>What it needs</b></summary>
 
 - Linux on x86-64 with glibc 2.28 or newer (Debian 10, Ubuntu 20.04, RHEL 8 and later); the installer needs `curl` or `wget`, `tar` and `sha256sum`
-- [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`): ZERO's sandbox for the commands it runs
+- [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) and the system
+  `libseccomp.so.2`: ZERO's sandbox and its filter for read-only commands.
+  `zero doctor` checks both; a missing filter cannot run an unreviewed command.
 - a model: an API key for a server ZERO knows (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter), or a server of your own that speaks OpenAI's Chat Completions API, such as Ollama or llama-server
 
 </details>
@@ -256,7 +258,44 @@ ZERO writes skills of its own too, from its work, when you ask or when it judges
 
 ### MCP servers
 
-ZERO uses the tools of [MCP](https://modelcontextprotocol.io) servers: a command it starts (stdio) or a url (Streamable HTTP). List one with `zero mcp add NAME -- COMMAND ARGS`, or `zero mcp add NAME --url URL`, or copy an entry you already have with `zero mcp add NAME --from claude` (or `--from codex`); `--tools a,b` offers only those tools. `zero mcp list` shows each server and its state, `zero mcp get NAME` its tools and its last words on stderr, `zero mcp remove NAME` takes it off. ZERO starts the servers in the background when its server starts and stops them when it stops; their tools reach a session as `mcp__NAME__TOOL`, marked as the server's own words. A server's tools are sent with each request while they fit 5% of the session's context, servers in the list's order; a server that doesn't fit is listed by name, and ZERO finds its tools with `tool_search` and calls one by name with `call_tool`, a call that asks as the tool itself would. A server runs outside the sandbox, so each call asks as a command that leaves it does: you answer in `default` (Yes, this session covers that tool), the judge in `auto` and `auto+`, nobody in `readOnly`. A command gets only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER` and the entry's own `env`.
+ZERO uses the tools of [MCP](https://modelcontextprotocol.io) servers: a command
+it starts (stdio) or a URL (Streamable HTTP). List one with
+`zero mcp add NAME -- COMMAND ARGS`, `zero mcp add NAME --url URL`, or copy an
+entry with `zero mcp add NAME --from claude` (or `--from codex`). `--tools a,b`
+offers only those tools. `zero mcp list` shows each server and its state;
+`zero mcp get NAME` shows its tools and last words on stderr;
+`zero mcp get NAME --json` also reports whether it is sandboxed;
+`zero mcp remove NAME` takes it off.
+
+Local servers start in a read-only sandbox by default: no writable files,
+scratch, network or socket connections. Their tools need no permission review;
+a server's own read-only hint never decides this. A server needing writes or
+connections must be added with `--outside-sandbox` (or `outside_sandbox = true`
+in its entry). HTTP servers are outside the sandbox. Their calls ask in
+`default`, go to the judge in `auto` and `auto+`, and are refused in `readOnly`.
+"Don't ask again" covers every tool of that named server, for this session or
+saved for later sessions. Older permissions for individual tools stay narrow.
+Existing entries without the new field become sandboxed; their files are not
+rewritten. A server that cannot start inside stays failed until reconfigured.
+
+ZERO starts listed servers when its own server starts and stops them with it.
+One process is shared across sessions. Its tools are `mcp__NAME__TOOL`, marked
+as the server's own words. Each server's tools are sent whole while they fit
+5% of the context; otherwise ZERO finds them with `tool_search` and calls them
+with `call_tool`, under the same permissions. Commands inherit only `HOME`,
+`LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`, the entry's `env` and sandbox scratch.
+
+### Read-only commands in auto+
+
+A bash call marked `no_changes=true` runs without judge review in a read-only
+sandbox, with no writable scratch, network or socket connections. If a
+foreground command fails, it is retried once without the mark through the
+ordinary judge and permission checks. The failed attempt stays in the log.
+A background job stays confined; a timeout or stop never triggers that retry.
+An unavailable sandbox fails closed. Unmarked calls keep their normal mode's
+behavior. ZERO chooses the mark; it can still send an unmarked read for review.
+Reading the internet uses `web_fetch` or `web_search`, without review; local
+network access keeps its existing permission checks.
 
 ## For other agents
 

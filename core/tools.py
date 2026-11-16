@@ -26,11 +26,15 @@ class Grant:
     """What "don't ask again" grants for a tool's calls. `field`: the list a
     grant keeps its items under (the user's saved file names it too);
     `of(args)`: a call's items, or None for a call no grant may cover;
-    `words(grant)`: a grant in a few words, for the ask and the remark."""
+    `words(grant)`: a grant in a few words, for the ask and the remark.
+    `across_tools`: items cover other tools declaring this same field.
+    `previous`: an older declaration still read, without widening its scope."""
 
     field: str
     of: object
     words: object
+    across_tools: bool = False
+    previous: object = None
 
 
 class Result(str):
@@ -41,11 +45,15 @@ class Result(str):
     declares them (its `fields`), which others read in place of its words;
     `failed`: the call didn't do what it was asked (MCP's isError)."""
 
-    def __new__(cls, output, head="", fields=None, failed=False):
+    def __new__(cls, output, head="", fields=None, failed=False,
+                retry_arguments=None):
         answer = super().__new__(cls, head + output)
         answer.output, answer.head = output, head
         answer.fields = dict(fields or {})
         answer.failed = failed
+        # A tool's one requested retry passes through all checks and approval.
+        # This is harness data, never part of a found tool's returned fields.
+        answer.retry_arguments = retry_arguments
         return answer
 
     @property
@@ -225,7 +233,8 @@ def add(*declared):
 
 def found_tool(name, description, parameters, run, *, ready, reachable=None,
                source=None, name_at_source=None, summary=None, crossing=None,
-               grant=None, extra_arguments=True, output_schema=None):
+               grant=None, extra_arguments=True, output_schema=None,
+               needs_permission=None):
     """A tool found at run time, as `add_found` takes it: told to the model
     as `name`, `description` and `parameters` (a JSON schema of an object,
     the arguments), run as `run(args, context)`, which gives its Result.
@@ -235,8 +244,9 @@ def found_tool(name, description, parameters, run, *, ready, reachable=None,
     search finds it, `deferred`); None: only where it is sent. `source`:
     whose it is, in a few words ("the MCP server rea"), and
     `name_at_source`, its name there, which a search's listing groups and
-    names it by. Every call needs permission: what a found tool says of
-    itself isn't trusted. `extra_arguments`: whether arguments its schema
+    names it by. Every call needs permission unless the owning component's
+    `needs_permission` says otherwise from enforced confinement; a tool's own
+    hint isn't trusted. `extra_arguments`: whether arguments its schema
     doesn't list go through (its schema says so), for its own side to judge.
     The rest as `tool` declares them."""
     return {
@@ -258,7 +268,7 @@ def found_tool(name, description, parameters, run, *, ready, reachable=None,
         "summary": summary,
         "summary_cuts": False,
         "ready": ready,
-        "needs_permission": None,
+        "needs_permission": needs_permission,
         "validate": None,
         # What it does is its own side's, so its answer may change on its
         # own: the same call made again runs again
@@ -517,8 +527,11 @@ def grant_fields():
     """The lists a grant may keep, as the tools declare them."""
     fields = []
     for _, t in entries():
-        if t["grant"] is not None and t["grant"].field not in fields:
-            fields.append(t["grant"].field)
+        grant = t["grant"]
+        while grant is not None:
+            if grant.field not in fields:
+                fields.append(grant.field)
+            grant = grant.previous
     return fields
 
 
@@ -609,7 +622,7 @@ def kind_of(schema):
     return kind or "any"
 
 
-def run(name, args, context=None):
+def run(name, args, context=None, expected_entry=None):
     """Run a checked call: its Result. A tool that answers with text alone
     gives a Result of that text; one that fails, its error as a failed
     Result's text; fields its tool didn't declare are an error in it.
@@ -622,6 +635,11 @@ def run(name, args, context=None):
     its fields are its own side's (an MCP tool's structured content).
     """
     entry = entry_of(name)
+    if entry is None or (expected_entry is not None
+                         and entry is not expected_entry):
+        return Result("The tool changed while this call was checked; "
+                      "nothing ran. A new call uses its current definition.",
+                      failed=True)
     fn = entry["fn"]
     try:
         if entry["found"]:

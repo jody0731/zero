@@ -46,7 +46,7 @@ def check_sandbox():
     sentence, with the known cause where there is one."""
     workspace = Path(tempfile.mkdtemp(prefix="zero-check-"))
     try:
-        box = Sandbox(workspace)
+        box = Sandbox(workspace, no_changes=True)
         try:
             argv = box.command(["true"])
         except SandboxError as error:

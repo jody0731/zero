@@ -29,8 +29,8 @@ MODES = {
     "auto": Mode("workspace", True, "judge",
                  "the workspace writable in the sandbox; a judge answers asks"),
     "auto+": Mode(None, False, "every call",
-                  "no sandbox; the judge reviews every call that needs "
-                  "permission"),
+                  "no sandbox except marked reads; the judge reviews calls "
+                  "needing permission"),
     "bypassPermissions": Mode(None, False, None, "no sandbox; nothing asked"),
 }
 # Who answers a mode's asks, as the session's environment says it

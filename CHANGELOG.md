@@ -3,6 +3,12 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.6.2.9
+
+- Advanced settings have labeled subsections, including Judge, Limits and Server.
+  Model and Thinking effort under Judge clearly belong to the judge. Edits still
+  stay across tabs and apply when leaving settings.
+
 ## 0.7.6.2.8
 
 - Updating replaces a running HTTP door even when its systemd unit files have

@@ -1951,9 +1951,21 @@
         el("p", "sub", "For new sessions. Applied when you leave settings."));
     }
     if (view === "Models") return modelServers(body);
+    const groups = new Map();
     for (const setting of state.settings.filter((each) => each.shown
       && (view === "General" ? each.group === "Default"
         : each.group !== "Default"))) {
+      let container = body;
+      if (view === "Advanced") {
+        container = groups.get(setting.group);
+        if (!container) {
+          container = el("section", "settings-group");
+          container.setAttribute("aria-label", setting.group);
+          container.append(el("h3", "settings-section-title", setting.group));
+          groups.set(setting.group, container);
+          body.append(container);
+        }
+      }
       const form = el("div", "setting-row");
       const label = el("label", null, setting.label);
       const value = state.settingsDraft.has(setting.name)
@@ -1970,7 +1982,7 @@
         state.settingsErrors.delete(setting.name);
         status.hidden = true;
       });
-      body.append(form);
+      container.append(form);
     }
   }
 

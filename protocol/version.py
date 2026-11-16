@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LEFT_OUT = ("dev", "DESIGN.md", "CHANGES.md")
 # What ships, by suffix or by name
 SUFFIXES = (".py", ".toml", ".md", ".txt", ".sh", ".json", ".svg", ".html",
-            ".css", ".js")
+            ".css", ".js", ".png")
 NAMES = (".gitignore", "LICENSE")
 # Folders that are never ZERO's code: an installed copy's venv, git's own,
 # Python's caches

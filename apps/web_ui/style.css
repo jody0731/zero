@@ -552,6 +552,8 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
 .process > .notice .who b { font-size: 12px; font-weight: 500; }
 .process > .notice .bubble { padding: 0; background: none; font-size: 12px;
   color: var(--text-2); }
+#settings-body > .settings-group { border: 0; padding: 0; }
+.settings-group + .settings-group { margin-top: 24px; }
 .settings-section-title { font-size: 15px; margin: 24px 0 12px; }
 .settings-section-title:first-child { margin-top: 16px; }
 .folder-navigation { margin: 0 0 12px; justify-content: space-between; }

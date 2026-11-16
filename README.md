@@ -210,7 +210,8 @@ loaded conversation text; ZERO can retrieve context from other sessions itself.
 
 Type `/` for commands; `/quit` belongs to the terminal, so close the browser tab to
 leave the web app. Settings groups Appearance and Defaults under General, with separate Models
-and Advanced tabs. Edits stay while switching tabs and apply on
+and Advanced tabs. Advanced uses labeled Judge, Limits and Server subsections;
+Model under Judge selects the judge's model. Edits stay while switching tabs and apply on
 **Back** or Escape; rejected values keep the view open with an inline error.
 Reading settings or model capabilities makes no
 paid model call. **Test and connect** explicitly tests a model server with a small

@@ -71,6 +71,9 @@ def describe(limits, context=None):
         "moves to the background as a job, where the session has jobs, or is "
         "killed. With no_changes=true, the command runs without review in a "
         "read-only sandbox: nothing writable and no network or connections. "
+        "Commands that only inspect local files, such as listing files, "
+        "counting lines, and calculating hashes, can run with no_changes=true "
+        "without permission review. "
         "In auto+, a failed foreground call retries unmarked through the judge."
     )
 

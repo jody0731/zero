@@ -3,6 +3,12 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.1.1
+
+- Bash's description explicitly connects local inspection, such as listing
+  files, counting lines and calculating hashes, with `no_changes=true`.
+  Permission and sandbox behavior are unchanged.
+
 ## 0.7.7.1
 
 - In auto+, bash calls marked `no_changes` run without review in a read-only

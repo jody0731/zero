@@ -445,3 +445,9 @@ Add your own meanings under `# Keywords` in ZERO.md. A meaning there replaces
 ZERO's shipped meaning of the same word. The judge reads them too. Updates
 replace the shipped definitions and leave your ZERO.md untouched; the section
 is included at the top of new ZERO.md templates.
+
+
+Private information requests explain what each masked field needs and where
+to find it. Save with Continue to resume the task. From the command line,
+`zero private-input SESSION` opens the same guided request; `--cancel` declines.
+The existing `zero vault answer SESSION` command still works.

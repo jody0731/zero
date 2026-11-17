@@ -120,6 +120,7 @@ MessageBox:focus, Input:focus { border: round $border; }
 PromptView, ChoiceView { align: center middle; background: $background 60%; }
 PromptView Vertical, ChoiceView Vertical { width: 70%; height: auto;
     border: round $primary; padding: 1 2; background: $panel; }
+PromptView #prompt-instructions { height: auto; max-height: 50vh; }
 ChoiceView OptionList { height: auto; max-height: 12; margin: 1 0 0 0; }
 KeyCaptureView { align: center middle; background: $background 60%; }
 KeyCaptureView Static { width: 60%; height: auto; border: round $text-warning;
@@ -579,8 +580,12 @@ class ZeroApp(SafeClicks, App):
                     values[part] = value
                     next_part()
 
-            self.push_screen(PromptView(
-                f"Vault: {part} (private)", secret=True), supplied)
+            title = ask.get("about") or "Private information"
+            instructions = ask.get("why", "") if ask.get("about") else ""
+            field = (ask.get("choice_labels") or {}).get(part, part)
+            text = "\n\n".join(filter(None, (title, instructions, field,
+                "Stored encrypted on this device; kept outside the conversation.")))
+            self.push_screen(PromptView(text, secret=True), supplied)
 
         next_part()
 
@@ -1160,7 +1165,8 @@ class ZeroApp(SafeClicks, App):
     def ask_text(self):
         ask = self.client.ask or {}
         if ask.get("kind") == "secret":
-            return Content("Private vault input: press Enter for masked fields. "
+            title = ask.get("about") or "Private information needed"
+            return Content(title + ": press Enter for masked fields. "
                            "Escape in a field cancels. Values stay out of chat.")
         # The command, the agent's reason, what the ask is about, then the one
         # permission question, where applicable

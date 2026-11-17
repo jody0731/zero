@@ -3,6 +3,19 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.2
+
+- Routine conversation and private-input forms focus on the task; built-in
+  tool names belong in explanations requested by the user.
+- Private requests include a task title, a reason and guidance beside every
+  masked field: where to find the value and exactly what to copy. These
+  instructions survive closing the app and restarting ZERO.
+- Browser and terminal forms use task wording and Continue. Terminal guidance
+  scrolls while the masked field stays available. `zero private-input SESSION`
+  opens guided CLI input; `zero vault answer` remains available.
+- Credentials remain encrypted and outside the conversation. Existing pending
+  private requests remain answerable; storage and protocol formats are unchanged.
+
 ## 0.7.7.4.1
 
 - Vault instructions now explain that ZERO opens the masked form by calling

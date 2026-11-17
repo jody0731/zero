@@ -223,8 +223,10 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 .ask .choices { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
 .ask .words { display: flex; gap: 6px; }
 .ask .vault-fields { display: grid; grid-template-columns: minmax(0, 1fr); }
+.ask:has(.vault-fields) { max-height: 65vh; overflow-y: auto; }
 .vault-fields label { display: grid; gap: 4px; }
 .vault-fields input { width: 100%; min-width: 0; }
+.private-instructions { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ask .words input { flex: 1; padding: 5px 8px; border: 0;
   border-bottom: 2px solid var(--invert-ink); background: transparent;
   color: inherit; outline: none; }

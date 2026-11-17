@@ -21,5 +21,9 @@ class VaultInput(Hook):
         call.notes["private_input"] = {
             "action": call.args["action"], "labels": labels,
         }
-        return Question("Enter the vault values in the masked fields.",
-                        {part: part for part in labels["parts"]}, kind="secret")
+        form = call.args["input_form"]
+        fields = {field["part"]: field["label"] + "\n" + field["instructions"]
+                  for field in form["fields"]}
+        question = Question(form["instructions"], fields, kind="secret")
+        question.about = form["title"]
+        return question

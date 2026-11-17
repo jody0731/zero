@@ -21,6 +21,25 @@ def problems(args):
             check_labels(args.get("labels"))
         except VaultError as error:
             return str(error)
+        form = args.get("input_form")
+        if not isinstance(form, dict):
+            return "add/update needs input_form with title, instructions and fields"
+        for name in ("title", "instructions"):
+            if not isinstance(form.get(name), str) or not form[name].strip():
+                return f"input_form needs nonempty {name}"
+        fields = form.get("fields")
+        if not isinstance(fields, list):
+            return "input_form fields must describe each required part"
+        parts = []
+        for field in fields:
+            if not isinstance(field, dict) or any(
+                not isinstance(field.get(name), str) or not field[name].strip()
+                for name in ("part", "label", "instructions")
+            ):
+                return "each input_form field needs part, label and instructions"
+            parts.append(field["part"])
+        if sorted(parts) != sorted(args["labels"]["parts"]):
+            return "input_form fields must describe every part exactly once"
 
 
 def describe(limits, context=None):
@@ -29,12 +48,23 @@ def describe(limits, context=None):
     return (
         f"Encrypted vault: {count} entries. Passwords, API keys and session "
         "cookies can authenticate tools as the user's account without exposing "
-        "their values to you. Find returns matching labels and part names. "
+        "their values to you. Find returns matching labels and part names; "
+        "a saved match is usable without another input form. Added entries "
+        "remain available for later tasks until deleted. "
         "Calling add or update with labels opens the user's masked input form "
         "and pauses this turn. You fill the labels; the user enters only the "
         "values in that form, outside the conversation. Every listed part "
         "requires a nonempty value before saving. Saving resumes your "
         "turn, so you can use the entry for the task. "
+        "For add/update, input_form supplies the task-specific title, why "
+        "the information is needed, and each field's readable label and "
+        "instructions for finding and copying the exact value. These appear "
+        "beside masked fields and address a user who does not know your tools. "
+        "The app already explains private encrypted storage. "
+        "The user needs the value's location and format, "
+        "not knowledge of this tool or of HTTP header construction. "
+        "An authorization failure alone does not identify the credential "
+        "type or cookie name. "
         "Delete removes the named entry. "
         "In any tool argument, ⟦vault:name/part⟧ is replaced with that value "
         "immediately before execution; ⟦vault:name⟧ works for a one-part entry. "
@@ -63,9 +93,36 @@ LABELS = {
     },
 }
 
+INPUT_FORM = {
+    "type": "object", "additionalProperties": False,
+    "required": ["title", "instructions", "fields"],
+    "properties": {
+        "title": {"type": "string", "description": "The user's task"},
+        "instructions": {"type": "string", "description":
+                         "Why the task needs this information; the app "
+                         "separately explains storage and privacy"},
+        "fields": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["part", "label", "instructions"],
+            "properties": {
+                "part": {"type": "string", "description":
+                         "One of labels.parts, each included exactly once"},
+                "label": {"type": "string", "description":
+                          "Readable name of the value the user enters"},
+                "instructions": {"type": "string", "description":
+                                 "Where to find this value and exactly what "
+                                 "to copy, suited to the user's application. "
+                                 "The complete value includes any punctuation; "
+                                 "entry-name restrictions do not apply to it."},
+            },
+        }},
+    },
+}
+
 
 @tool(
-    describe, optional=("query", "name", "labels"), validate=problems,
+    describe, optional=("query", "name", "labels", "input_form"),
+    validate=problems,
     ready=lambda context: context.get("vault") is not None,
     needs_permission=lambda args: args.get("action") == "delete",
     crossing=lambda args: ({"rule": "vault_deletion",
@@ -75,9 +132,10 @@ LABELS = {
     query=("string", "For find: site or words describing the credential"),
     name=("string", "For delete: the exact entry name"),
     labels=(LABELS, "For add or update: metadata and part names, without values"),
+    input_form=(INPUT_FORM, "Required for add/update: the user's input form"),
 )
-def vault(action, query="", name="", labels=None, vault=None, vault_find=None,
-          notes=None):
+def vault(action, query="", name="", labels=None, input_form=None, vault=None,
+          vault_find=None, notes=None):
     if action == "find":
         return json.dumps(vault_find(query, notes), ensure_ascii=False)
     if action == "delete":

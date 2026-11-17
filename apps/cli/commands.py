@@ -57,7 +57,8 @@ from client.result import Result, still_running_line
 
 NAME = "ZERO"
 # The families main.py hands here; `server` is main.py's own
-FAMILIES = ("session", "job", "rounds", "grant", "model", "setting", "mcp", "vault")
+FAMILIES = ("session", "job", "rounds", "grant", "model", "setting", "mcp", "vault",
+            "private-input")
 # The messages with no command, and why: what only a screen needs
 NO_COMMAND = {
     "workspace/list": "folders for a screen's workspace picker",
@@ -407,6 +408,13 @@ def parser(prog="zero"):
     json_flag(answer)
     answer.set_defaults(handler=vault_answer_command)
 
+    private_input = families.add_parser(
+        "private-input", help="enter requested private information")
+    session_arg(private_input)
+    private_input.add_argument("--cancel", action="store_true")
+    json_flag(private_input)
+    private_input.set_defaults(handler=vault_answer_command)
+
     session = families.add_parser("session", help="sessions")
     actions = session.add_subparsers(dest="action", required=True)
     send = actions.add_parser("send", help="a message to a session or a new one")
@@ -709,19 +717,26 @@ def vault_answer_command(connection, args, out):
     row = match_session(connection.sessions(), args.id)
     ask = row.get("ask")
     if not ask or ask.get("kind") != "secret":
-        raise ValueError("No private vault input waits in this session.")
+        raise ValueError("No private input waits in this session.")
     payload = {"message": "vault/answer", "session": row["id"],
                "ask": ask["id"]}
     if args.cancel:
         payload["cancel"] = True
     else:
         values = {}
+        explain = sys.stderr.write if args.json else out
+        explain((ask.get("about") or "Private information") + "\n")
+        if ask.get("about") and ask.get("why"):
+            explain(ask["why"] + "\n")
+        explain("Stored encrypted on this device; kept outside the conversation.\n")
         # getpass's fallback echoes input. Refuse it before reading a value.
         with warnings.catch_warnings():
             warnings.simplefilter("error", getpass.GetPassWarning)
             try:
                 for part in ask["choices"]:
-                    values[part] = getpass.getpass(f"{part}: ")
+                    label = (ask.get("choice_labels") or {}).get(part, part)
+                    explain(label + "\n")
+                    values[part] = getpass.getpass("Value: ")
             except getpass.GetPassWarning:
                 raise ValueError("A terminal with masked input is required.") from None
         payload["values"] = values

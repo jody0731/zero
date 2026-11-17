@@ -130,7 +130,8 @@ def ask_line(ask):
     """An ask on one line, for plain output: its command and the reason the
     user reads (its record's or its row's `reason`)."""
     if ask.get("kind") == "secret":
-        return "Private vault input: use the masked form or zero vault answer."
+        title = ask.get("about") or "Private information needed"
+        return title + ": use the masked form or zero private-input SESSION."
     if ask.get("kind") == "question":
         return f"Question: {ask['command']} (waiting for an answer)"
     reason = ask.get("reason") or ""

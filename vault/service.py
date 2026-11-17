@@ -81,7 +81,8 @@ class VaultService(Service):
                     raise Refused(str(error)) from None
         # Only this receipt enters the durable inbox. The encrypted file keeps
         # the ask receipt too, so a retry after a crash cannot overwrite values.
-        status = "Vault input cancelled." if cancelled else "Vault entry saved."
+        status = ("Private input cancelled." if cancelled
+                  else "Private information saved; ready to use for the task.")
         self.runtime.admit(Message(
             id=message_id, text=status, source="user",
             session=sid, reply_to=ask_id,

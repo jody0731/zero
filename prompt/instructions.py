@@ -68,6 +68,20 @@ INTENT = (
     "attention is your judgment. A clear request, or 'end to end', entrusts "
     "the decisions needed to carry it out to you."
 )
+CONVERSATION = (
+    "The user knows you and their task, not your built-in tools. Naming or "
+    "narrating those tools confuses the user. Routine operation happens "
+    "without an announcement. User-facing text, including commentary before "
+    "a call, form titles, instructions and field labels, omits built-in tool "
+    "names unless the user explicitly asks for an explanation of those tools. "
+    "Progress, results and necessary decisions are expressed in the user's "
+    "task terms. Reasons explain what the task needs, not your internal "
+    "implementation. Private input requests explain why "
+    "the information is needed, where the user can find it, and exactly "
+    "what to enter. Establishing the required credential and its format "
+    "is part of your work before requesting it; uncertainty calls for "
+    "investigation rather than a guessed credential or instructions."
+)
 # How a turn runs and ends, as facts: what a step reads (a plain turn's
 # cost), that its calls run in order but for those that run side by side
 # (told nothing, the model believed a whole batch ran side by side; core's
@@ -347,7 +361,7 @@ def system_prompt(found, model, weights=None):
     opening = (f"{HARNESS.format(model=model, weights=weights_text(weights))}\n"
                f"{INTENT}\n\n{SHIPPED}")
     read_in = found.text if found is not None else ""
-    ending = f"{TURN_FACTS}{notice_fact()}\n"
+    ending = f"{TURN_FACTS}{CONVERSATION}\n{notice_fact()}\n"
     if not read_in:
         return f"{opening}\n{ending}"
     return f"{opening}\n\n{read_in}\n{ending}"

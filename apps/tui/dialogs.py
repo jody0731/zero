@@ -42,7 +42,8 @@ class PromptView(ModalScreen):
 
     def compose(self):
         with Vertical():
-            yield Plain(self.label)
+            with VerticalScroll(id="prompt-instructions"):
+                yield Plain(self.label)
             yield Input(value=self.text, id="answer", password=self.secret)
 
     def on_mount(self):

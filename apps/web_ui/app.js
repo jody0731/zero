@@ -702,12 +702,16 @@
     const fold = state.calls.get(record.call);
     if (fold) {
       fold.querySelector("summary").append(el("span", "tag asked",
-        record.kind === "question" ? "question" : "permission"));
+        record.kind === "secret" ? "private input"
+          : record.kind === "question" ? "question" : "permission"));
       return null;
     }
     const node = el("div", "notice");
-    const label = record.kind === "secret" ? "Private vault input"
-      : record.kind === "question" ? "Question" : "Permission";
+    if (record.kind === "secret") {
+      node.textContent = record.about || "Private information needed";
+      return node;
+    }
+    const label = record.kind === "question" ? "Question" : "Permission";
     node.textContent = `${label} · ${record.command || record.tool || ""}`;
     return node;
   }
@@ -910,23 +914,27 @@
   }
 
   function drawVaultInput(box, ask) {
-    box.append(el("h2", null, "Private vault input"));
+    box.append(el("h2", null, ask.about || "Private information"));
+    if (ask.about && ask.why) {
+      box.append(el("p", "private-instructions", ask.why));
+    }
     box.append(el("p", null,
-      "Values go directly into the encrypted vault, outside the conversation."));
+      "Stored encrypted on this device; kept outside the conversation."));
     const form = el("form", "words vault-fields");
     const fields = new Map();
     for (const part of ask.choices || []) {
-      const label = el("label", null, (ask.choice_labels || {})[part] || part);
+      const words = (ask.choice_labels || {})[part] || part;
+      const label = el("label", "private-instructions", words);
       const input = el("input");
       input.type = "password";
       input.autocomplete = "new-password";
       input.required = true;
-      input.setAttribute("aria-label", part);
+      input.setAttribute("aria-label", words.split("\n")[0]);
       label.append(input);
       form.append(label);
       fields.set(part, input);
     }
-    const save = el("button", "primary", "Save to vault");
+    const save = el("button", "primary", "Continue");
     save.type = "submit";
     const cancel = el("button", null, "Cancel");
     cancel.type = "button";

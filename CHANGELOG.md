@@ -3,6 +3,18 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.1
+
+- Vault instructions now explain that ZERO opens the masked form by calling
+  add/update, and resumes with a usable credential after you save. Session
+  cookies and HTTP authentication are explicitly covered. Field labels state
+  the existing naming rules and that every requested secret field is required.
+- Background-job instructions now include managing their lifetime: stopping
+  work that is finished, obsolete or replaced, while useful jobs continue
+  across turns. Ending a turn or changing the task does not stop them.
+- These changes clarify model decisions; permission modes, vault storage and
+  process-control behavior are unchanged.
+
 ## 0.7.7.4
 
 - An encrypted vault stores logins, keys, cards, identities and private notes.

@@ -37,7 +37,9 @@ def minutes(seconds):
 # until the notice came. Both halves, in the words a subagent's start uses
 ENDS = (
     "A notice comes when it ends: while a turn is running, at its next step; "
-    "once the turn has ended, the notice starts a new one."
+    "once the turn has ended, the notice starts a new one. "
+    "Ending a turn or changing the task leaves this job running; its lifetime "
+    "remains yours to manage."
 )
 
 
@@ -134,14 +136,18 @@ def job_summary(args):
 # job_starter)
 MEANS = (
     "a background job{started}: a command that takes long. It runs with no "
-    "call to your model while you go on."
+    "call to your model while you go on. You manage its lifetime as the task "
+    "changes, including stopping work that is no longer useful."
 )
 MEANS_STARTED = " ({tool}'s `{argument}`)"
 DESCRIPTION = (
     "Background jobs{started}, or moved there after its timeout. With no id: "
     "list this session's jobs. With an id: its state and its output since you "
-    "last looked. `stop`: stop it. `expect_minutes`: a new estimate of how long "
-    "it still needs, from now."
+    "last looked. `stop`: stop it. Managing these jobs includes stopping work "
+    "whose purpose is finished, obsolete or replaced; still-useful work can "
+    "continue across turns. A changed plan or finished answer does not stop "
+    "a running job. `expect_minutes`: a new estimate of how long it still "
+    "needs, from now."
 )
 STARTED = " started with {tool}'s `{argument}`"
 

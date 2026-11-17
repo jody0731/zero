@@ -317,6 +317,10 @@ Ask ZERO to save a credential, giving its site and username. ZERO fills the
 labels and asks for values in masked fields. Enter the password there, outside
 chat. You can ask ZERO to find, update or delete a saved entry.
 
+ZERO opens the masked form through its vault add/update call; saving resumes
+the task with the entry ready to use. Passwords, keys and session cookies
+use this same path. Every requested secret field needs a value.
+
 ZERO uses `⟦vault:name/part⟧` in tool arguments. The harness substitutes the
 value just before execution and redacts known values from returned text and
 saved output. A one-part entry also accepts `⟦vault:name⟧`. Redaction covers

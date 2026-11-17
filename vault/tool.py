@@ -27,12 +27,19 @@ def describe(limits, context=None):
     service = (context or {}).get("vault")
     count = len(service.labels()) if service is not None else 0
     return (
-        f"Encrypted vault: {count} entries. Find credentials by site or words; "
-        "matching returns labels and part names, without values. Add and update "
-        "take labels; the user supplies each value in a separate masked form, "
-        "outside the conversation. Delete removes the named entry. "
+        f"Encrypted vault: {count} entries. Passwords, API keys and session "
+        "cookies can authenticate tools as the user's account without exposing "
+        "their values to you. Find returns matching labels and part names. "
+        "Calling add or update with labels opens the user's masked input form "
+        "and pauses this turn. You fill the labels; the user enters only the "
+        "values in that form, outside the conversation. Every listed part "
+        "requires a nonempty value before saving. Saving resumes your "
+        "turn, so you can use the entry for the task. "
+        "Delete removes the named entry. "
         "In any tool argument, ⟦vault:name/part⟧ is replaced with that value "
         "immediately before execution; ⟦vault:name⟧ works for a one-part entry. "
+        "A shell HTTP client's cookie or authorization header can contain a "
+        "stand-in. "
         "Returned values appear as stand-ins in results and logs."
     )
 
@@ -41,13 +48,18 @@ LABELS = {
     "type": "object", "additionalProperties": False,
     "required": ["name", "kind", "description", "sites", "username", "parts"],
     "properties": {
-        "name": {"type": "string"},
+        "name": {"type": "string", "description":
+                 "1-80 letters, digits, dots, dashes or underscores; "
+                 "starts with a letter or digit"},
         "kind": {"type": "string", "enum":
                  ["login", "key", "card", "identity", "note"]},
         "description": {"type": "string"},
         "sites": {"type": "array", "items": {"type": "string"}},
-        "username": {"type": "string"},
-        "parts": {"type": "array", "items": {"type": "string"}},
+        "username": {"type": "string", "description":
+                     "Account username, or empty when unknown or not needed"},
+        "parts": {"type": "array", "items": {"type": "string"},
+                  "description": "Required secret fields, each named with the "
+                                 "same characters and length as an entry name"},
     },
 }
 

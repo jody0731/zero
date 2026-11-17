@@ -584,7 +584,8 @@ class ZeroApp(SafeClicks, App):
             instructions = ask.get("why", "") if ask.get("about") else ""
             field = (ask.get("choice_labels") or {}).get(part, part)
             text = "\n\n".join(filter(None, (title, instructions, field,
-                "Stored encrypted on this device; kept outside the conversation.")))
+                "Saved encrypted on this device until you delete it. "
+                "The value stays outside the conversation.")))
             self.push_screen(PromptView(text, secret=True), supplied)
 
         next_part()

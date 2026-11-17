@@ -728,7 +728,8 @@ def vault_answer_command(connection, args, out):
         explain((ask.get("about") or "Private information") + "\n")
         if ask.get("about") and ask.get("why"):
             explain(ask["why"] + "\n")
-        explain("Stored encrypted on this device; kept outside the conversation.\n")
+        explain("Saved encrypted on this device until you delete it. "
+                "The value stays outside the conversation.\n")
         # getpass's fallback echoes input. Refuse it before reading a value.
         with warnings.catch_warnings():
             warnings.simplefilter("error", getpass.GetPassWarning)

@@ -3,6 +3,17 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.3
+
+- Action requests more clearly carry through authentication, private input and
+  the requested result. Earlier assistant hesitation does not change the task.
+- Private-input forms state that values are saved encrypted on this device
+  until you delete them and remain outside the conversation.
+- Known limitation: these wording changes improve sampled task completion but
+  do not reliably prevent incorrect guidance, unnecessary narration or
+  unsupported conclusions. This version is available for hands-on testing;
+  those behavior problems remain open.
+
 ## 0.7.7.4.2
 
 - Routine conversation and private-input forms focus on the task; built-in

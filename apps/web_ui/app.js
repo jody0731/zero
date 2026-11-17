@@ -919,7 +919,8 @@
       box.append(el("p", "private-instructions", ask.why));
     }
     box.append(el("p", null,
-      "Stored encrypted on this device; kept outside the conversation."));
+      "Saved encrypted on this device until you delete it. " +
+      "The value stays outside the conversation."));
     const form = el("form", "words vault-fields");
     const fields = new Map();
     for (const part of ask.choices || []) {

@@ -16,7 +16,8 @@ class OutputBuffer:
     """Keep a bounded head and tail, `limit` characters in all, and count the
     full decoded output."""
 
-    def __init__(self, limit):
+    def __init__(self, limit, transform=None):
+        self.transform = transform
         self.limit = limit
         self.head = ""
         self.tail = ""
@@ -28,6 +29,8 @@ class OutputBuffer:
         )
 
     def add(self, data, final=False):
+        if self.transform is not None:
+            data = self.transform(data, final=final)
         text = self.decoder.decode(data, final=final)
         self.characters += len(text)
         self.newlines += text.count("\n")

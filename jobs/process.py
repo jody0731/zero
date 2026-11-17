@@ -54,6 +54,7 @@ class OutputFiles:
     between is counted, never kept, so a runaway printer can't fill the disk."""
 
     def __init__(self, base, head=HEAD_BYTES, tail=TAIL_BYTES):
+        self.transform = None
         self.base = Path(base)
         self.head, self.tail = head, tail
         self.base.parent.mkdir(parents=True, exist_ok=True)
@@ -76,6 +77,8 @@ class OutputFiles:
 
     def add(self, data, final=False):
         """The pump's sink (read_output); `final` changes nothing."""
+        if self.transform is not None:
+            data = self.transform(data, final=final)
         if not data:
             return
         room = self.head - self.size

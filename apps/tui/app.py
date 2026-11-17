@@ -503,6 +503,10 @@ class ZeroApp(SafeClicks, App):
                 event.input.value = chosen
             self.submit(event.input)
         elif event.input.id == "reply":
+            if (self.client.ask or {}).get("kind") == "secret":
+                event.input.value = ""
+                self.vault_input()
+                return
             text = event.value
             event.input.value = ""
             if text.strip():
@@ -529,11 +533,56 @@ class ZeroApp(SafeClicks, App):
     def choose(self, index):
         """Send one of the box's choices: its label as the line, its id as
         the choice, so no consent check reads it."""
+        if (self.client.ask or {}).get("kind") == "secret":
+            self.vault_input()
+            return
         offered = controller.choices(self.client.ask or {})
         if not 0 <= index < len(offered):
             return
         choice, label = offered[index]
         self.send(label, reply=True, choice=choice)
+
+    def vault_input(self):
+        ask = dict(self.client.ask or {})
+        sid = self.client.session
+        parts = list(ask.get("choices", []))
+        values = {}
+
+        def submit(cancel=False):
+            payload = {"message": "vault/answer", "session": sid,
+                       "ask": ask["ask"]}
+            payload.update({"cancel": True} if cancel else {"values": values})
+
+            def work():
+                try:
+                    return self.connection.call(payload)
+                finally:
+                    values.clear()
+                    payload.pop("values", None)
+
+            self.request(work)
+
+        def next_part():
+            if not parts:
+                submit()
+                return
+            part = parts.pop(0)
+
+            def supplied(value):
+                if value is None:
+                    values.clear()
+                    submit(cancel=True)
+                elif not value:
+                    parts.insert(0, part)
+                    next_part()
+                else:
+                    values[part] = value
+                    next_part()
+
+            self.push_screen(PromptView(
+                f"Vault: {part} (private)", secret=True), supplied)
+
+        next_part()
 
     def action_follow_up(self):
         focused = self.focused
@@ -1081,6 +1130,13 @@ class ZeroApp(SafeClicks, App):
         view.query_one("#message", MessageBox).display = not showing
         if showing:
             view.offer([])
+            private = (self.client.ask or {}).get("kind") == "secret"
+            view.query_one("#reply", MessageBox).read_only = private
+            if private:
+                identifier = self.client.ask["ask"]
+                if getattr(self, "private_input_shown", None) != identifier:
+                    self.private_input_shown = identifier
+                    self.call_after_refresh(self.vault_input)
         if showing:
             box.query_one(".head", Static).update(self.ask_text())
         if showing != was:
@@ -1103,6 +1159,9 @@ class ZeroApp(SafeClicks, App):
 
     def ask_text(self):
         ask = self.client.ask or {}
+        if ask.get("kind") == "secret":
+            return Content("Private vault input: press Enter for masked fields. "
+                           "Escape in a field cancels. Values stay out of chat.")
         # The command, the agent's reason, what the ask is about, then the one
         # permission question, where applicable
         prefix = "Question: " if ask.get("kind") == "question" else "$ "

@@ -90,7 +90,7 @@ def record(record):
                 "notice_source": history.NOTICES[record["source"]]}
     if kind == "assistant" and (record.get("message") or {}).get("tool_calls"):
         return {**record, "call_summaries": call_summaries(record["message"])}
-    if kind == "ask" and record.get("kind") != "question":
+    if kind == "ask" and record.get("kind") not in ("question", "secret"):
         offer = (record.get("notes") or {}).get("offer_text")
         choices = record.get("choices") or asking.PLAIN_CHOICES
         return {**record, "choice_labels": asking.choice_labels(

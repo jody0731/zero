@@ -385,7 +385,13 @@ class Runtime(SessionActions):
         return Log(
             self.paths.sessions / f"{sid}.jsonl", lock=lock,
             on_append=lambda record: self.appended(sid, record),
+            transform=self.redact,
         )
+
+    def redact(self, value, partial=False):
+        for service in self.services.values():
+            value = service.redact(value, partial=partial)
+        return value
 
     def appended(self, sid, record):
         if record["type"] == "turn_end":
@@ -425,6 +431,7 @@ class Runtime(SessionActions):
             "reasoning": len(draft.reasoning),
             "calls": [call["name"] for _, call in sorted(draft.calls.items())],
         }}
+        event = self.redact(event, partial=True)
         self.state(sid).draft = event
         self.publish(sid, event)
 
@@ -458,6 +465,12 @@ class Runtime(SessionActions):
         its handled_as, what became of it. `extra`: payload fields."""
         if not self.accepting:
             raise Refused("the server is shutting down; send it again once it's back")
+        if message.reply_to is not None:
+            ask = self.store.open_ask(message.session)
+            if (ask and ask.get("kind") == "secret"
+                    and (extra or {}).get("reply_kind") != "secret"):
+                raise Refused("This input uses the vault's masked form.")
+        message.text = self.redact(message.text)
         if not message.text.strip():
             raise Refused("empty message")
         if message.when_busy not in WHEN_BUSY:

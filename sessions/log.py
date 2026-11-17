@@ -28,10 +28,11 @@ TAIL_BYTES = 64 * 1024
 
 
 class Log:
-    def __init__(self, path, lock=None, on_append=None):
+    def __init__(self, path, lock=None, on_append=None, transform=None):
         self.path = path
         self.lock = lock
         self.on_append = on_append
+        self.transform = transform
         # The newest whole record's seq, read on the first append: a fork's
         # log holds its parent's records with their numbers, so its seqs can
         # skip where the parent's branch did
@@ -129,6 +130,8 @@ class Log:
 
     def append(self, type, **fields):
         """Write one record to disk and return it."""
+        if self.transform is not None:
+            fields = self.transform(fields)
         self.check_lock()
         if self.last_seq is None:
             self.last_seq = self._repair()

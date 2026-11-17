@@ -626,6 +626,26 @@ def kind_of(schema):
 
 
 def run(name, args, context=None, expected_entry=None):
+    """Run checked arguments through the optional execution boundary."""
+    boundary = (context or {}).get("tool_boundary")
+    if boundary is None:
+        return run_checked(name, args, context, expected_entry)
+    try:
+        resolved = boundary.resolve(args)
+    except Exception:
+        return Result("The vault stand-in could not be resolved; nothing ran.",
+                      failed=True)
+    answer = run_checked(name, resolved, context, expected_entry)
+    notes = (context or {}).get("notes")
+    if notes is not None:
+        safe = boundary.redact(notes)
+        if safe is not notes:
+            notes.clear()
+            notes.update(safe)
+    return boundary.result(answer)
+
+
+def run_checked(name, args, context=None, expected_entry=None):
     """Run a checked call: its Result. A tool that answers with text alone
     gives a Result of that text; one that fails, its error as a failed
     Result's text; fields its tool didn't declare are an error in it.

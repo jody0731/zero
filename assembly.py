@@ -43,6 +43,9 @@ import files.tool
 import memory.tool
 import permissions.tool
 import questions.tool
+import vault.tool
+from vault.service import VaultService
+from vault.store import Vault
 from questions.hooks import Questions
 import web.tool
 import skills.tool
@@ -163,6 +166,7 @@ settings.add(
 tools.add(
     *jobs.tool.TOOLS, *shell.tool.TOOLS, *files.tool.TOOLS,
     *memory.tool.TOOLS, *permissions.tool.TOOLS, *questions.tool.TOOLS,
+    *vault.tool.TOOLS,
     *web.tool.TOOLS,
     *skills.tool.TOOLS, *context.tool.TOOLS, *rounds.tool.TOOLS,
     *subagents.tool.TOOLS, *wait.tool.TOOLS, *usage.tool.TOOLS,
@@ -722,7 +726,11 @@ def services(config, make_consent=None, saved_permissions=permissions_file,
         def make_consent(model):
             return Consent(Model(model, timeout=silence))
 
-    return [JobsService(tick=tick), PermissionsService(make_consent, saved_permissions),
+    vault = VaultService()
+    return [vault, JobsService(
+                tick=tick, redact=vault.redact,
+                output_filter=lambda: vault.boundary.stream().feed),
+            PermissionsService(make_consent, saved_permissions),
             ModelService(), ContextService(), RoundsService(),
             SubagentsService(), SessionSearchService(),
             McpServersService(mcp_servers, LiveSettings(config)),
@@ -762,6 +770,12 @@ def home_file_notes():
     can't use, a line each (`zero doctor`): config.toml's, models.toml's and
     keys.toml's, permissions.toml's, as each reader reports them."""
     notes = []
+    from paths import home
+
+    try:
+        notes.append(Vault(home()).status())
+    except Exception:
+        notes.append("Vault: unavailable; its existing file was left unchanged.")
     said = io.StringIO()
     with contextlib.redirect_stderr(said):
         try:

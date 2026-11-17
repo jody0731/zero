@@ -238,6 +238,9 @@ class Session:
 
     def write(self, type, **fields):
         """Append once, then project the record into the model's history."""
+        boundary = self.tool_context.get("tool_boundary")
+        if boundary is not None:
+            fields = boundary.redact(fields)
         self.log.path.parent.mkdir(parents=True, exist_ok=True)
         record = self.log.append(type, **fields)
         message = history.message(record)
@@ -554,8 +557,13 @@ class Session:
         # The stream's reader may still be sending these after a stop, while
         # the loop goes on writing
         messages = copy.deepcopy(self.messages)
+        schemas = self.tool_schemas()
+        boundary = self.tool_context.get("tool_boundary")
+        if boundary is not None:
+            messages = boundary.redact(messages)
+            schemas = boundary.redact(schemas)
         return self.model.call(
-            messages, self.tool_schemas(), check=check, on_delta=on_delta
+            messages, schemas, check=check, on_delta=on_delta
         )
 
     def run_call(self, call, approved=None):
@@ -696,7 +704,7 @@ class Session:
         if decision.about is not None:
             asked["about"] = decision.about
         if isinstance(decision, Question):
-            asked["kind"] = "question"
+            asked["kind"] = decision.kind
             asked["choice_labels"] = decision.labels
         reason = decision.reason or str(call.args.get("reason") or "").strip()
         record = self.write(
@@ -773,6 +781,13 @@ class Session:
         the reply joins the turn."""
         step, call, later, fields = turn.unpark
         turn.unpark = None
+        if "private_input" in call.notes:
+            def private_answered():
+                call.result = fields["text"]
+                call.ran = fields.get("choice") == "yes"
+                self.answer(call)
+
+            return self.run_calls(step, later, private_answered)
         if "question" in call.notes:
             def answered_question():
                 labels = call.notes["question"]["choice_labels"]

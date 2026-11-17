@@ -43,6 +43,10 @@ class Service:
         """The runtime it is service of, once its store is open."""
         self.runtime = runtime
 
+    def redact(self, value, partial=False):
+        """Transform data before it is persisted or returned to an app."""
+        return value
+
     def messages(self):
         """Its messages: name → handler(request), which returns the reply or
         raises the runtime's Refused."""

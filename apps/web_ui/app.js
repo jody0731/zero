@@ -706,7 +706,8 @@
       return null;
     }
     const node = el("div", "notice");
-    const label = record.kind === "question" ? "Question" : "Permission";
+    const label = record.kind === "secret" ? "Private vault input"
+      : record.kind === "question" ? "Question" : "Permission";
     node.textContent = `${label} · ${record.command || record.tool || ""}`;
     return node;
   }
@@ -867,6 +868,10 @@
     box.dataset.ask = ask.id;
     box.hidden = false;
     box.replaceChildren();
+    if (ask.kind === "secret") {
+      drawVaultInput(box, ask);
+      return;
+    }
     const head = el("h2", null,
       ask.kind === "question" ? "Question" : "Permission");
     if (ask.about) head.title = ask.about;
@@ -902,6 +907,55 @@
       }
     });
     box.append(words);
+  }
+
+  function drawVaultInput(box, ask) {
+    box.append(el("h2", null, "Private vault input"));
+    box.append(el("p", null,
+      "Values go directly into the encrypted vault, outside the conversation."));
+    const form = el("form", "words vault-fields");
+    const fields = new Map();
+    for (const part of ask.choices || []) {
+      const label = el("label", null, (ask.choice_labels || {})[part] || part);
+      const input = el("input");
+      input.type = "password";
+      input.autocomplete = "new-password";
+      input.required = true;
+      input.setAttribute("aria-label", part);
+      label.append(input);
+      form.append(label);
+      fields.set(part, input);
+    }
+    const save = el("button", "primary", "Save to vault");
+    save.type = "submit";
+    const cancel = el("button", null, "Cancel");
+    cancel.type = "button";
+    async function submit(cancelled) {
+      const values = {};
+      for (const [part, input] of fields) {
+        values[part] = input.value;
+        input.value = "";
+      }
+      save.disabled = cancel.disabled = true;
+      try {
+        await change("vault/answer", {
+          session: state.open, ask: ask.id,
+          ...(cancelled ? { cancel: true } : { values }),
+        });
+      } catch (error) {
+        box.append(el("div", "error", error.message));
+        save.disabled = cancel.disabled = false;
+      } finally {
+        for (const part of Object.keys(values)) delete values[part];
+      }
+    }
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submit(false);
+    });
+    cancel.addEventListener("click", () => submit(true));
+    form.append(save, cancel);
+    box.append(form);
   }
 
   async function answer(ask, given) {

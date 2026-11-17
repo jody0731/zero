@@ -406,6 +406,7 @@ class Server:
         sender's."""
         if self.reply_check is not None:
             self.reply_check(name, reply, kind)
+        reply = self.runtime.redact(reply)
         reply = older.reply_in(protocol, name, reply)
         conn.sendall((json.dumps(reply, ensure_ascii=False) + "\n").encode())
 

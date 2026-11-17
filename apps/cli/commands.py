@@ -57,7 +57,7 @@ from client.result import Result, still_running_line
 
 NAME = "ZERO"
 # The families main.py hands here; `server` is main.py's own
-FAMILIES = ("session", "job", "rounds", "grant", "model", "setting", "mcp")
+FAMILIES = ("session", "job", "rounds", "grant", "model", "setting", "mcp", "vault")
 # The messages with no command, and why: what only a screen needs
 NO_COMMAND = {
     "workspace/list": "folders for a screen's workspace picker",
@@ -396,6 +396,17 @@ def parser(prog="zero"):
     )
     families = top.add_subparsers(dest="family", required=True)
 
+    vault = families.add_parser("vault", help="private credential input")
+    actions = vault.add_subparsers(dest="action", required=True)
+    status = actions.add_parser("status", help="count and encryption key store")
+    json_flag(status)
+    status.set_defaults(handler=vault_status_command)
+    answer = actions.add_parser("answer", help="answer through masked prompts")
+    session_arg(answer)
+    answer.add_argument("--cancel", action="store_true")
+    json_flag(answer)
+    answer.set_defaults(handler=vault_answer_command)
+
     session = families.add_parser("session", help="sessions")
     actions = session.add_subparsers(dest="action", required=True)
     send = actions.add_parser("send", help="a message to a session or a new one")
@@ -684,6 +695,42 @@ def session_id(connection, prefix):
 
 def workspace_of(folder):
     return str(Path(folder or ".").resolve())
+
+
+def vault_status_command(connection, args, out):
+    reply = connection.call({"message": "vault/status"})
+    return print_reply(args, out, reply, reply["status"])
+
+
+def vault_answer_command(connection, args, out):
+    import getpass
+    import warnings
+
+    row = match_session(connection.sessions(), args.id)
+    ask = row.get("ask")
+    if not ask or ask.get("kind") != "secret":
+        raise ValueError("No private vault input waits in this session.")
+    payload = {"message": "vault/answer", "session": row["id"],
+               "ask": ask["id"]}
+    if args.cancel:
+        payload["cancel"] = True
+    else:
+        values = {}
+        # getpass's fallback echoes input. Refuse it before reading a value.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            try:
+                for part in ask["choices"]:
+                    values[part] = getpass.getpass(f"{part}: ")
+            except getpass.GetPassWarning:
+                raise ValueError("A terminal with masked input is required.") from None
+        payload["values"] = values
+    try:
+        reply = connection.call(payload)
+    finally:
+        payload.pop("values", {}).clear()
+    return print_reply(args, out, reply,
+                       "Saved." if reply["saved"] else "Cancelled.")
 
 
 def send_command(connection, args, out):

@@ -129,6 +129,7 @@ def bash(
     command, outside_sandbox=False, reason="", background=False,
     expect_minutes=None, sandbox=None, outside=None, stop=None, jobs=None,
     limits=None, no_changes=False, read_only_sandbox=None, retry_no_changes=False,
+    tool_boundary=None,
 ):
     """`sandbox`, `outside`, `stop`, `jobs` and `limits` come from the session,
     never the model. `outside`: where an approved call to leave the sandbox
@@ -178,7 +179,8 @@ def bash(
             result = jobtools.started_text(job_id)
             return Result(result + "\n\n" + note if note else result,
                           fields={"job_id": job_id})
-        output = OutputBuffer(limits["bash_output_kept_chars"])
+        transform = tool_boundary.stream().feed if tool_boundary else None
+        output = OutputBuffer(limits["bash_output_kept_chars"], transform)
         moved = False
         fields = {}
         try:
@@ -188,7 +190,11 @@ def bash(
                 if jobs is not None and jobs.has_room():
                     # The rest of its output goes to the job; the pipe stays open
                     moved = True
-                    job_id = jobs.start(proc, command, None, time.monotonic() - t0)
+                    options = ({"output_transform": transform}
+                               if transform is not None else {})
+                    job_id = jobs.start(
+                        proc, command, None, time.monotonic() - t0, **options)
+                    output.transform = None
                     status = jobtools.moved_status(job_id, timeout)
                     fields = {"job_id": job_id, "timed_out": True}
                 else:

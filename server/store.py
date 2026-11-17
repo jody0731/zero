@@ -666,7 +666,7 @@ class Store:
 
         def change(db):
             db.execute(
-                "UPDATE asks SET status = CASE WHEN kind = 'question' "
+                "UPDATE asks SET status = CASE WHEN kind IN ('question', 'secret') "
                 "THEN 'answered' ELSE ? END, closed_at = ?, reply = ?, source = ? "
                 "WHERE id = ?",
                 ("approved" if yes else "cancelled", now, reply, source, ask),

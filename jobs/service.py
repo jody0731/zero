@@ -99,11 +99,12 @@ class SessionJobs:
     def count(self):
         return len(self.service.store.jobs(self.sid, running=True))
 
-    def start(self, proc, command, expect_minutes=None, ran=0.0):
+    def start(self, proc, command, expect_minutes=None, ran=0.0,
+              output_transform=None):
         log = self.log_of() if self.log_of is not None else None
         started_from_seq = log.last_seq if log is not None else None
         return self.service.start(self.sid, proc, command, expect_minutes, ran,
-                                  started_from_seq)
+                                  started_from_seq, output_transform)
 
     def now(self):
         return self.service.clock()
@@ -142,8 +143,11 @@ class JobsService(Service):
     added_columns = ADDED_COLUMNS
     tables = ("jobs",)
 
-    def __init__(self, tick=2.0, clock=time.time):
+    def __init__(self, tick=2.0, clock=time.time, redact=None,
+                 output_filter=None):
         """`tick`: how often check-ins are looked for, in seconds."""
+        self.redact_output = redact or (lambda value: value)
+        self.output_filter = output_filter
         self.tick = tick
         self.clock = clock
         # Jobs running in this process: id → process.Job
@@ -278,7 +282,7 @@ class JobsService(Service):
         return self.files(row["id"]).read(row["read_bytes"])[0]
 
     def start(self, sid, proc, command, expect_minutes=None, ran=0.0,
-              started_from_seq=None):
+              started_from_seq=None, output_transform=None):
         """Record a running process as a job and start its pump. `ran`: how
         long it already ran in the foreground (a command moved at bash's
         timeout), so its clock starts with the command; its estimate and first
@@ -288,9 +292,15 @@ class JobsService(Service):
         due_at = now + expect_minutes * 60 if expect_minutes else None
         next_checkin_at = (due_at if due_at is not None
                            else now + jobtools.FIRST_CHECKIN)
-        self.store.add_job(id, sid, command, proc.pid, now - ran, due_at,
-                           next_checkin_at, pid_start(proc.pid), started_from_seq)
-        job = process.Job(id, proc, self.files(id), self.ended)
+        self.store.add_job(
+            id, sid, self.redact_output(command), proc.pid, now - ran, due_at,
+            next_checkin_at, pid_start(proc.pid), started_from_seq)
+        files = self.files(id)
+        if output_transform is not None:
+            files.transform = output_transform
+        elif self.output_filter is not None:
+            files.transform = self.output_filter()
+        job = process.Job(id, proc, files, self.ended)
         with self.lock:
             self.live[id] = job
         job.start()

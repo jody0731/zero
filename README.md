@@ -311,6 +311,27 @@ behavior. ZERO chooses the mark; it can still send an unmarked read for review.
 Reading the internet uses `web_fetch` or `web_search`, without review; local
 network access keeps its existing permission checks.
 
+### Private credentials
+
+Ask ZERO to save a credential, giving its site and username. ZERO fills the
+labels and asks for values in masked fields. Enter the password there, outside
+chat. You can ask ZERO to find, update or delete a saved entry.
+
+ZERO uses `⟦vault:name/part⟧` in tool arguments. The harness substitutes the
+value just before execution and redacts known values from returned text and
+saved output. A one-part entry also accepts `⟦vault:name⟧`. Redaction covers
+exact values and common URL, HTML, JSON and base64 encodings; arbitrary
+transformations and images are not covered.
+
+The whole `vault.enc` file, labels included, is encrypted. Its encryption key
+uses an available OS keyring or an owner-only `vault.key` inside ZERO's home.
+Backups need both the vault and its original key. `zero doctor` and
+`zero vault status` report the selected key store. Existing model API keys
+remain in `keys.toml`.
+
+For a pending CLI request, run `zero vault answer SESSION` in a terminal for
+masked prompts, or append `--cancel`. Values are never command-line arguments.
+
 ## For other agents
 
 ZERO is an MCP server at `http://127.0.0.1:4747/mcp`, on its HTTP door: every session of every agent uses the one door, and none starts a ZERO process of its own. In Claude Code:

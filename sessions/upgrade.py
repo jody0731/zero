@@ -238,7 +238,15 @@ def from_5(records, header, time):
              "upgraded_from": first.get("upgraded_from", 5)}, *rest]
 
 
-MIGRATIONS = {1: from_1, 2: from_2, 3: from_3, 4: from_4, 5: from_5}
+def from_6(records, header, time):
+    """Format 7 adds private input asks whose values are never log records."""
+    first, *rest = records
+    return [{**first, "format": 7,
+             "upgraded_from": first.get("upgraded_from", 6)}, *rest]
+
+
+MIGRATIONS = {1: from_1, 2: from_2, 3: from_3, 4: from_4, 5: from_5,
+              6: from_6}
 
 
 def backup_path(path, source):

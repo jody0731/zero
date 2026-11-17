@@ -73,9 +73,10 @@ class Park:
 class Question(Park):
     """A question's answer is data, never permission to execute a call."""
 
-    def __init__(self, text, labels):
+    def __init__(self, text, labels, kind="question"):
         super().__init__(text)
         self.labels = labels
+        self.kind = kind
 
 
 class ModelAsk(Park):

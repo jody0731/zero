@@ -3,6 +3,21 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4
+
+- An encrypted vault stores logins, keys, cards, identities and private notes.
+  ZERO searches their labels and uses stand-ins in tool calls; values enter
+  through masked browser, terminal or CLI fields outside the conversation.
+- One file encrypts labels and values together. Its key uses the OS keyring
+  where available, otherwise an owner-only key file in ZERO's hidden home.
+  `zero doctor` and `zero vault status` report which store is used.
+- Tool results and shell/job output replace known values and common encodings
+  with stand-ins before logs or saved output. Arbitrary transformations and
+  images are outside this text redaction boundary.
+- `zero vault answer SESSION` supplies pending private input; `--cancel`
+  cancels it. Existing API keys stay in keys.toml. Log format 7 adds private
+  input records while preserving older conversations.
+
 ## 0.7.7.3
 
 - ZERO can ask a question with numbered choices or a free-text answer. Its

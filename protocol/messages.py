@@ -169,7 +169,7 @@ CHOICE_LABELS = {
 # there changes no reply: schema.json names them row.<name>
 ROWS = {
     "ask": shape("a question waiting for the user's answer", {
-        "kind": {"type": "string", "enum": ["permission", "question"]},
+        "kind": {"type": "string", "enum": ["permission", "question", "secret"]},
         "id": {**STRING, "description": "the ask's id: session/send's "
                "reply_to"},
         "tool": STRING,
@@ -411,6 +411,17 @@ def message(about, fields=None, required=(), reply=None, stream=None,
 
 
 MESSAGES = {
+    "vault/answer": message(
+        "Supply private values directly to a waiting vault request.",
+        {"session": SESSION, "ask": STRING,
+         "values": {"type": "object", "additionalProperties": STRING},
+         "cancel": BOOLEAN}, required=("session", "ask"),
+        reply={"saved": BOOLEAN}, changes=True,
+    ),
+    "vault/status": message(
+        "The vault count and where its encryption key is kept.",
+        reply={"status": STRING},
+    ),
     "server/hello": message(
         "The server's versions and what keeps it busy; a client's first look.",
         {"protocol": {**INTEGER, "description": "the client's protocol; the "

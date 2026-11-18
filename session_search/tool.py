@@ -28,8 +28,9 @@ DESCRIPTION = (
     "holding any of them come instead, and the reply says so. OR between "
     "words matches any of them, \"quotes\" make a phrase, and a word ending "
     "in * matches the words that start with it. A session's log keeps the "
-    "parts of its conversation a rewind left behind, and a record found "
-    "there says so; a fork's records copied from the session it came from "
+    "parts a rewind left behind. Ordinary searches omit those records and "
+    "parent turns after this fork. When the user explicitly asks to recover "
+    "discarded conversation, recover_discarded includes it. A fork's copied records "
     "are found in that session. It runs outside the sandbox, which hides "
     "the logs from commands."
 )
@@ -190,13 +191,14 @@ def summary(args):
     DESCRIPTION,
     # It reads a log by its record numbers: texts naming records say so
     reads_records=True,
-    optional=("query", "session", "around", "count"),
+    optional=("query", "session", "around", "count", "recover_discarded"),
     summary=summary,
     # It reads ZERO's own records and changes nothing
     needs_permission=lambda args: False,
     # A running session's log grows: the same call can find more
     changing=True,
     ready=lambda context: context.get("search") is not None,
+    recover_discarded=("boolean", "Include discarded history for a recovery request."),
     query=("string", "Words to find."),
     session=("string", "A session's id, or its start: the session to search "
              "in, or to read near a record in."),
@@ -211,13 +213,13 @@ def summary(args):
     )),
 )
 def session_search(query=None, session=None, around=None, count=None,
-                   search=None):
+                   recover_discarded=False, search=None):
     """`search`: the session's own (service.py), never the model's."""
     if search is None:
         return NOT_HERE
     try:
         reply = search.find(query=query, session=session, around=around,
-                            count=count)
+                            count=count, recover_discarded=recover_discarded)
     except SearchError as error:
         return f"Not searched: {error}"
     except Unreadable as error:

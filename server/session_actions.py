@@ -333,8 +333,7 @@ class SessionActions:
                     session = Session(None, [], "", log, {})
                 self.refuse_copied(sid, seq)
                 try:
-                    record, left = session.rewind(
-                        seq, self.setting("rewind_note_line_chars"), sid)
+                    record, left = session.rewind(seq)
                 except ValueError as error:
                     raise Refused(str(error)) from None
                 switch = self.carried_switch(sid, before, log.branch())
@@ -377,10 +376,9 @@ class SessionActions:
                 raise Refused(str(error)) from None
             copied = records[: records.index(left[0])]
             text = left[0]["text"]
-            # What the parent had done past the fork's point, for its note
-            went_on = {"first": left[0]["seq"], "last": left[-1]["seq"],
-                       "part": history.part_lines(
-                           left, self.setting("rewind_note_line_chars"))}
+            went_on = {"effects": "".join(
+                service.fork_effects(sid, left) for service in self.services.values()
+            )}
         new = self.copy_session(sid, info, records, copied, went_on,
                                 {"title": info["title"], "source": source,
                                  "started_by": "user"})

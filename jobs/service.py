@@ -237,6 +237,14 @@ class JobsService(Service):
     def session(self, sid, limits, log_of=None):
         return SessionJobs(self, sid, limits, log_of)
 
+    def fork_effects(self, sid, left):
+        started = {record["seq"] for record in left}
+        jobs = [row["id"] for row in self.store.jobs(sid, running=True)
+                if row.get("started_from_seq") in started]
+        if jobs:
+            return "\nParent jobs running when this fork was made: " + ", ".join(jobs)
+        return ""
+
     def session_built(self, sid, session):
         """The session's tools start jobs through the server, up to its limit
         as it stands."""

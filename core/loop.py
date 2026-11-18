@@ -181,25 +181,13 @@ class Session:
         self.messages = history.replay(self.log.branch())
         return record
 
-    def rewind(self, seq, line_chars, session_id=None):
-        """Go back to before the user's message `seq`, one that starts a turn
-        on the current branch: a `rewind` record whose parent is the record
-        before it, its note saying what it leaves behind (core/history.py's
-        rewind_note, each message's line `line_chars` long at most, with what
-        the `rewound` hooks add), and the context the branch now holds. Files
-        and memory stay as they are: the harness undoes nothing.
-        `session_id`: the server's id for the session, which the note names.
-        Returns (the record, the part left behind)."""
+    def rewind(self, seq):
+        """Branch before the user's message, retaining concrete side effects."""
         parent, left = history.left_behind_by(self.log.branch(), seq)
-        extra = self.hooks.collect("rewound", self, left)
-        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        effects = self.hooks.collect("rewound", self, left)
         record = self.write(
             "rewind", parent=parent["seq"], left_from=left[0]["seq"],
-            left_to=left[-1]["seq"],
-            text=history.rewind_note(
-                now, left, line_chars, extra, session_id,
-                reader=tools.record_reader(self.tool_context),
-            ),
+            left_to=left[-1]["seq"], text=history.REWOUND.format(effects=effects),
         )
         self.messages = history.replay(self.log.branch())
         return record, left

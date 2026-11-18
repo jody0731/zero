@@ -29,7 +29,7 @@ from pathlib import Path
 from core import history
 
 # The index's layout: an index of another is made again
-LAYOUT_VERSION = 1
+LAYOUT_VERSION = 2
 # The search's own tool: its calls' results repeat records found elsewhere,
 # and a later search would find its own earlier ones first
 SEARCH_TOOL = "session_search"
@@ -40,6 +40,10 @@ CREATE TABLE logs (
     file_id TEXT NOT NULL,
     -- How much of it is read, its whole lines up to there
     bytes_read INTEGER NOT NULL
+);
+CREATE TABLE discarded (
+    session TEXT NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL,
+    PRIMARY KEY (session, first, last)
 );
 CREATE VIRTUAL TABLE records USING fts5(
     text,
@@ -53,6 +57,13 @@ CREATE VIRTUAL TABLE records USING fts5(
     tokenize = 'unicode61 remove_diacritics 2'
 );
 """
+# Apply branch limits before ranking, snippets, counts and the any-word fallback.
+VISIBLE_RECORDS = (
+    " AND NOT EXISTS (SELECT 1 FROM discarded WHERE session = records.session "
+    "AND records.seq BETWEEN first AND last) "
+    "AND NOT EXISTS (SELECT 1 FROM json_each(?) WHERE key = records.session "
+    "AND records.seq > value) "
+)
 KINDS = ("user", "notice", "reply", "call", "handoff")
 # How a match is marked in a snippet (not **, which a reply's Markdown
 # holds); its words are the search's (session_search_snippet_words; FTS5
@@ -227,6 +238,7 @@ class Index:
             raise
 
     def _drop(self, db, sid):
+        db.execute("DELETE FROM discarded WHERE session = ?", (sid,))
         db.execute("DELETE FROM records WHERE session = ?", (sid,))
         db.execute("DELETE FROM logs WHERE session = ?", (sid,))
 
@@ -265,6 +277,9 @@ class Index:
                 continue
             if start == 0 and record.get("type") == "session":
                 copied_to = (record.get("forked_from") or {}).get("seq", 0)
+            if record.get("type") == "rewind" and "left_from" in record:
+                db.execute("INSERT OR IGNORE INTO discarded VALUES (?, ?, ?)",
+                           (sid, record["left_from"], record["left_to"]))
             if copied_to and (record.get("seq") or 0) <= copied_to:
                 continue
             found = searchable(record)
@@ -291,18 +306,20 @@ class Index:
         except sqlite3.OperationalError as error:
             raise Unreadable(str(error)) from None
 
-    def sessions_matching(self, query):
+    def sessions_matching(self, query, cutoffs=None):
         """[(session, its matching records' count, its best record's rowid)],
         best first, for an FTS5 query. Only the best FIRST_LOOK_RECORDS
         matches are ranked; a session whose matches all rank below them
         comes last, its count kept and its best rowid None."""
+        visible = "" if cutoffs is None else VISIBLE_RECORDS
+        args = () if cutoffs is None else (json.dumps(cutoffs),)
         rows = self._match(
             "SELECT rowid, session FROM records WHERE records MATCH ? "
-            f"ORDER BY {RANK} LIMIT ?", query, FIRST_LOOK_RECORDS,
+            f"{visible} ORDER BY {RANK} LIMIT ?", query, *args, FIRST_LOOK_RECORDS,
         )
         counts = {row["session"]: row["n"] for row in self._match(
             "SELECT session, count(*) AS n FROM records WHERE records MATCH ? "
-            "GROUP BY session", query,
+            f"{visible} GROUP BY session", query, *args,
         )}
         best = {}
         for row in rows:
@@ -323,17 +340,19 @@ class Index:
         )
         return {row["rowid"]: hit(row) for row in rows}
 
-    def session_hits(self, query, sid, count, snippet_words):
+    def session_hits(self, query, sid, count, snippet_words, cutoffs=None):
         """(how many of a session's records match, the best `count` of them,
         each with its snippet, `snippet_words` long at most)."""
-        total = len(self._match(
-            "SELECT rowid FROM records WHERE records MATCH ? AND session = ?",
-            query, sid,
-        ))
+        visible = "" if cutoffs is None else VISIBLE_RECORDS
+        args = () if cutoffs is None else (json.dumps(cutoffs),)
+        total = self._match(
+            "SELECT count(*) AS n FROM records WHERE records MATCH ? AND session = ?"
+            + visible, query, sid, *args,
+        )[0]["n"]
         rows = self._match(
             f"SELECT rowid, {self._fields(snippet_words)} FROM records "
-            f"WHERE records MATCH ? AND session = ? ORDER BY {RANK} "
-            "LIMIT ?", query, sid, count,
+            f"WHERE records MATCH ? AND session = ? {visible} ORDER BY {RANK} LIMIT ?",
+            query, sid, *args, count,
         )
         return total, [hit(row) for row in rows]
 

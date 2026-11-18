@@ -383,7 +383,7 @@ class SubagentsService(Service):
                     sid, title, source, rows_beside, mode=mode, model=model)
         except Refused as error:
             return None, f"Not started: {error}."
-        self.runtime.wake()
+        self.runtime.wake(child)
         return child, None
 
     def workflow_send(self, request):

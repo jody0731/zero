@@ -64,26 +64,11 @@ SIZE = " The context is now about {tokens:,} tokens of the {line:,} it is kept u
 # what of it still stands; each part that changes things adds its lines
 # (the `rewound` hooks), so the note names what the log knows exactly
 REWOUND = (
-    "[Rewound {when}: the user went back to before their message of "
-    "{asked}. The conversation from there, records {first}–{last} of this "
-    "session's log{session}, is left behind and is no longer in your "
-    "context; the log keeps it{reader}. What was done there stays done: "
-    "files and memory are as it left them.{part}{extra}]"
+    "[The user rewound this conversation. Continue from here. Files, memory "
+    "and running work retain their current state.{effects}]"
 )
-# The tool that reads a log by its record numbers, as it declares itself
-# (core/tools.py's record_reader)
-REWOUND_READER = ", and {tool} reads it by those record numbers"
-# The session's id in the rewind's note, where the server gives it
-REWOUND_SESSION = " (session {session})"
-# What a part of the conversation the context doesn't hold did, in the
-# rewind's note (the part left behind) and a fork's (the part its parent
-# went on with): the user's messages there, then the calls that ran
-PART_MESSAGES = "\nThe user's messages there:\n{messages}"
-# One of the user's messages there: its record and its first line, the
-# whole in the log
-PART_MESSAGE = "- record {seq}: {line}"
-# The calls that ran there, counted by tool
-PART_CALLS = "\nCalls that ran there, by tool: {counts}."
+# Older logs embedded excerpts and call counts in rewind and fork notes.
+OLD_BRANCH_EXCERPTS = "\nThe user's messages there:"
 # Inside a notice whose sender started on a part a rewind left behind
 LEFT_BEHIND = (
     "[This started from record {seq} of this session's log, on a part of the "
@@ -256,48 +241,14 @@ def left_behind_by(records, seq):
     raise ValueError(f"record {seq} isn't on the conversation's current branch")
 
 
-def part_lines(part, line_chars):
-    """What a part of the conversation did, from its records: the user's
-    messages there (steers included; not notices or a `continue`), each by
-    its record and first line (cut past `line_chars`, the cut saying so),
-    then the calls that ran there counted by tool. The rewind's note says it
-    of the part left behind, a fork's of the part its parent went on with."""
-    lines = []
-    for record in part:
-        if (record["type"] != "user" or record.get("continue")
-                or is_notice(record)):
-            continue
-        text = record["text"].strip()
-        line = text.splitlines()[0] if text else ""
-        if len(line) > line_chars or line != text:
-            line = line[:line_chars].rstrip() + " … (the whole in the log)"
-        lines.append(PART_MESSAGE.format(seq=record["seq"], line=line))
-    counts = {}
-    for record in part:
-        if record["type"] == "tool" and record.get("ran"):
-            counts[record["tool"]] = counts.get(record["tool"], 0) + 1
-    text = PART_MESSAGES.format(messages="\n".join(lines))
-    if counts:
-        text += PART_CALLS.format(counts=", ".join(
-            f"{name} {count}" for name, count in counts.items()
-        ))
-    return text
-
-
-def rewind_note(when_iso, left, line_chars, extra="", session=None,
-                reader=None):
-    """The rewind's note, from the part it leaves: what was done there
-    (`part_lines`, each message's line `line_chars` long at most), what the
-    hooks add (`extra`: the files written there, the jobs started there that
-    still run), `session`, its id, and `reader`, the tool that reads the log
-    by its record numbers (None: none named)."""
-    return REWOUND.format(
-        when=when(when_iso), asked=when(left[0]["time"]),
-        first=left[0]["seq"], last=left[-1]["seq"],
-        session=REWOUND_SESSION.format(session=session) if session else "",
-        reader=REWOUND_READER.format(tool=reader) if reader else "",
-        part=part_lines(left, line_chars), extra=extra,
-    )
+def branch_note(record):
+    """Render a saved branch note without replaying discarded conversation."""
+    text = record["text"]
+    if OLD_BRANCH_EXCERPTS not in text:
+        return text
+    if record["type"] == "rewind":
+        return REWOUND.format(effects="")
+    return "[This conversation forked. The workspace, files and memory are shared.]"
 
 
 def log_format(records):
@@ -363,7 +314,9 @@ def message(record):
         return {"role": "user", "content": f"{MID_TURN}\n{sent(record)}"}
     if kind == "user":
         return {"role": "user", "content": sent(record)}
-    if kind in ("note", "rewind"):
+    if kind == "rewind" or (kind == "note" and record.get("kind") == "forked"):
+        return {"role": "user", "content": branch_note(record)}
+    if kind == "note":
         return {"role": "user", "content": record["text"]}
     if kind == "compaction":
         return {"role": "user", "content": compacted(record)}

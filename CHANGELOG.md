@@ -3,6 +3,14 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.5
+
+- Completed replies open with a nonblank answer. Click Why or Next to fold
+  the optional sections in the browser. A requested reason belongs in Answer.
+- ZERO describes its work in task terms and names its built-in tools when asked.
+- Rewind and earlier forks keep discarded conversation out of the new context.
+  File changes and running jobs persist. Discarded records remain recoverable.
+
 ## 0.7.7.4.4
 
 - ZERO returns Answer, Why and Next as structured data. Next lists your step

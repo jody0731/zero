@@ -375,10 +375,10 @@ class Runtime(SessionActions):
             )
             return self.list_version
 
-    def wake(self):
-        """A job's notice was admitted."""
+    def wake(self, sid=None):
+        """Dispatch an admitted notice to its session, or look for waiting ones."""
         if self.started:
-            self.dispatch()
+            self.dispatch(sid)
 
     def log(self, sid, lock=None):
         """A session's log; what it appends reaches the session's watchers."""

@@ -8,6 +8,7 @@ import heapq
 import os
 from pathlib import Path
 
+from files.seen import WRITTEN_THERE, written
 from server.services import Refused, Service
 
 PAGE_FOLDERS = 200
@@ -19,6 +20,10 @@ def name_order(name):
 
 class FilesService(Service):
     name = "files"
+
+    def fork_effects(self, sid, left):
+        paths = written(left)
+        return WRITTEN_THERE.format(paths=", ".join(paths)) if paths else ""
 
     def messages(self):
         return {"workspace/list": self.list_message}

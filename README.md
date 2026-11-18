@@ -58,7 +58,10 @@ illustrative session data. Run <code>zero</code> to open it;
   pending asks remain, and interrupted commands are reported as before.
 - **The means are ZERO's to pick, or yours to name:** a plain turn, background jobs, rounds, subagents. ZERO reads what each is for and what it costs, a note of its context's size as it grows with what every step then counts, and whether you would rather wait or have more tokens used (`time_or_tokens`, balanced as shipped). Name a means in your message and ZERO uses that one. For a result it has started, it holds the turn (`wait`) and answers once.
 - **Session search:** ZERO searches what every session's log holds, running or done (your messages, its replies, each command with its output, the handoffs), by its words, and reads the records near a match; so does `zero session search`.
-- **Rewind and fork:** `/rewind` goes back to before one of your messages, its text put back in the input to send as it is or changed; what came after is left behind, kept in the log, and ZERO reads a note of what it held (your messages, the calls that ran, the files written and the jobs still running there). Files and memory stay as they are: the conversation goes back, not the machine. `/fork` starts a new session from the conversation up to one of your messages, or all of it, in the same folder; it starts from the server's cache, as the session it came from would.
+- **Rewind and fork:** Rewind returns to before your selected message. An
+  earlier-point fork starts a new session there. Files and running work persist.
+  Discarded messages stay in the log for explicit recovery. Ordinary model
+  searches and the new branch’s notes omit the discarded conversation.
 - **A fallback model:** when the session's model fails, the turn goes on with the one you set (`fallback_model`).
 - **It trusts the model:** what the model reads states facts, never guardrails; the limits live in code; it is built for the models to come.
 
@@ -209,6 +212,9 @@ long titles, shows their full name on hover and lets you expand branches. Model 
 **Choose…** opens a folder browser with Home, parent folders and recent workspaces.
 These session controls apply on selection, without an Apply button.
 
+ZERO opens with its answer. Click **Why** or **Next** to fold that section.
+Empty sections take up no space. Next gives your action before ZERO’s.
+
 **Copy response** copies one ZERO turn's answer as Markdown, excluding its process.
 **Rewind and edit** returns to before a user turn and puts its message back in the
 composer. Confirming it leaves later conversation behind; files and memory do not
@@ -259,7 +265,7 @@ zero doctor                                        # what ZERO needs from the ma
 - A long text can come from stdin (`-`); a key only does (`--key-stdin`), never as an argument.
 - `--json` prints one result object. On completion, `zero -p TEXT --json` includes
   the readable `answer` and a structured `reply` with `answer`, `why`,
-  `next.user` and `next.zero`. Each is a string and can be empty. The result
+  `next.user` and `next.zero`. Answer contains text. The other strings can be empty. The result
   also includes the session, outcome, any waiting question, tokens and seconds.
 - The exit status is 0 when it worked, 1 when not, 2 when a question waits: answer it with `zero session send TEXT --session ID`, or pick its displayed choice with `--choice KEY` (a number for a question;
   `yes`, `session`, `saved` or `no` for a permission ask).

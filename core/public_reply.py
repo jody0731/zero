@@ -17,17 +17,18 @@ def object_schema(example):
 SCHEMA = {"name": "public_reply", "schema": object_schema(sections())}
 INSTRUCTIONS = (
     'Your public reply is one JSON object in this form: '
-    '{"answer":"","why":"","next":{"user":"","zero":""}}. '
-    'Include every field. Leave it empty when it adds nothing. Answer gives the '
-    'requested work, finding or obstacle. Why gives a brief explanation or a '
-    'focused question. Next lists outstanding actions, the user’s first, then '
-    'yours. Say when your action depends on theirs. '
-    'A question belongs in one place. A tool call can have no accompanying text. '
+    '{"answer":"your answer","why":"","next":{"user":"","zero":""}}. '
+    'Include every field. In a completed reply, Answer is nonblank and stands '
+    'on its own. Put the requested result, reason, obstacle or question you '
+    'need answered in Answer. Why is optional supporting context for Answer. '
+    'Next gives outstanding actions, the user’s first, then yours. Say when '
+    'your action depends on theirs. Leave unused fields empty. A tool call '
+    'can have no accompanying text. '
     'Internal handoffs have their own format.'
 )
 CORRECTION = (
     "The previous reply did not fit the public reply format. Give the reply "
-    "using all the required fields. Work already performed still stands. "
+    "with a nonblank Answer and all required fields. Work already done stands. "
     "This formatting step has no tools."
 )
 
@@ -53,7 +54,11 @@ def parse(text, *, partial=False):
             return None
     values = (data.get("answer", ""), data.get("why", ""),
               next_steps.get("user", ""), next_steps.get("zero", ""))
-    return sections(*values) if all(isinstance(v, str) for v in values) else None
+    if not all(isinstance(value, str) for value in values):
+        return None
+    if not partial and not values[0].strip():
+        return None
+    return sections(*values)
 
 
 def plain(reply):

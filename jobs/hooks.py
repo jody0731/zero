@@ -64,7 +64,7 @@ class RunningJobs(Hook):
                    and row.get("started_from_seq") in there]
         if not running:
             return ""
-        named = ", ".join(f"{row['id']} (`{row['command']}`)" for row in running)
+        named = ", ".join(row["id"] for row in running)
         return STARTED_THERE.format(jobs=named)
 
     def interrupted(self, session):

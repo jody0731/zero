@@ -24,8 +24,9 @@ class SessionSearch:
         self.sid = sid
         self.limits = limits
 
-    def find(self, **request):
-        return self.service.find(asking=self.sid, limits=self.limits, **request)
+    def find(self, recover_discarded=False, **request):
+        return self.service.find(asking=self.sid, limits=self.limits,
+                                 recover_discarded=recover_discarded, **request)
 
 
 class SessionSearchService(Service):
@@ -37,14 +38,15 @@ class SessionSearchService(Service):
         self.index = Index(runtime.paths.state / INDEX_FILE)
 
     def find(self, query=None, session=None, around=None, count=None,
-             asking=None, limits=None):
+             asking=None, limits=None, recover_discarded=True):
         """One search: under a session's `limits`, or the server's settings
         as they stand (a client's search)."""
         if limits is None:
             limits = self.runtime.live_settings()
         return find(self.index, self.runtime.store.sessions(),
                     self.runtime.paths.sessions, query=query, session=session,
-                    around=around, count=count, asking=asking, limits=limits)
+                    around=around, count=count, asking=asking, limits=limits,
+                    recover_discarded=recover_discarded)
 
     def messages(self):
         return {"session/search": self.search_message}

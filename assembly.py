@@ -145,7 +145,7 @@ SETTINGS_ORDER = (
     "compact_at_tokens", "result_share_percent", "reply_room_tokens",
     "handoff_room_tokens", "context_note_every_tokens",
     "session_search_count", "session_search_each_side",
-    "session_search_snippet_words", "rewind_note_line_chars",
+    "session_search_snippet_words",
     "model_silence_seconds", "model_retries", "model_retry_seconds",
     "max_broken_replies",
     "judge_silence_seconds", "judge_reply_tokens", "judge_retries",

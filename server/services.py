@@ -87,6 +87,10 @@ class Service:
         """Why the session can't be deleted now, or None."""
         return None
 
+    def fork_effects(self, sid, left):
+        """Concrete effects of the parent's later work when a user forks earlier."""
+        return ""
+
     def refuse_rewind(self, sid):
         """Why the session's conversation can't be rewound now, or None."""
         return None

@@ -638,9 +638,14 @@
                   el("div", "body", message.reasoning_content));
       node.append(fold);
     }
-    if (message.content) {
-      turn.replies.append(markdown(message.content));
-      turn.texts.push(message.content);
+    const fields = record.reply;
+    const text = message.content || [fields?.answer, fields?.why, fields?.next?.user,
+      fields?.next?.zero].filter(value => value?.trim()).join("\n\n");
+    if (text.trim()) {
+      const reply = el("div", "public-reply");
+      drawPublicReply(reply, fields, text, record.seq);
+      turn.replies.append(reply);
+      turn.texts.push(text);
       turn.copy.hidden = false;
     }
     const summaries = record.call_summaries || {};
@@ -731,6 +736,13 @@
     const text = [record.outcome, seconds(record.seconds),
       record.error || record.detail || ""].filter(Boolean).join(" · ");
     const turn = turnFor(record);
+    if (!turn.texts.length && record.reply && record.answer) {
+      const reply = el("div", "public-reply");
+      drawPublicReply(reply, record.reply, record.answer, record.seq);
+      turn.replies.append(reply);
+      turn.texts.push(record.answer);
+      turn.copy.hidden = false;
+    }
     turn.summary.textContent = text || "Completed";
     if (failed) turn.summary.classList.add("failed");
     state.turn = null;
@@ -749,20 +761,83 @@
   }
 
   function drawDraft(draft) {
-    clearDraft();
-    const node = el("div", "entry zero draft");
-    node.id = "draft";
-    if (draft.text) node.append(markdown(draft.text));
-    else if (draft.reasoning) node.append(el("div", "sub", "…"));
-    if ((draft.calls || []).length) {
-      node.append(el("div", "sub", `${draft.calls.join(", ")} …`));
-    }
-    const following = atEnd();
     const turn = turnFor({});
-    turn.summary.textContent = (draft.calls || []).length
-      ? draft.calls.join(", ") : "Thinking…";
-    (draft.text ? turn.replies : turn.process).append(node);
+    const following = atEnd();
+    let node = $("draft");
+    if (!node) {
+      node = el("div", "entry zero draft");
+      node.id = "draft";
+      node.append(el("div", "public-reply"), el("div", "sub"));
+    }
+    const text = draft.reply && !draft.reply.answer?.trim() ? "" : draft.text;
+    drawPublicReply(node.firstElementChild, draft.reply, text, state.lastSeq + 1);
+    const calls = draft.calls || [];
+    node.lastElementChild.textContent = calls.length ? calls.join(", ") + " …"
+      : (draft.reasoning && !text ? "…" : "");
+    turn.summary.textContent = calls.length ? calls.join(", ") : "Thinking…";
+    const parent = text ? turn.replies : turn.process;
+    if (node.parentNode !== parent) parent.append(node);
     if (following) scrollToEnd();
+  }
+
+  function drawPublicReply(node, reply, fallback, seq) {
+    // A saved reply from an older release can have only Why or Next. Its
+    // plain projection remains readable. In a draft, wait for Answer.
+    if (!reply?.answer?.trim()) reply = null;
+    const answer = reply ? reply.answer : fallback;
+    const parts = [
+      ["answer", [answer]], ["why", [reply?.why]],
+      ["next", [reply?.next?.user, reply?.next?.zero]],
+    ];
+    for (const [name, fields] of parts) {
+      const values = fields.filter(value => value?.trim());
+      let section = node.querySelector(`[data-section="${name}"]`);
+      if (!values.length) {
+        section?.remove();
+        continue;
+      }
+      if (!section) {
+        section = el("div");
+        section.dataset.section = name;
+        const body = el("div");
+        if (name !== "answer") {
+          const label = name === "why" ? "Why" : "Next";
+          const key = `zero.reply.${state.open}.${seq}.${name}`;
+          body.id = key;
+          const button = el("button", "reply-label", label);
+          button.type = "button";
+          button.setAttribute("aria-controls", key);
+          try { body.hidden = sessionStorage.getItem(key) === "folded"; }
+          catch { /* This browser keeps fold state only in the open reply. */ }
+          button.setAttribute("aria-expanded", String(!body.hidden));
+          button.addEventListener("click", () => {
+            body.hidden = !body.hidden;
+            button.setAttribute("aria-expanded", String(!body.hidden));
+            try {
+              if (body.hidden) sessionStorage.setItem(key, "folded");
+              else sessionStorage.removeItem(key);
+            } catch { /* Folding also works without browser storage. */ }
+          });
+          section.append(button);
+        }
+        section.append(body);
+      }
+      if (section.parentNode !== node) {
+        const later = name === "answer" ? node.firstElementChild
+          : name === "why" ? node.querySelector('[data-section="next"]') : null;
+        node.insertBefore(section, later);
+      }
+      const body = section.lastElementChild;
+      values.forEach((value, index) => {
+        const previous = body.children[index];
+        if (previous?.sourceText === value) return;
+        const current = markdown(value);
+        current.sourceText = value;
+        if (previous) previous.replaceWith(current);
+        else body.append(current);
+      });
+      while (body.children.length > values.length) body.lastElementChild.remove();
+    }
   }
 
   function clearDraft() {

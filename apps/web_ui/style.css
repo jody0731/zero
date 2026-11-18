@@ -530,6 +530,21 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
 .message-action { margin-top: 8px; line-height: 18px; }
 .turn > .message-action { display: block; }
 .reply > :last-child { margin-bottom: 0; }
+.public-reply > [data-section] + [data-section] { margin-top: 1em; }
+.public-reply > [data-section="why"] { color: var(--text-2); }
+.reply-label {
+  display: inline-block; width: fit-content; min-height: 0;
+  background: transparent; color: inherit; border: 0; padding: 0;
+  font: inherit; font-weight: 650; text-transform: none; letter-spacing: normal;
+  text-underline-offset: .18em;
+}
+.reply-label:hover, .reply-label:focus-visible {
+  background: transparent; color: inherit; text-decoration: underline;
+}
+.reply-label[aria-expanded="false"] { text-decoration: underline dotted; }
+@media (pointer: coarse) {
+  .reply-label { min-height: 44px; min-width: 44px; text-align: start; }
+}
 .turn-replies > :last-child { margin-bottom: 0; }
 .row, .row.open { height: 32px; min-height: 32px; }
 .row .where, .row.open .where { display: none; }

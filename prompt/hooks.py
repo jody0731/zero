@@ -22,7 +22,7 @@ NEW_SCRATCH = (
 # A fork's first turn: whose fork it is and what differs from that session;
 # its system message is the parent's byte for byte, so the cache holds
 FORKED = (
-    "[This session is a fork of session {session} (\"{title}\"), made {when} "
+    "[This session is a fork of session {session}{parent_title}, made {when} "
     "from that conversation up to here. The conversation above is a copy of "
     "that session's, its record numbers kept{finds}. From here on the two go "
     "their own ways. The workspace, its "
@@ -44,18 +44,11 @@ SUBAGENT_FORKED = (
 SUBAGENT_MODE = " This session's {line}."
 # In a fork's note, for a session with a scratch folder of its own
 FORK_SCRATCH = " This session's scratch folder, $TMPDIR, is {path}, new and empty."
-# In a fork's note, when the parent had gone on past the fork's point: its
-# records from there (core/history.py's part_lines says what they did)
-FORK_WENT_ON = (
-    " That session had gone on past here when this fork was made: records "
-    "{first}–{last} of its log{which_reads}. What was done there stays done: "
-    "files and memory are as it left them.{part}"
-)
+FORK_WENT_ON = " Later work in the parent may have changed the shared workspace."
 # The tool that reads a log by its record numbers, as it declares itself
 # (core/tools.py's record_reader), in the notes above
 FINDS = ", and {tool} finds it there"
 WHICH_FINDS = ", which {tool} finds there"
-WHICH_READS = ", which {tool} reads there"
 
 
 def reader_clause(text, context):
@@ -130,11 +123,11 @@ class Environment(Hook):
                 )
             else:
                 went = fork.get("went_on")
-                went_on = FORK_WENT_ON.format(
-                    **went, which_reads=reader_clause(WHICH_READS, context),
-                ) if went else ""
+                went_on = FORK_WENT_ON + went.get("effects", "") if went else ""
+                # A parent title can come from its first discarded request.
+                parent_title = "" if went else f' ("{fork["title"]}")'
                 text = FORKED.format(
-                    session=fork["session"], title=fork["title"],
+                    session=fork["session"], parent_title=parent_title,
                     when=history.when(fork["time"]), scratch=scratch,
                     went_on=went_on, finds=reader_clause(FINDS, context),
                 )

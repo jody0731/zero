@@ -51,14 +51,37 @@ def limit(limits, name):
     return (limits or {}).get(name, DEFAULT_LIMITS[name])
 
 
+def parent_cutoffs(logs, asking, listed):
+    """Last inherited record in each ancestor, including a fork of a fork."""
+    cutoffs = {}
+    sid = asking
+    cutoff = None
+    while sid in listed:
+        try:
+            with (logs / f"{sid}.jsonl").open("rb") as source:
+                head = json.loads(source.readline())
+        except (FileNotFoundError, ValueError):
+            break
+        fork = head.get("forked_from") if isinstance(head, dict) else None
+        if not isinstance(fork, dict) or not isinstance(fork.get("seq"), int):
+            break
+        if not isinstance(fork.get("session"), str) or fork["session"] in cutoffs:
+            break
+        sid = fork["session"]
+        cutoff = fork["seq"] if cutoff is None else min(cutoff, fork["seq"])
+        cutoffs[sid] = cutoff
+    return cutoffs
+
+
 def find(index, sessions, logs, query=None, session=None, around=None,
-         count=None, asking=None, limits=None):
+         count=None, asking=None, limits=None, recover_discarded=True):
     """One search. `sessions`: the session list's rows; `logs`: the folder
     of their logs; `asking`: the session that searches, marked in the reply
     (None for a client); `limits`: the searching session's, or the server's
     settings, as they stand."""
     checked(query, session, around, count)
     listed = {row["id"]: shown(row, asking) for row in sessions}
+    cutoffs = None if recover_discarded else parent_cutoffs(logs, asking, listed)
     target = one_session(listed, session) if session is not None else None
     if around is not None and target is None:
         raise SearchError("around needs session: the session the record is "
@@ -68,7 +91,7 @@ def find(index, sessions, logs, query=None, session=None, around=None,
         around = FIRST_RECORD if around is None else around
         if count is None:
             count = limit(limits, "session_search_each_side")
-        return near(target, logs / f"{target['id']}.jsonl", around, count)
+        return near(target, logs / f"{target['id']}.jsonl", around, count, cutoffs)
     if count is None:
         count = limit(limits, "session_search_count")
     snippet_words = limit(limits, "session_search_snippet_words")
@@ -80,12 +103,12 @@ def find(index, sessions, logs, query=None, session=None, around=None,
     with index.lock:
         index.catch_up({sid: logs / f"{sid}.jsonl" for sid in listed})
         reply = matched(index, listed, target, words, count, asking,
-                        snippet_words)
+                        snippet_words, cutoffs)
         reply["matched_by"] = "every word"
         either = fts_query(query, any_word=True)
         if reply["record_count"] == 0 and either != words:
             reply = matched(index, listed, target, either, count, asking,
-                            snippet_words)
+                            snippet_words, cutoffs)
             reply["matched_by"] = "any word"
     reply["query"] = query
     marked(reply, logs)
@@ -115,14 +138,15 @@ def marked(reply, logs):
             record["left_behind"] = True
 
 
-def matched(index, listed, target, words, count, asking, snippet_words):
+def matched(index, listed, target, words, count, asking, snippet_words, cutoffs=None):
     """The records an FTS5 query matches: in one session, or by session;
     each match's snippet `snippet_words` long at most."""
     if target is not None:
         total, hits = index.session_hits(words, target["id"], count,
-                                         snippet_words)
+                                         snippet_words, cutoffs)
         return {"session": target, "record_count": total, "records": hits}
-    return matching_sessions(index, listed, words, count, asking, snippet_words)
+    return matching_sessions(index, listed, words, count, asking,
+                             snippet_words, cutoffs)
 
 
 def checked(query, session, around, count):
@@ -160,12 +184,12 @@ def one_session(listed, session):
                       "more of the id names one.")
 
 
-def matching_sessions(index, listed, words, count, asking, snippet_words):
+def matching_sessions(index, listed, words, count, asking, snippet_words, cutoffs=None):
     """The sessions whose records match, best first, the one that asks
     after the others: the first `count`, each with its best match's
     snippet."""
-    found = [(sid, n, rowid) for sid, n, rowid in index.sessions_matching(words)
-             if sid in listed]
+    matches = index.sessions_matching(words, cutoffs)
+    found = [(sid, n, rowid) for sid, n, rowid in matches if sid in listed]
     found.sort(key=lambda item: item[0] == asking)
     first = found[:count]
     hits = index.hits(words, [rowid for _, _, rowid in first if rowid is not None],
@@ -193,13 +217,19 @@ def log_records(path):
     return records
 
 
-def near(target, path, around, each_side):
+def near(target, path, around, each_side, cutoffs=None):
     """The searched records nearest record `around`: `each_side` before it,
     the one at it (or the first after it), `each_side` after; each on a
     part a rewind left behind marked so."""
     records = []
     left = off_branch(path)
+    cutoff = (cutoffs or {}).get(target["id"])
     for record in log_records(path):
+        seq = record.get("seq", 0)
+        if cutoffs is not None and seq in left:
+            continue
+        if cutoff is not None and seq > cutoff:
+            continue
         found = searchable(record)
         if found is None or not found[2]:
             continue

@@ -1,24 +1,17 @@
-"""`memory`: add, replace or remove text in one of ZERO's own files.
+"""Changes to instruction files need approval of the exact edit from the user.
 
-The harness writes the file itself, in no sandbox: the call is what is asked
-about. Its crossing asks in every mode, so the mode's approver answers it (the
-user; the judge in the auto modes; the user again in bypassPermissions, which
-asks nothing else; nobody in readOnly): a remembered line reaches every later
-session, so a planted one would too (Hermes scans entries for injected text;
-here someone answers for each). A change is live at once: its result holds
-the file as sessions read it, so the session that made it has it from there
-on, and later sessions read it at their start. The system message stays as
-the session started: an approved change, never a file changed on disk, is
-what a session takes in mid-way. Which file a target is comes from the
-session (`own_files`), never from the model.
+The question tool shows a proposal bound to the file's current contents.
+Its recorded approval is used once by this tool, independently of the mode's
+judge. The file state is rechecked while holding the writer lock.
 """
 
+import hashlib
 import os
 import re
 from pathlib import Path
 
 import paths
-from core.asking import TO_APPROVER
+from core import tools
 from core.tools import tool
 from prompt.instructions import clean
 
@@ -29,9 +22,8 @@ ASK_NAMES = {
     "soul": "SOUL.md", "user": "the user's ZERO.md",
     "project": "the project's ZERO.md",
 }
-CROSSING = "It changes what every later session reads."
 HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*$")
-# How much of a change an ask shows; the judge reads it whole
+# Compact summaries may clip; the user's proposal always shows the whole edit.
 SHOWN_CHARS = 2000
 # Where a change lives from now: this session (its result) and every later
 # one (the file)
@@ -138,9 +130,26 @@ def summary(args, whole=False):
     return f"memory: {action} from {name}:\n{old}"
 
 
-def crossing(args):
-    return {"rule": "memory", "fact": CROSSING, "why": args.get("reason"),
-            "every_mode": True}
+def proposal(args, context):
+    path = (context.get("own_files") or {}).get(args.get("target"))
+    if path is None:
+        raise ValueError("This instruction file is unavailable in this session.")
+    path = Path(os.path.realpath(path))
+    try:
+        before = path.read_text()
+        existed = True
+    except FileNotFoundError:
+        before, existed = "", False
+    after = changed(before, args.get("action"), args.get("text"),
+                    args.get("old_text"), args.get("heading"))
+    if isinstance(after, Refusal):
+        raise ValueError(after.format(name=path))
+    digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
+    return {
+        "text": f"File: {path}\n{summary(args, whole=True)}",
+        "state": {"path": str(path), "existed": existed,
+                  "before": digest(before), "after": digest(after)},
+    }
 
 
 def describe(limits, context=None):
@@ -149,17 +158,26 @@ def describe(limits, context=None):
     session, the share isn't a number yet."""
     percent = (context or {}).get("own_files_percent")
     share = f"{percent()}%" if percent is not None else "a share"
+    question = tools.question_tool() or "the question tool"
     return (
         "Change your own files, which every session reads at its start: SOUL.md "
         "(target soul: your character), the user's ZERO.md (target user: the "
         "user, their machines, their instructions and what you remember) and "
         "the project's ZERO.md (target project: at the git root, else the "
-        "workspace). add puts text at the end of a heading's section (the "
+        "workspace). Each fact belongs in one file. Memory entries are dated "
+        "bullets; pruning stale entries keeps room for current ones. "
+        "add puts text at the end of a heading's section (the "
         "heading is made when missing; with none, at the end of the file); "
         "replace swaps old_text for text; remove deletes old_text. old_text "
-        f"occurs exactly once. Each change goes first to {TO_APPROVER}. A "
-        "change's result holds the file as it then reads, for this session; "
-        "later sessions read it at their start, the three files in "
+        "occurs exactly once. Every edit needs the user's go on the exact change. "
+        f"Use {question} with proposed_call containing this tool and its "
+        "complete arguments, and a question explaining why. The app shows "
+        "the exact edit. After the user's approval, make that call; changed "
+        "file contents or a different edit need a new approval. Neither the "
+        "judge nor another agent can approve it. A change's result makes "
+        "the updated instructions live in this session; "
+        "disk edits alone do not. Later sessions read the files at their "
+        "start, the three files in "
         f"{share} of their context's line together, a longer one cut with a "
         "note of where it goes on. The file tools don't change these files; "
         "the user edits them by hand too."
@@ -171,7 +189,8 @@ def describe(limits, context=None):
     optional=("text", "old_text", "heading", "reason"),
     summary=summary,
     ready=lambda context: context.get("own_files") is not None,
-    crossing=crossing,
+    needs_permission=lambda args: False,
+    user_approval=proposal,
     target=({"type": "string", "enum": list(TARGETS)}, "Which file"),
     action=({"type": "string", "enum": list(ACTIONS)}, "What to do"),
     text=("string", "For add, the text; for replace, what takes old_text's place"),
@@ -180,7 +199,7 @@ def describe(limits, context=None):
     reason=("string", "Why the change"),
 )
 def memory(target, action, text=None, old_text=None, heading=None, reason="",
-           own_files=None):
+           own_files=None, notes=None):
     """`own_files`: the session's {target: path}; the project's is None for a
     workspace of /."""
     if target not in TARGETS:
@@ -191,15 +210,28 @@ def memory(target, action, text=None, old_text=None, heading=None, reason="",
             "Not changed: this session's workspace is the whole machine (/), "
             "which has no project ZERO.md."
         )
-    path = Path(path)
-    try:
-        before = path.read_text()
-    except FileNotFoundError:
-        before = ""
-    after = changed(before, action, text, old_text, heading)
-    if isinstance(after, Refusal):
-        return after.format(name=path)
-    store(path, after)
+    path = Path(os.path.realpath(path))
+    args = {"target": target, "action": action, "text": text,
+            "old_text": old_text, "heading": heading, "reason": reason}
+    approved = (notes or {}).get("user_approval")
+    if not approved:
+        return tools.Result("Not changed: the user has not approved this edit.",
+                            failed=True)
+    with paths.changing(path):
+        current = proposal(args, {"own_files": own_files})
+        if current["state"] != approved["state"]:
+            return tools.Result(
+                "Not changed: the file or edit changed after approval.",
+                failed=True,
+            )
+        try:
+            before = path.read_text()
+        except FileNotFoundError:
+            before = ""
+        after = changed(before, action, text, old_text, heading)
+        if isinstance(after, Refusal):
+            return tools.Result(after.format(name=path), failed=True)
+        store(path, after)
     if action == "add":
         under = f" under “{title(heading)}”" if heading and title(heading) else ""
         done = f"Added to {path}{under}."

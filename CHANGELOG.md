@@ -3,6 +3,19 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.6
+
+- ZERO shows its proposed edit to your personal or project instructions and
+  waits for your approval, including in automatic modes. Approval covers one
+  edit to the file you reviewed.
+- New installations start with space for your own instructions and personality.
+  General behavior and memory guidance travel with the application.
+- Private input can collect an offline value such as a document reference.
+  ZERO receives distinct instructions after Save and Cancel. In repeated
+  model trials it sometimes still explained the request without opening the form.
+- Release builds and publication check every application file against the
+  registered development checkout.
+
 ## 0.7.7.4.5
 
 - Completed replies open with a nonblank answer. Click Why or Next to fold

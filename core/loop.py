@@ -803,8 +803,9 @@ class Session:
         turn.unpark = None
         if "private_input" in call.notes:
             def private_answered():
-                call.result = fields["text"]
                 call.ran = fields.get("choice") == "yes"
+                results = self.tool_context.get("private_input_results", {})
+                call.result = results.get(fields.get("choice"), fields["text"])
                 self.answer(call)
 
             return self.run_calls(step, later, private_answered)

@@ -54,7 +54,14 @@ class PermissionsService(Service):
 
     def reply(self, sid, ask, payload):
         if ask.get("kind") == "question":
-            return picked(ask, payload), None
+            choice = picked(ask, payload)
+            if (ask.get("notes", {}).get("approval_proposal")
+                    and payload.get("reply_to") == ask["ask"]
+                    and choice is None):
+                verdict = self.consent(sid, {**ask, "command": ask["why"]},
+                                       payload["text"])
+                return chosen_answer(verdict, ask), verdict
+            return choice, None
         choice, verdict = picked(ask, payload), None
         if payload.get("reply_to") == ask["ask"] and choice is None:
             verdict = self.consent(sid, ask, payload["text"])

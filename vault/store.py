@@ -49,10 +49,12 @@ def check_labels(labels):
         raise VaultError("Description and username must be text.")
     for key in ("sites", "parts"):
         items = labels[key]
-        if (not isinstance(items, list) or not items
+        if (not isinstance(items, list)
                 or any(not isinstance(item, str) or not item.strip()
                        for item in items) or len(set(items)) != len(items)):
-            raise VaultError("Sites and parts must be nonempty distinct text lists.")
+            raise VaultError("Sites and parts must be lists of distinct nonempty text.")
+    if not labels["parts"]:
+        raise VaultError("At least one private field is required.")
     if any(not NAME.fullmatch(part) for part in labels["parts"]):
         raise VaultError("Part names use the same characters as entry names.")
     if len(json.dumps(labels)) > 16000 or len(labels["parts"]) > 32:

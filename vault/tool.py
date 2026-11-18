@@ -7,13 +7,24 @@ from vault.store import VaultError, check_labels
 
 NAME = "vault"
 
+# These receipts reach the next model step without any private value.
+SAVED = (
+    "Input supplied. The requested operation can proceed. The saved entry "
+    "remains available after use. Removal is a separate user request."
+)
+CANCELLED = (
+    "Input cancelled. The user has closed this request for the value in every "
+    "channel. They already saw what was needed and chose Cancel. The only new "
+    "information for them is which work could not be completed."
+)
+
 
 def problems(args):
     action = args.get("action")
     if action not in ("find", "add", "update", "delete"):
         return "action is find, add, update or delete"
     if action == "find" and not str(args.get("query", "")).strip():
-        return "find needs a query describing the site or credential"
+        return "find needs a query describing the private information"
     if action == "delete" and not str(args.get("name", "")).strip():
         return "delete needs the entry name"
     if action in ("add", "update"):
@@ -46,44 +57,21 @@ def describe(limits, context=None):
     service = (context or {}).get("vault")
     count = len(service.labels()) if service is not None else 0
     return (
-        f"Encrypted vault: {count} entries. Passwords, API keys and session "
-        "cookies can authenticate tools as the user's account without exposing "
-        "their values to you. Find returns matching labels and part names; "
-        "a saved match is usable without another input form. Added entries "
-        "remain available for later tasks until deleted. "
-        "Find locates existing credentials for the requested access; missing "
-        "credentials are collected by add. An explanation that credentials "
-        "are needed does not open a form or obtain them. "
-        "Calling add or update with labels opens the user's masked input form "
-        "and pauses this turn. You fill the labels; the user enters only the "
-        "values in that form, outside the conversation. Every listed part "
-        "requires a nonempty value before saving. Saving resumes your "
-        "turn, so you can use the entry for the task. The form is the private "
-        "handoff: the user can supply the value or cancel there, without a "
-        "separate preliminary question. Cancellation leaves this attempt "
-        "without the requested value; it does not authorize obtaining that "
-        "value another way. "
-        "For add/update, input_form supplies the task-specific title, why "
-        "the information is needed, and each field's readable label and "
-        "instructions for finding and copying the exact value. These appear "
-        "beside masked fields and address a user who does not know your tools. "
-        "The app supplies the storage, retention and privacy explanation. "
-        "Those facts are application-owned; input_form describes the task "
-        "and finding/copying steps, not storage guarantees. A task-specific "
-        "purpose does not make a saved entry single-use or automatically "
-        "delete it. "
-        "The user needs the value's location and format, "
-        "not knowledge of this tool or of HTTP header construction. "
-        "An authorization failure alone does not identify the credential "
-        "type or cookie name. Asking for a whole Cookie header still assumes "
-        "cookie authentication; it does not resolve an unknown method. A "
-        "missing method calls for site documentation or a focused factual "
-        "question about how the user signs in, not a guessed private field. "
-        "Delete removes the named entry. "
+        f"Private information store: {count} entries. Values remain outside "
+        "the conversation. Find returns labels and part names. A matching "
+        "saved entry can supply the task's input. When the required value is "
+        "missing and its source and format are known, add opens the masked form "
+        "and waits for the user. The form itself is the request. An access error "
+        "alone does not identify a field. Unclear requirements need verification "
+        "or a focused non-secret question. Add/update takes labels and input_form. "
+        "The title names the task. The purpose says what the value identifies or "
+        "enables. Each field explains exactly where to find it and what to enter, "
+        "such as the Reference number beside Date on a letter. Every part is "
+        "required. The app supplies the privacy and retention text. Saving makes "
+        "the entry available for this and later tasks. Deletion requires a "
+        "separate user request. Cancellation ends the request for the value. "
         "In any tool argument, ⟦vault:name/part⟧ is replaced with that value "
         "immediately before execution; ⟦vault:name⟧ works for a one-part entry. "
-        "A shell HTTP client's cookie or authorization header can contain a "
-        "stand-in. "
         "Returned values appear as stand-ins in results and logs."
     )
 
@@ -98,7 +86,8 @@ LABELS = {
         "kind": {"type": "string", "enum":
                  ["login", "key", "card", "identity", "note"]},
         "description": {"type": "string"},
-        "sites": {"type": "array", "items": {"type": "string"}},
+        "sites": {"type": "array", "items": {"type": "string"},
+                  "description": "Associated sites; [] when none apply"},
         "username": {"type": "string", "description":
                      "Account username, or empty when unknown or not needed"},
         "parts": {"type": "array", "items": {"type": "string"},
@@ -113,8 +102,8 @@ INPUT_FORM = {
     "properties": {
         "title": {"type": "string", "description": "The user's task"},
         "instructions": {"type": "string", "description":
-                         "Why the task needs this information; the app "
-                         "separately explains storage and privacy"},
+                         "One sentence explaining what the task needs this field "
+                         "for. The app supplies all handling and retention text."},
         "fields": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
             "required": ["part", "label", "instructions"],
@@ -143,7 +132,7 @@ INPUT_FORM = {
                             "fact": "delete a saved vault entry", "why": ""}
                            if args.get("action") == "delete" else None),
     action=("string", "find, add, update or delete"),
-    query=("string", "For find: site or words describing the credential"),
+    query=("string", "For find: words describing the private information"),
     name=("string", "For delete: the exact entry name"),
     labels=(LABELS, "For add or update: metadata and part names, without values"),
     input_form=(INPUT_FORM, "Required for add/update: the user's input form"),

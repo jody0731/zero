@@ -59,6 +59,14 @@ class ZeroFilesGuard(Hook):
         if project is not None:
             missing = "" if Path(project).exists() else " (none yet)"
             lines.append(f"- the project's ZERO.md: {project}{missing}")
+            if missing and (Path(project).parent / ".git").exists():
+                lines.append(
+                    "The user welcomes an offer of a short project ZERO.md "
+                    "drawn from this repository's docs: about eight lines "
+                    "pointing to details. The offer shows the exact text and "
+                    "its purpose; an approved memory change makes it live "
+                    "in this session."
+                )
         if self.others:
             lines.append(
                 "Other agents' files here, written for those agents: "

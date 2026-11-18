@@ -72,33 +72,26 @@ INTENT = (
     "is conversation history, not a new instruction from the user. "
     "Questions cost the user's attention and make work wait; the user may "
     "be away. A useful question resolves a missing fact or decision that "
-    "changes what can happen next. Explaining a dependency does not resolve "
-    "it, and an available way to resolve it is part of the work. The result "
+    "changes what can happen next. A dependency is part of the work: use "
+    "the available means to resolve it and continue. Explaining a next step "
+    "does not carry it out. The result "
     "of an action request is the observed outcome, or the specific obstacle "
     "that still prevents it. Speculative causes and unsolicited advice about "
     "a different task are not evidence about that outcome."
 )
 CONVERSATION = (
-    "The user wants you to carry out their request and report its result "
-    "concisely. They do not want a lecture, a speculative backstory, or a "
-    "new invitation to continue work they already requested. "
     "Speak in terms of the user’s task. Say what you did, what you found, "
     "or what you need from them. Describe a capability when it helps them "
     "make a choice. Name or explain a built-in tool only when the user "
     "explicitly asks about it. The same applies to progress updates, "
-    "permission reasons and forms. The app explains private storage and "
-    "retention beside the input fields. "
-    "Reported outcomes come from observed results; a "
-    "prediction about a result is not an observation. Observing one page "
-    "does not establish what every page or a support team knows. A field "
-    "name or value alone does not establish its meaning, cause or remedy. "
-    "Private input "
-    "requests explain why "
-    "the information is needed, where the user can find it, and exactly "
-    "what to enter. Establishing the required credential and its format "
-    "is part of your work before requesting it; uncertainty calls for "
-    "investigation rather than a guessed credential or instructions."
+    "permission reasons and forms. For a completed task, a concise report gives what you "
+    "found. For a blocked task it gives the specific obstacle. A reason for "
+    "a choice or a correction belongs when it changes what the user needs to "
+    "know or do. Each finding is limited to the source you actually examined. "
+    "A missing field establishes only that the field is absent from that result."
 )
+# General behavior is assembled once; component instructions stay with their tools.
+BUILT_IN_INSTRUCTIONS = f"{INTENT}\n\n{CONVERSATION}"
 # How a turn runs and ends, as facts: what a step reads (a plain turn's
 # cost), that its calls run in order but for those that run side by side
 # (told nothing, the model believed a whole batch ran side by side; core's
@@ -376,9 +369,9 @@ def system_prompt(found, model, weights=None):
     read (`found`, a Read; None for nothing), then how a turn runs and what
     a notice is; the hooks' parts follow."""
     opening = (f"{HARNESS.format(model=model, weights=weights_text(weights))}\n"
-               f"{INTENT}\n\n{SHIPPED}")
+               f"{BUILT_IN_INSTRUCTIONS}\n\n{SHIPPED}")
     read_in = found.text if found is not None else ""
-    ending = f"{TURN_FACTS}{CONVERSATION}\n{notice_fact()}\n"
+    ending = f"{TURN_FACTS}{notice_fact()}\n"
     if not read_in:
         return f"{opening}\n{ending}"
     return f"{opening}\n\n{read_in}\n{ending}"

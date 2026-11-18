@@ -11,6 +11,7 @@ from vault.boundary import Boundary
 from vault.hooks import VaultInput
 from vault.search import find
 from vault.store import Vault, VaultError
+from vault.tool import CANCELLED, SAVED
 
 
 class VaultService(Service):
@@ -41,6 +42,7 @@ class VaultService(Service):
         session.tool_context.update({
             "vault": self.vault, "tool_boundary": self.boundary,
             "vault_find": lambda query, notes: self.find(session, query, notes),
+            "private_input_results": {"yes": SAVED, "no": CANCELLED},
         })
         session.hooks.hooks.insert(0, VaultInput(self.vault))
 
@@ -82,7 +84,7 @@ class VaultService(Service):
         # Only this receipt enters the durable inbox. The encrypted file keeps
         # the ask receipt too, so a retry after a crash cannot overwrite values.
         status = ("Private input cancelled." if cancelled
-                  else "Private information saved; ready to use for the task.")
+                  else "Private information saved.")
         self.runtime.admit(Message(
             id=message_id, text=status, source="user",
             session=sid, reply_to=ask_id,

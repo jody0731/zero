@@ -112,7 +112,9 @@ def crossing(args):
         f"network. It goes first to {TO_APPROVER}",
     )},
     reason=("string", f"With {OUTSIDE_ARGUMENT}, or for a job past the session's "
-            "limit: why the task needs it"),
+            "limit. The user sees this sentence. It names the operation and "
+            "why the task needs that access or time. Internal tool choices "
+            "are irrelevant to this decision."),
     background=(
         "boolean",
         "Run it as a background job: the call returns at once with the job's id, "

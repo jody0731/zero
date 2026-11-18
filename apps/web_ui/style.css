@@ -432,9 +432,13 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
 .entry.you .bubble { border: 0; padding: 0; background: none; font-size: 15px; }
 .who { margin-bottom: 12px; font-size: 12px; font-weight: 400; }
 .who b { font-size: 15px; }
-.turn > .who::before { content: ""; display: inline-block; width: 14px;
-  height: 20px; background: url('/ui/favicon-light.svg') center / contain no-repeat;
-  vertical-align: middle; margin-right: 8px; }
+/* One history box follows the live reply and returns above the final text. */
+.turn-progress { display: flex; align-items: flex-start; gap: 8px; }
+.turn-progress .process { flex: 1; min-width: 0; }
+.turn-progress.active::before {
+  content: ""; flex: 0 0 36px; height: 36px;
+  background: var(--progress-logo) center / contain no-repeat;
+}
 .reply { font-size: 15px; line-height: 1.7; }
 .reply p, .reply ul, .reply ol { margin: 12px 0; }
 .reply h1 { font-size: 23px; } .reply h2 { font-size: 20px; }
@@ -482,8 +486,18 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
 }
 
 .brand img { display: block; width: 100%; height: 100%; }
-@media (prefers-color-scheme: dark) {
-  .turn > .who::before { background-image: url('/ui/favicon-dark.svg'); }
+:root {
+  --progress-logo: url('/ui/favicon-light.svg');
+  --still-logo: url('/ui/favicon-light-still.svg');
+}
+:root[data-theme="dark"] {
+  --progress-logo: url('/ui/favicon-dark.svg');
+  --still-logo: url('/ui/favicon-dark-still.svg');
+}
+.turn-progress.waiting::before { background-image: var(--still-logo); }
+@media (prefers-reduced-motion: reduce) {
+  :root { --progress-logo: url('/ui/favicon-light-still.svg'); }
+  :root[data-theme="dark"] { --progress-logo: url('/ui/favicon-dark-still.svg'); }
 }
 
 /* Message metadata and actions sit outside the user's shaded message. */
@@ -491,11 +505,6 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
 .entry.you .bubble { padding: 16px 20px; background: var(--panel);
   border-radius: 6px; }
 .who { display: flex; align-items: center; gap: 4px; min-height: 22px; }
-.turn > .who::before { flex: 0 0 14px; margin-right: 4px; height: 22px; }
-:root[data-theme="light"] .turn > .who::before {
-  background-image: url('/ui/favicon-light.svg'); }
-:root[data-theme="dark"] .turn > .who::before {
-  background-image: url('/ui/favicon-dark.svg'); }
 .session-actions[open] { grid-column: 4; background: none; }
 .session-menu { position: fixed; inset: auto; margin: 0; width: 168px;
   padding: 5px; border: 1px solid var(--line); border-radius: 8px;

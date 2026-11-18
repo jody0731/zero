@@ -21,7 +21,6 @@
   // A hidden page lets go of its stream after this long
   const HIDDEN_SECONDS = 60;
   const PAGE_RECORDS = 150;
-  const RESULT_CHARS = 20000;
   const WIDTHS = { left: [245, 200, 460], right: [285, 260, 640] };
 
   const state = {
@@ -203,6 +202,10 @@
     }
     if (event.settled) {
       clearDraft();
+      if (state.turn) {
+        if (event.settled.ask) showProgress(state.turn, state.turn.phase, true);
+        else finishProgress(state.turn, "Completed");
+      }
       markSeen();
       const session = state.open;
       look("session/user_messages", { session }).then((reply) => {
@@ -395,6 +398,7 @@
     state.openVersion = (state.openVersion || 0) + 1;
     saveComposerDraft();
     state.open = null;
+    state.turn = null;
     restoreComposerDraft();
     $("session-title").textContent = "";
     $("timeline").replaceChildren();
@@ -427,6 +431,8 @@
       "details[open][data-call]")).map((node) => node.dataset.call));
     // Drawn again whole, the earlier ones first
     const records = reply.records.concat(state.records);
+    const draft = state.draft;
+    const progressOpen = state.turn?.process.open;
     state.earlier = reply.earlier_count;
     state.records = [];
     state.calls = new Map();
@@ -447,6 +453,9 @@
         fold.open = true;
       }
     }
+    if (draft) drawDraft(draft);
+    if (state.turn && progressOpen !== undefined) state.turn.process.open = progressOpen;
+    drawAsk();
     timeline.scrollTop = timeline.scrollHeight - height;
   }
 
@@ -493,7 +502,7 @@
     state.records.push(record);
     if (UNDRAWN.has(record.type) || record.audience === "model") return;
     if (record.type === "user" && !record.steer) {
-      state.turn = null;
+      if (state.turn) finishProgress(state.turn, "Progress");
       state.turnStarted = record.time;
     }
     clearDraft();
@@ -511,6 +520,7 @@
     if (node) {
       if (record.type === "user" && !record.notice && !record.steer) {
         timeline.append(node);
+        turnFor(record);
       } else if (record.type === "answer" || record.type === "user") {
         const turn = turnFor(record);
         (record.notice ? turn.process : turn.replies).append(node);
@@ -573,16 +583,7 @@
       const name = record.notice_source || "Background notice";
       node.append(who(name, record));
       node.append(el("div", "bubble", record.text || ""));
-      if (record.reference) {
-        const link = el("button", null, "Show job");
-        link.addEventListener("click", () => {
-          showPanel("details");
-          const view = Array.from(document.querySelectorAll("[data-job]"))
-            .find((item) => item.dataset.job === record.reference);
-          if (view) { view.open = true; view.scrollIntoView(); }
-        });
-        node.append(link);
-      }
+      if (record.reference) node.append(jobLink(record.reference));
       return node;
     }
     const more = record.steer ? "steer" : (record.continue ? "go on" : "");
@@ -606,7 +607,10 @@
       record.notice ? `Following up on ${record.notice_source}` : ""));
     const process = el("details", "process");
     const summary = el("summary", null, "Thinking…");
-    process.append(summary);
+    const liveStep = el("div", "process-step live-step", "Thinking");
+    process.append(summary, liveStep);
+    const progress = el("div", "turn-progress active");
+    progress.append(process);
     const replies = el("div", "turn-replies");
     const copy = el("button", "message-action", "Copy response");
     copy.type = "button";
@@ -619,15 +623,17 @@
         setTimeout(() => { copy.textContent = "Copy response"; }, 1800);
       } catch (error) { alert(`Could not copy: ${error.message}`); }
     });
-    node.append(process, replies, copy);
+    node.append(replies, progress, copy);
     $("timeline").append(node);
-    state.turn = { node, process, summary, replies, copy, texts };
+    state.turn = { node, progress, process, summary, replies, copy, texts, liveStep,
+      phase: "Thinking" };
     return state.turn;
   }
 
   function assistantEntry(record) {
     const message = record.message || {};
     const turn = turnFor(record);
+    turn.liveStep.remove();
     const node = el("div", "process-step");
     node.dataset.seq = record.seq;
     turn.process.append(node);
@@ -648,80 +654,64 @@
       turn.texts.push(text);
       turn.copy.hidden = false;
     }
-    const summaries = record.call_summaries || {};
+    showProgress(turn, message.tool_calls?.length ? "Working" : "Thinking");
     for (const call of message.tool_calls || []) {
-      const fn = call.function || {};
-      const line = summaries[call.id] || `${fn.name}(${fn.arguments || ""})`;
-      const fold = el("details", "call");
-      fold.append(el("summary", null, line));
-      fold.dataset.call = call.id;
-      state.calls.set(call.id, fold);
-      node.append(fold);
-      turn.summary.textContent = line;
+      node.append(workEntry(call.id));
     }
-    if (!message.content && !(message.tool_calls || []).length
-        && !message.reasoning_content) return null;
     return null;
   }
 
-  function toolResult(fold, record) {
-    const summary = fold.querySelector("summary");
-    const job = record.fields && record.fields.job_id;
-    if (job) {
-      const view = jobView({ id: job, command: summary.textContent,
-        state: "running", state_text: "Running", exit_code: null });
-      view.dataset.job = job;
-      fold.append(view);
-    }
-    for (const [flag, word] of [["denied", "refused"], ["failed", "failed"],
-                                ["bad_call", "bad call"]]) {
-      if (record[flag]) summary.append(el("span", `tag ${flag === "bad_call"
-        ? "bad" : flag}`, word));
-    }
-    const text = String(record.result || "");
-    fold.append(el("pre", null, text.length > RESULT_CHARS
-      ? text.slice(0, RESULT_CHARS) + `\n… +${text.length - RESULT_CHARS}`
-      : text));
-    if (record.saved_path) {
-      fold.append(el("div", "saved", record.saved_path));
-    }
+  function workEntry(call) {
+    const fold = el("details", "call");
+    fold.dataset.call = call;
+    fold.append(el("summary", null, "Working"), el("div", "body", "In progress"));
+    state.calls.set(call, fold);
+    return fold;
+  }
+
+  function jobLink(id) {
+    const link = el("button", null, "Show job");
+    link.type = "button";
+    link.addEventListener("click", () => {
+      showPanel("details");
+      const view = Array.from($("details").querySelectorAll("[data-job]"))
+        .find(item => item.dataset.job === id);
+      if (!view) return;
+      view.closest(".job-group").open = true;
+      view.open = true;
+      view.scrollIntoView();
+    });
+    return link;
   }
 
   function toolEntry(record) {
-    const fold = state.calls.get(record.call);
-    if (fold) {
-      toolResult(fold, record);
-      return null;
+    let fold = state.calls.get(record.call);
+    if (!fold) {
+      // The history window can start between a call and its result.
+      fold = workEntry(record.call);
+      const step = el("div", "process-step");
+      step.dataset.seq = record.seq;
+      step.append(fold);
+      const turn = turnFor(record);
+      turn.liveStep.remove();
+      showProgress(turn, "Working");
+      turn.process.append(step);
     }
-    // Its call came before the records on the page
-    const node = el("div", "process-step");
-    const alone = el("details", "call");
-    alone.append(el("summary", null, `${record.tool} ${record.arguments || ""}`));
-    toolResult(alone, record);
-    node.append(alone);
-    turnFor(record).process.append(node);
+    fold.querySelector(".body").textContent = record.denied ? "Declined"
+      : record.failed || record.bad_call ? "Failed" : "Finished";
+    if (record.fields?.job_id) fold.append(jobLink(record.fields.job_id));
     return null;
   }
 
   function askEntry(record) {
-    const fold = state.calls.get(record.call);
-    if (fold) {
-      fold.querySelector("summary").append(el("span", "tag asked",
-        record.kind === "secret" ? "private input"
-          : record.kind === "question" ? "question" : "permission"));
-      return null;
-    }
-    const node = el("div", "notice");
-    if (record.kind === "secret") {
-      node.textContent = record.about || "Private information needed";
-      return node;
-    }
-    const label = record.kind === "question" ? "Question" : "Permission";
-    node.textContent = `${label} · ${record.command || record.tool || ""}`;
-    return node;
+    const turn = turnFor(record);
+    showProgress(turn, turn.phase, true);
+    return null;
   }
 
   function answerEntry(record) {
+    const turn = turnFor(record);
+    showProgress(turn, turn.phase, false);
     const node = el("div", "entry you");
     node.append(who(sourceWho(record.source), record, "answered"));
     const words = record.choice && record.choice !== record.text
@@ -743,10 +733,30 @@
       turn.texts.push(record.answer);
       turn.copy.hidden = false;
     }
-    turn.summary.textContent = text || "Completed";
+    finishProgress(turn, text || "Completed");
     if (failed) turn.summary.classList.add("failed");
-    state.turn = null;
     return null;
+  }
+
+  function showProgress(turn, phase,
+                        waiting = turn.progress.classList.contains("waiting")) {
+    turn.phase = phase;
+    turn.progress.classList.toggle("waiting", waiting);
+    const label = waiting ? "Waiting for you" : phase + "…";
+    if (turn.summary.textContent !== label) turn.summary.textContent = label;
+  }
+
+  function finishProgress(turn, label) {
+    turn.liveStep.remove();
+    for (const fold of state.calls.values()) {
+      const status = fold.querySelector(".body");
+      if (status.textContent === "In progress") status.textContent = "No result recorded";
+    }
+    turn.summary.textContent = label;
+    turn.progress.classList.remove("active", "waiting");
+    turn.node.insertBefore(turn.progress, turn.replies);
+    state.turn = null;
+    state.calls.clear();
   }
 
   function noteEntry(record) {
@@ -761,22 +771,23 @@
   }
 
   function drawDraft(draft) {
+    state.draft = draft;
     const turn = turnFor({});
     const following = atEnd();
     let node = $("draft");
     if (!node) {
       node = el("div", "entry zero draft");
       node.id = "draft";
-      node.append(el("div", "public-reply"), el("div", "sub"));
+      node.append(el("div", "public-reply"));
     }
     const text = draft.reply && !draft.reply.answer?.trim() ? "" : draft.text;
     drawPublicReply(node.firstElementChild, draft.reply, text, state.lastSeq + 1);
-    const calls = draft.calls || [];
-    node.lastElementChild.textContent = calls.length ? calls.join(", ") + " …"
-      : (draft.reasoning && !text ? "…" : "");
-    turn.summary.textContent = calls.length ? calls.join(", ") : "Thinking…";
-    const parent = text ? turn.replies : turn.process;
-    if (node.parentNode !== parent) parent.append(node);
+    const phase = draft.calls?.length || text ? "Working" : "Thinking";
+    showProgress(turn, phase);
+    turn.liveStep.textContent = phase;
+    if (!turn.liveStep.parentNode) turn.process.append(turn.liveStep);
+    node.hidden = !text;
+    if (node.parentNode !== turn.replies) turn.replies.append(node);
     if (following) scrollToEnd();
   }
 
@@ -841,6 +852,7 @@
   }
 
   function clearDraft() {
+    state.draft = null;
     const old = $("draft");
     if (old) old.remove();
   }
@@ -936,6 +948,10 @@
     const box = $("ask");
     const row = rowOf(state.open);
     const ask = row && row.ask;
+    const waiting = Boolean(ask) || row?.state === "waiting";
+    if (state.turn && (waiting || !box.hidden)) {
+      showProgress(state.turn, state.turn.phase, waiting);
+    }
     $("composer").hidden = !row || Boolean(ask);
     $("stop").hidden = !(row && (row.state === "running" || row.ask));
     if (!ask) {
@@ -1600,14 +1616,6 @@
       for (const job of reply.jobs) {
         state.jobs.set(job.id, job);
         if (job.state !== "running") state.stoppingJobs.delete(job.id);
-        for (const old of $("timeline").querySelectorAll("[data-job]")) {
-          if (old.dataset.job === job.id) {
-            const fresh = jobView(job);
-            fresh.dataset.job = job.id;
-            fresh.open = old.open;
-            old.replaceWith(fresh);
-          }
-        }
         const item = jobView(job);
         const key = `${row.id}:job:${job.id}`;
         item.open = state.expandedJobs.get(key) || false;
@@ -2345,7 +2353,7 @@
     document.querySelector(".brand img").src = `/ui/wordmark-${theme}${still}.svg`;
     document.querySelectorAll('link[rel="icon"]').forEach((icon) => {
       icon.removeAttribute("media");
-      icon.href = `/ui/favicon-${theme}.svg`;
+      icon.href = `/ui/favicon-${theme}${still}.svg`;
     });
   }
   darkScheme.addEventListener("change", applyTheme);

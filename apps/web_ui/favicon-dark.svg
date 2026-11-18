@@ -1,35 +1,180 @@
 <svg xmlns="http://www.w3.org/2000/svg"
- viewBox="-2 8 76 76" role="img" aria-label="ZERO">
-<circle cx="26" cy="16" r="4.45" fill="#ff6157">
+ viewBox="-9 1 90 90" role="img" aria-label="ZERO">
+<circle cx="-4" cy="6" r="4.45" fill="#303132"/>
+<circle cx="6" cy="6" r="4.45" fill="#303132"/>
+<circle cx="16" cy="6" r="4.45" fill="#303132"/>
+<circle cx="26" cy="6" r="4.45" fill="#303132"/>
+<circle cx="36" cy="6" r="4.45" fill="#303132"/>
+<circle cx="46" cy="6" r="4.45" fill="#303132"/>
+<circle cx="56" cy="6" r="4.45" fill="#303132"/>
+<circle cx="66" cy="6" r="4.45" fill="#303132"/>
+<circle cx="76" cy="6" r="4.45" fill="#303132"/>
+<circle cx="-4" cy="16" r="4.45" fill="#303132"/>
+<circle cx="6" cy="16" r="4.45" fill="#303132"/>
+<circle cx="16" cy="16" r="4.45" fill="#303132"/>
+<circle cx="26" cy="16" r="4.45" fill="#f15e55">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-0.12s"
+ repeatCount="indefinite"/>
 </circle>
 <circle cx="36" cy="16" r="4.45" fill="#ff6157">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="0.00s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="46" cy="16" r="4.45" fill="#ff6157">
+<circle cx="46" cy="16" r="4.45" fill="#303132">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-1.80s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="16" cy="26" r="4.45" fill="#ff6157">
+<circle cx="56" cy="16" r="4.45" fill="#303132"/>
+<circle cx="66" cy="16" r="4.45" fill="#303132"/>
+<circle cx="76" cy="16" r="4.45" fill="#303132"/>
+<circle cx="-4" cy="26" r="4.45" fill="#303132"/>
+<circle cx="6" cy="26" r="4.45" fill="#303132"/>
+<circle cx="16" cy="26" r="4.45" fill="#e35b52">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-0.24s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="56" cy="26" r="4.45" fill="#ff6157">
+<circle cx="26" cy="26" r="4.45" fill="#303132"/>
+<circle cx="36" cy="26" r="4.45" fill="#303132"/>
+<circle cx="46" cy="26" r="4.45" fill="#303132"/>
+<circle cx="56" cy="26" r="4.45" fill="#3e3434">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-1.68s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="16" cy="36" r="4.45" fill="#ff6157">
+<circle cx="66" cy="26" r="4.45" fill="#303132"/>
+<circle cx="76" cy="26" r="4.45" fill="#303132"/>
+<circle cx="-4" cy="36" r="4.45" fill="#303132"/>
+<circle cx="6" cy="36" r="4.45" fill="#303132"/>
+<circle cx="16" cy="36" r="4.45" fill="#d65750">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-0.36s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="56" cy="36" r="4.45" fill="#ff6157">
+<circle cx="26" cy="36" r="4.45" fill="#303132"/>
+<circle cx="36" cy="36" r="4.45" fill="#303132"/>
+<circle cx="46" cy="36" r="4.45" fill="#303132"/>
+<circle cx="56" cy="36" r="4.45" fill="#4c3737">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-1.56s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="16" cy="46" r="4.45" fill="#ff6157">
+<circle cx="66" cy="36" r="4.45" fill="#303132"/>
+<circle cx="76" cy="36" r="4.45" fill="#303132"/>
+<circle cx="-4" cy="46" r="4.45" fill="#303132"/>
+<circle cx="6" cy="46" r="4.45" fill="#303132"/>
+<circle cx="16" cy="46" r="4.45" fill="#c8544d">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-0.48s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="56" cy="46" r="4.45" fill="#ff6157">
+<circle cx="26" cy="46" r="4.45" fill="#303132"/>
+<circle cx="36" cy="46" r="4.45" fill="#303132"/>
+<circle cx="46" cy="46" r="4.45" fill="#303132"/>
+<circle cx="56" cy="46" r="4.45" fill="#593b39">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-1.44s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="16" cy="56" r="4.45" fill="#ff6157">
+<circle cx="66" cy="46" r="4.45" fill="#303132"/>
+<circle cx="76" cy="46" r="4.45" fill="#303132"/>
+<circle cx="-4" cy="56" r="4.45" fill="#303132"/>
+<circle cx="6" cy="56" r="4.45" fill="#303132"/>
+<circle cx="16" cy="56" r="4.45" fill="#ba514b">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-0.60s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="56" cy="56" r="4.45" fill="#ff6157">
+<circle cx="26" cy="56" r="4.45" fill="#303132"/>
+<circle cx="36" cy="56" r="4.45" fill="#303132"/>
+<circle cx="46" cy="56" r="4.45" fill="#303132"/>
+<circle cx="56" cy="56" r="4.45" fill="#673e3c">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-1.32s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="16" cy="66" r="4.45" fill="#ff6157">
+<circle cx="66" cy="56" r="4.45" fill="#303132"/>
+<circle cx="76" cy="56" r="4.45" fill="#303132"/>
+<circle cx="-4" cy="66" r="4.45" fill="#303132"/>
+<circle cx="6" cy="66" r="4.45" fill="#303132"/>
+<circle cx="16" cy="66" r="4.45" fill="#ac4e48">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-0.72s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="56" cy="66" r="4.45" fill="#ff6157">
+<circle cx="26" cy="66" r="4.45" fill="#303132"/>
+<circle cx="36" cy="66" r="4.45" fill="#303132"/>
+<circle cx="46" cy="66" r="4.45" fill="#303132"/>
+<circle cx="56" cy="66" r="4.45" fill="#75413e">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-1.20s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="26" cy="76" r="4.45" fill="#ff6157">
+<circle cx="66" cy="66" r="4.45" fill="#303132"/>
+<circle cx="76" cy="66" r="4.45" fill="#303132"/>
+<circle cx="-4" cy="76" r="4.45" fill="#303132"/>
+<circle cx="6" cy="76" r="4.45" fill="#303132"/>
+<circle cx="16" cy="76" r="4.45" fill="#303132"/>
+<circle cx="26" cy="76" r="4.45" fill="#9e4b46">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-0.84s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="36" cy="76" r="4.45" fill="#ff6157">
+<circle cx="36" cy="76" r="4.45" fill="#914743">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-0.96s"
+ repeatCount="indefinite"/>
 </circle>
-<circle cx="46" cy="76" r="4.45" fill="#ff6157">
+<circle cx="46" cy="76" r="4.45" fill="#834441">
+<animate attributeName="fill" calcMode="discrete"
+ values="#ff6157;#f15e55;#e35b52;#d65750;#c8544d;#ba514b;#ac4e48;#9e4b46;
+ #914743;#834441;#75413e;#673e3c;#593b39;#4c3737;#3e3434;#303132"
+ dur="1.92s" begin="-1.08s"
+ repeatCount="indefinite"/>
 </circle>
+<circle cx="56" cy="76" r="4.45" fill="#303132"/>
+<circle cx="66" cy="76" r="4.45" fill="#303132"/>
+<circle cx="76" cy="76" r="4.45" fill="#303132"/>
+<circle cx="-4" cy="86" r="4.45" fill="#303132"/>
+<circle cx="6" cy="86" r="4.45" fill="#303132"/>
+<circle cx="16" cy="86" r="4.45" fill="#303132"/>
+<circle cx="26" cy="86" r="4.45" fill="#303132"/>
+<circle cx="36" cy="86" r="4.45" fill="#303132"/>
+<circle cx="46" cy="86" r="4.45" fill="#303132"/>
+<circle cx="56" cy="86" r="4.45" fill="#303132"/>
+<circle cx="66" cy="86" r="4.45" fill="#303132"/>
+<circle cx="76" cy="86" r="4.45" fill="#303132"/>
 </svg>

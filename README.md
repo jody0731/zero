@@ -197,8 +197,12 @@ The OS holds the listening port while ZERO sleeps. Opening the page starts the H
 door and the server as needed; both leave when idle. A visible page's light watches
 alone do not keep the server awake.
 
-Each turn has one ZERO heading. Its thinking, tool calls and background notices sit
-inside an expandable process; replies remain visible. The process starts collapsed.
+One folded progress box sits below the live reply. Open it to see Thinking and
+Working steps. The red O animates while ZERO works and rests beside **Waiting
+for you** while a question, permission prompt or private-input form is open.
+When the turn ends, the same box moves above the answer, keeps your fold choice
+and drops the O. Work history shows outcomes. Permission prompts show the
+action you are approving.
 The input grows to ten lines, then scrolls. The line below it reports context usage
 and the cached input-token share of the last model call, not a percentage of requests.
 
@@ -223,8 +227,8 @@ A draft clears only after a successful send; newer edits stay. If browser storag
 unavailable, the composer says the draft is kept only in the current tab.
 
 **Settings → General → Appearance** selects System, Light or Dark for this
-browser; the choice applies immediately. The dotted wordmark respects reduced
-motion, and the standalone O marks the browser tab. Both session panels share
+browser; the choice applies immediately. A red trail circles the O in the
+wordmark and browser tab icon. Reduced motion holds the trail still. Both panels share
 compact tree rows and expansion state. Selection changes the highlight, not the
 row height. Browser Find searches
 loaded conversation text; ZERO can retrieve context from other sessions itself.

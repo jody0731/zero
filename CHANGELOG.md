@@ -3,6 +3,16 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.9
+
+- The browser shows one folded progress box beneath ZERO’s live reply. The O
+  animates while ZERO thinks or works. When ZERO needs input, the box stays in
+  place with a still O and “Waiting for you”.
+- When a turn ends, its history moves above the answer and the O disappears.
+  Work steps show plain status. Permission prompts still show what you are approving.
+- The full ZERO wordmark and standalone O share a clockwise red trail.
+  Reduced motion uses a still frame.
+
 ## 0.7.7.4.8
 
 - When work is blocked, Answer reports what happened and Next shows what

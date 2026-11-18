@@ -3,6 +3,12 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.8
+
+- When work is blocked, Answer reports what happened and Next shows what
+  you can do to help ZERO continue. When you ask how to proceed, the steps
+  go directly in Answer. ZERO gives each instruction once.
+
 ## 0.7.7.4.7
 
 - ZERO defaults to Answer alone for conversation and routine results. Why is

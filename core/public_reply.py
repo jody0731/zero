@@ -20,18 +20,27 @@ INSTRUCTIONS = (
     '{"answer":"your answer","why":"","next":{"user":"","zero":""}}. '
     'Include every field. By default only Answer has text. Leave why, '
     'next.user and next.zero empty. Greetings, small talk and routine results '
-    'belong in Answer alone. A completed Answer is nonblank and stands on its '
-    'own. Put a requested explanation, blocker or question there. Use Why '
-    'only for a separate fact the user needs to interpret the answer. Use '
-    'Next only for a concrete action still needed '
-    'to finish the task. Give the user’s part first, then yours. Mention a '
-    'dependency when it matters. Include each action once. A tool call '
+    'belong in Answer alone. Give each point once, in the field that owns it. '
+    'Answer is nonblank. For requested work, finish Answer at the observed '
+    'result or blocker. Put the entire handoff in next.user, including a '
+    'request phrased as a question or an offer like “if you send it, I can '
+    'check it.” Use next.zero for distinct pending work in addition to the '
+    'user’s step, or for work pending on your side alone. When the user '
+    'asks for directions, advice or a reason, that is the requested answer. '
+    'For example, for “Review my draft” with no draft attached, Answer is '
+    '“I haven’t received the draft.” and next.user is “Attach the draft '
+    'here.” For “How do I send my draft?”, Answer is “Attach the draft here.” '
+    'and Next is empty. A question to clarify the goal itself can be the Answer. '
+    'Use Why only for a separate fact needed to interpret Answer. A tool call '
     'can have no accompanying text. '
     'Internal handoffs have their own format.'
 )
 CORRECTION = (
     "The previous reply did not fit the public reply format. Give the reply "
-    "with a nonblank Answer and all required fields. Work already done stands. "
+    "with a nonblank Answer and all required fields. For blocked work, end "
+    "Answer at the observed obstacle. Move the whole request for user input "
+    "into next.user, including any offer conditional on that input. If the "
+    "user asked for instructions, give them once in Answer. Work already done stands. "
     "This formatting step has no tools."
 )
 

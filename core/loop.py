@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from types import SimpleNamespace
 
-from core import history, tools
+from core import history, public_reply, tools
 from core.asking import (
     APPROVED, APPROVED_LATE, CANCELLED, DECLINED_STOP, NO, NOT_ASKED, choices,
 )
@@ -104,7 +104,8 @@ class Session:
     def system_text(self):
         """The system message as it would be written now."""
         start = self.rebuild() if self.rebuild is not None else self.system_start
-        return start + self.hooks.collect("system_prompt", self)
+        return (start + self.hooks.collect("system_prompt", self)
+                + "\n\n" + public_reply.INSTRUCTIONS)
 
     def marked(self):
         """The code mark a record with a system message keeps."""
@@ -349,6 +350,16 @@ class Session:
         turn.waiting = waited
         turn.answer = answer
         turn.cut_past_its_end = past_end
+        if answer is not None:
+            last = next((r for r in reversed(records) if r["type"] == "assistant"), {})
+            turn.reply = last.get("reply", public_reply.sections(answer))
+        for record in reversed(records):
+            if record["type"] == "user":
+                break
+            if record["type"] == "assistant":
+                if not record.get("invalid_reply"):
+                    break
+                turn.reply_format_errors += 1
         return turn
 
     def run(self, turn):
@@ -398,15 +409,13 @@ class Session:
 
     def run_step(self, step):
         """One model call plus its tool calls. Returns a Stop, or None."""
+        if step.turn.reply_format_errors >= 2:
+            return Stop("broken_replies", "The model could not format its reply.")
         stop = self.call_with_retries(step)
         if stop is not None:
             return stop
         reply = step.reply
-        step.cut_off = reply.finish_reason == "length"
-        step.calls = [Call(step, raw) for raw in reply.tool_calls]
-        # No text and no call is an API hiccup (DeepSeek warns of them), not an
-        # answer. It isn't kept in the messages, so the next step asks again
-        step.empty = not step.calls and not (reply.content or "").strip()
+        step.read_public_reply()
         fields = step.assistant_record()
         if self.model is not self.main_model:
             # Its price and its window are the fallback's: the price goes with
@@ -417,10 +426,12 @@ class Session:
                 fields["fallback_price"] = price
         self.write("assistant", **fields)
         bad_calls = bool(step.calls) and all(c.error for c in step.calls)
-        step.malformed = step.cut_off or bad_calls or step.empty
+        step.malformed = step.invalid_reply or step.cut_off or bad_calls or step.empty
         stop = self.run_calls(
             step, step.calls, lambda: self.hooks.notify("after_model", step)
         )
+        if step.invalid_reply:
+            return stop
         if step.cut_off:
             self.write("note", kind="cut_off", text=CUT_OFF)
         elif step.empty:
@@ -428,6 +439,7 @@ class Session:
         elif not step.calls:
             # No tool call means the model is answering
             step.turn.answer = reply.content
+            step.turn.reply = step.sections
             if step.turn.control is not None:
                 if step.turn.control.steers():
                     return None
@@ -469,6 +481,9 @@ class Session:
                 stop = self.hooks.decide("step_end", step)
                 step.errors += self.hooks.take_errors()
                 self.write("step", **step.record())
+        if stop and stop.outcome == "answered" and step.sections is not None:
+            step.turn.reply = step.sections
+            step.turn.answer = public_reply.plain(step.sections)
         return stop
 
     def call_with_retries(self, step):
@@ -522,6 +537,8 @@ class Session:
         if turn.control is None:
             return
         for steer in turn.control.steers():
+            turn.reply_format_errors = 0
+            turn.unformatted_reply = None
             self.write("user", **self.fitted(history.steer_fields(steer)))
             turn.control.delivered(steer)
 
@@ -557,13 +574,24 @@ class Session:
         # The stream's reader may still be sending these after a stop, while
         # the loop goes on writing
         messages = copy.deepcopy(self.messages)
-        schemas = self.tool_schemas()
+        # A turn resumed from an older log keeps its original system message.
+        if public_reply.INSTRUCTIONS not in messages[0]["content"]:
+            messages[0]["content"] += "\n\n" + public_reply.INSTRUCTIONS
+        if step.turn.reply_format_errors:
+            if step.turn.unformatted_reply:
+                messages.append({"role": "assistant",
+                                 "content": step.turn.unformatted_reply})
+            messages.append({"role": "user", "content": public_reply.CORRECTION})
+            schemas = []
+        else:
+            schemas = self.tool_schemas()
         boundary = self.tool_context.get("tool_boundary")
         if boundary is not None:
             messages = boundary.redact(messages)
             schemas = boundary.redact(schemas)
         return self.model.call(
-            messages, schemas, check=check, on_delta=on_delta
+            messages, schemas, check=check, on_delta=on_delta,
+            reply_schema=public_reply.SCHEMA,
         )
 
     def run_call(self, call, approved=None):
@@ -747,10 +775,14 @@ class Session:
             self.write("answer", call="", waited=round(waited, 1), **fields)
             return turn
         step = Step(turn, ask["step"])
-        message = next(
-            r["message"] for r in pending
+        assistant = next(
+            r for r in pending
             if r["type"] == "assistant" and r["step"] == ask["step"]
         )
+        message = assistant["message"]
+        step.sections = assistant.get("reply")
+        if step.sections is None and message.get("content"):
+            step.sections = public_reply.sections(message["content"])
         step.calls = [
             Call(step, SimpleNamespace(id=raw["id"], function=SimpleNamespace(
                 name=raw["function"]["name"], arguments=raw["function"]["arguments"],

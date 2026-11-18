@@ -163,7 +163,6 @@ class Rounds(Hook):
         for call in step.calls:
             end = call.notes.get("round_end")
             if end and end["status"] == "going_on":
-                step.turn.answer = (step.reply.content or "").strip() or None
                 return Stop("answered", None)
         run = running_round(step.turn)
         if run is not None and run["past_estimate_at"] is None:

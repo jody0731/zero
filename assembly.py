@@ -186,7 +186,7 @@ HERE = Path(__file__).resolve().parent
 # tools' schemas, is new code that changes what the model reads (code_mark)
 SYSTEM_MESSAGE_SOURCES = (
     "prompt/instructions.py", "prompt/hooks.py", "prompt/keywords.py",
-    "permissions/modes.py",
+    "core/public_reply.py", "permissions/modes.py",
     "sandbox/sandbox.py", "memory/hooks.py", "skills/hooks.py",
 )
 

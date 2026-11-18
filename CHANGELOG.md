@@ -3,6 +3,15 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.4
+
+- ZERO returns Answer, Why and Next as structured data. Next lists your step
+  before ZERO's. Every field accepts an empty string.
+- A completed `zero -p --json` response includes these fields in `reply`.
+  Existing clients continue to receive readable text.
+- If the model returns a malformed final reply, ZERO makes one formatting
+  attempt with tools disabled. Work already performed stays complete.
+
 ## 0.7.7.4.3
 
 - Action requests more clearly carry through authentication, private input and

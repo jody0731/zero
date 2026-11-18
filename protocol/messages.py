@@ -256,6 +256,14 @@ RECORD_FIELDS = {
 }
 # What an app reads of each kind of record, as session/read's rows and
 # session/watch's events carry them: schema.json names them record.<type>
+PUBLIC_REPLY = {
+    "type": "object", "required": ["answer", "why", "next"],
+    "additionalProperties": False,
+    "properties": {"answer": STRING, "why": STRING, "next": {
+        "type": "object", "required": ["user", "zero"],
+        "additionalProperties": False, "properties": {"user": STRING, "zero": STRING},
+    }},
+}
 RECORDS = {
     "session": {
         "note": {**STRING, "description": "a line the session's start "
@@ -273,6 +281,7 @@ RECORDS = {
                      "message"},
     },
     "assistant": {
+        "reply": PUBLIC_REPLY,
         "message": {**OBJECT, "description": "the model's message: content "
                     "and tool_calls"},
         "call_summaries": {"type": "object", "additionalProperties": STRING,
@@ -339,6 +348,7 @@ RECORDS = {
                     "behind"},
     },
     "turn_end": {
+        "reply": PUBLIC_REPLY,
         "outcome": STRING, "answer": maybe(STRING),
         "detail": maybe(STRING), "error": maybe(STRING),
         "seconds": NUMBER,
@@ -524,7 +534,11 @@ MESSAGES = {
         {"session": SESSION, "after": INTEGER, "limit": maybe(INTEGER),
          "keeps_server_up": KEEPS_SERVER_UP},
         required=("session",),
-        stream={"record": RECORD, "settled": SETTLED, "draft": OBJECT,
+        stream={"record": RECORD, "settled": SETTLED,
+                "draft": shape("the current model step as it streams", {
+                    "step": INTEGER, "text": STRING, "reasoning": INTEGER,
+                    "calls": STRINGS, "reply": PUBLIC_REPLY,
+                }),
                 "withdrawn": OBJECT, "earlier_count": INTEGER,
                 "context": CONTEXT_METER, "bye": STRING},
     ),

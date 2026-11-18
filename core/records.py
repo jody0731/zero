@@ -5,7 +5,7 @@ The loop (core/loop.py) fills them in; hooks read them at every hook.
 
 import time
 
-from core import tools
+from core import public_reply, tools
 
 
 class Turn:
@@ -26,7 +26,10 @@ class Turn:
         # A turn cut off after its end's fresh compaction: it had ended, and
         # a message that came since starts the next turn, not this one
         self.cut_past_its_end = False
+        self.reply_format_errors = 0
+        self.unformatted_reply = None
         self.outcome = self.detail = self.answer = self.error = None
+        self.reply = None
         self.errors = []
 
     def agent_seconds(self):
@@ -45,6 +48,8 @@ class Turn:
         for name in ("detail", "answer", "error", "inbox"):
             if getattr(self, name) is not None:
                 fields[name] = getattr(self, name)
+        if self.reply is not None and self.answer is not None:
+            fields["reply"] = self.reply
         if self.errors:
             fields["hook_errors"] = self.errors
         return fields
@@ -59,8 +64,37 @@ class Step:
         self.retries = 0
         self.calls = []
         self.cut_off = self.malformed = self.empty = False
+        self.sections = None
+        self.invalid_reply = False
         self.seconds = 0.0
         self.errors = []
+
+    def read_public_reply(self):
+        """Separate public text from tool calls before either reaches the log."""
+        reply = self.reply
+        raw = reply.content or ""
+        self.cut_off = reply.finish_reason == "length"
+        self.sections = public_reply.parse(raw)
+        repairing = self.turn.reply_format_errors > 0
+        if repairing and (reply.tool_calls or self.cut_off):
+            # A formatting correction cannot execute another operation.
+            reply.tool_calls = []
+            reply.message.pop("tool_calls", None)
+            self.sections = None
+        self.calls = [Call(self, call) for call in reply.tool_calls]
+        self.empty = not self.calls and self.sections is None
+        self.invalid_reply = self.empty and (
+            repairing or (not self.cut_off and bool(raw.strip())))
+        reply.content = None
+        reply.message.pop("content", None)
+        if self.invalid_reply:
+            self.turn.reply_format_errors += 1
+            self.turn.unformatted_reply = raw
+        elif self.sections is not None:
+            reply.content = public_reply.plain(self.sections)
+            reply.message["content"] = reply.content
+            self.turn.reply_format_errors = 0
+            self.turn.unformatted_reply = None
 
     def assistant_record(self):
         reply = self.reply
@@ -76,6 +110,10 @@ class Step:
         }
         if self.empty:
             fields["empty"] = True
+        if self.invalid_reply:
+            fields["invalid_reply"] = True
+        if self.sections is not None:
+            fields["reply"] = self.sections
         return fields
 
     def record(self):

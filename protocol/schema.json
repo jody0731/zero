@@ -1223,7 +1223,58 @@
           "description": "nothing more happens on its own: the open ask, and what still runs on its own by kind, as each part names it (the jobs' and the subagents' ids, work in rounds in a line)"
         },
         "draft": {
-          "type": "object"
+          "type": "object",
+          "description": "the current model step as it streams",
+          "properties": {
+            "step": {
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "reasoning": {
+              "type": "integer"
+            },
+            "calls": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reply": {
+              "type": "object",
+              "required": [
+                "answer",
+                "why",
+                "next"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "answer": {
+                  "type": "string"
+                },
+                "why": {
+                  "type": "string"
+                },
+                "next": {
+                  "type": "object",
+                  "required": [
+                    "user",
+                    "zero"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "user": {
+                      "type": "string"
+                    },
+                    "zero": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
         },
         "withdrawn": {
           "type": "object"
@@ -4100,6 +4151,39 @@
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
         },
+        "reply": {
+          "type": "object",
+          "required": [
+            "answer",
+            "why",
+            "next"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "type": "string"
+            },
+            "why": {
+              "type": "string"
+            },
+            "next": {
+              "type": "object",
+              "required": [
+                "user",
+                "zero"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "user": {
+                  "type": "string"
+                },
+                "zero": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "message": {
           "type": "object",
           "description": "the model's message: content and tool_calls"
@@ -4517,6 +4601,39 @@
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "reply": {
+          "type": "object",
+          "required": [
+            "answer",
+            "why",
+            "next"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "type": "string"
+            },
+            "why": {
+              "type": "string"
+            },
+            "next": {
+              "type": "object",
+              "required": [
+                "user",
+                "zero"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "user": {
+                  "type": "string"
+                },
+                "zero": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         },
         "outcome": {
           "type": "string"

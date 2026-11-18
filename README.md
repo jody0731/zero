@@ -257,7 +257,10 @@ zero doctor                                        # what ZERO needs from the ma
 
 - A session or a job is named by its id or the start of it.
 - A long text can come from stdin (`-`); a key only does (`--key-stdin`), never as an argument.
-- `--json` prints the server's reply as one JSON object; `session send --json` prints the session, its outcome, the answer, a waiting question, the tokens and the seconds.
+- `--json` prints one result object. On completion, `zero -p TEXT --json` includes
+  the readable `answer` and a structured `reply` with `answer`, `why`,
+  `next.user` and `next.zero`. Each is a string and can be empty. The result
+  also includes the session, outcome, any waiting question, tokens and seconds.
 - The exit status is 0 when it worked, 1 when not, 2 when a question waits: answer it with `zero session send TEXT --session ID`, or pick its displayed choice with `--choice KEY` (a number for a question;
   `yes`, `session`, `saved` or `no` for a permission ask).
 - `zero -p TEXT` is short for `zero session send TEXT`.

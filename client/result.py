@@ -60,6 +60,8 @@ class Result:
         return {
             "ok": True, "session": self.session, "outcome": self.outcome(),
             "answer": answer, "ask": self.ask,
+            **({"reply": self.last["reply"]} if answer is not None
+               and "reply" in self.last else {}),
             "still_running": dict(self.still_running),
             "tokens": dict(self.tokens),
             "seconds": round(self.seconds, 1),

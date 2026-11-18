@@ -401,7 +401,7 @@ class Model:
         return features.json_request(self.name, self.api, schema)
 
     def call(self, messages, schemas, check=None, on_delta=None,
-             max_output_tokens=None):
+             max_output_tokens=None, reply_schema=None):
         """One model call, streamed (complete). API errors, a silence past the
         timeout and replies that didn't complete are raised for the loop to
         handle (MODEL_ERRORS); what `check` raises ends it at once. The
@@ -409,13 +409,15 @@ class Model:
         (features.py): kept, not sent. `max_output_tokens`: a cap on the
         reply (a compaction's handoff); None sends none."""
         seconds = self.silence()
+        output = (features.json_request(self.name, self.api, reply_schema,
+                                        unmeasured=False) if reply_schema else {})
         return complete(
             self.api, self.client_for(seconds), self.served_name, messages,
             silence=seconds, check=check, on_delta=on_delta,
             tools=schemas,
             effort=features.thinking_effort_sent(self.name, self.api, self.effort),
             max_output_tokens=max_output_tokens,
-            **self.progress(),
+            **self.progress(), **output,
         )
 
     def progress(self):

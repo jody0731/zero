@@ -84,13 +84,16 @@ def prefill_progress_sent(model, api):
     return honoured(model, api, "prefill_progress") is True
 
 
-def json_request(model, api, schema):
+def json_request(model, api, schema, *, unmeasured=True):
     """How to ask the model for JSON fitting `schema` ({"name", "schema"}):
     strict JSON unless measured not honoured, else JSON mode unless that
-    isn't either, else nothing (the prompt asks for JSON itself)."""
-    if honoured(model, api, "strict_json") is not False:
+    isn't either, else nothing (the prompt asks for JSON itself).
+    With unmeasured=False only measured support enables a native format."""
+    strict = honoured(model, api, "strict_json")
+    if strict is True or (strict is None and unmeasured):
         return {"json_schema": schema}
-    if honoured(model, api, "json_mode") is not False:
+    mode = honoured(model, api, "json_mode")
+    if mode is True or (mode is None and unmeasured):
         return {"json_mode": True}
     return {}
 

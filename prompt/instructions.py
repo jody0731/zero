@@ -119,7 +119,7 @@ TURN_FACTS = (
     "the order written, except that calls next to each other that only "
     "read (a file, a skill, a web search, a fetch from the internet) run "
     "side by side, and the next step reads their results, each in its "
-    "call's place. A turn ends at a reply in plain text with no tool call.\n"
+    "call's place. A turn ends at a public reply with no tool call.\n"
 )
 # What a notice is, said once: each one carries only its tag
 # (core/history.py), and each part that sends them names itself. When one is

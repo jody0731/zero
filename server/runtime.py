@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import settings
-from core import history
+from core import history, public_reply
 from core.control import Control
 from core.loop import INTERRUPTED, Session
 from core.asking import NO, PARK, YES
@@ -425,9 +425,11 @@ class Runtime(SessionActions):
         session's watchers: the text so far, how much reasoning, the tools
         whose calls have begun. Kept until the next record, for a watch that
         starts mid-reply; never logged."""
+        reply = public_reply.parse(draft.content, partial=True)
         event = {"draft": {
             "step": step,
-            "text": draft.content,
+            "text": public_reply.plain(reply) if reply is not None else "",
+            **({"reply": reply} if reply is not None else {}),
             "reasoning": len(draft.reasoning),
             "calls": [call["name"] for _, call in sorted(draft.calls.items())],
         }}

@@ -14,7 +14,7 @@ ask's answers with their words (`choice_labels`). A component's own rows
 
 import json
 
-from core import asking, history, tools
+from core import asking, history, public_reply, tools
 
 
 def ask_row(ask):
@@ -81,6 +81,13 @@ def call_summaries(message):
 def record(record):
     """A log's record as an app reads it."""
     kind = record.get("type")
+    if "reply" not in record:
+        if kind == "turn_end" and isinstance(record.get("answer"), str):
+            record = {**record, "reply": public_reply.sections(record["answer"])}
+        elif kind == "assistant" and not record.get("empty"):
+            text = record.get("message", {}).get("content")
+            if isinstance(text, str) and text:
+                record = {**record, "reply": public_reply.sections(text)}
     if kind in ("note", "switch"):
         # Harness notes belong to the model's context. Operational state
         # reaches people through turn outcomes, asks, jobs and session rows.

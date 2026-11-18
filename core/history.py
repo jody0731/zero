@@ -11,6 +11,7 @@ handoff and the records it kept, then every record after it (`replay`).
 Each user message carries its time at its end, so a gap between two shows.
 """
 
+import json
 import re
 from datetime import datetime
 
@@ -367,6 +368,10 @@ def message(record):
     if kind == "compaction":
         return {"role": "user", "content": compacted(record)}
     if kind == "assistant" and not record.get("empty"):
+        if "reply" in record:
+            content = json.dumps(record["reply"], ensure_ascii=False,
+                                 separators=(",", ":"))
+            return {**record["message"], "content": content}
         return record["message"]
     if kind == "tool":
         return {
@@ -515,6 +520,8 @@ def turns(records):
             }
             if record.get("empty"):
                 step["empty"] = True
+            if "reply" in record:
+                step["reply"] = record["reply"]
             steps[record["step"]] = step
             result[-1]["steps"].append(step)
         elif kind == "tool" and record.get("closed") != "not_started":
@@ -536,7 +543,8 @@ def turns(records):
                 OLD_LOG_FIELDS.get(name, name): record[name]
                 for name in (
                     "outcome", "seconds", "agent_seconds", "wait_seconds",
-                    "detail", "answer", "error", "hook_errors", "plugin_errors",
+                    "detail", "answer", "reply", "error", "hook_errors",
+                    "plugin_errors",
                 )
                 if name in record
             })
@@ -664,6 +672,7 @@ def final_answer(records):
             break
     if last and not last.get("empty") and last["finish_reason"] != "length":
         message = last["message"]
-        if not message.get("tool_calls") and (message.get("content") or "").strip():
+        if not message.get("tool_calls") and (
+                "reply" in last or (message.get("content") or "").strip()):
             return message["content"]
     return None

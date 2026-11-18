@@ -265,8 +265,10 @@ zero doctor                                        # what ZERO needs from the ma
 - A long text can come from stdin (`-`); a key only does (`--key-stdin`), never as an argument.
 - `--json` prints one result object. On completion, `zero -p TEXT --json` includes
   the readable `answer` and a structured `reply` with `answer`, `why`,
-  `next.user` and `next.zero`. Answer contains text. The other strings can be empty. The result
-  also includes the session, outcome, any waiting question, tokens and seconds.
+  `next.user` and `next.zero`. By default only Answer contains text. Why adds context needed
+  to interpret it. Next lists concrete actions still needed to finish the task. Empty sections
+  are hidden in the browser. The result also includes the session, outcome, any waiting
+  question, tokens and seconds.
 - The exit status is 0 when it worked, 1 when not, 2 when a question waits: answer it with `zero session send TEXT --session ID`, or pick its displayed choice with `--choice KEY` (a number for a question;
   `yes`, `session`, `saved` or `no` for a permission ask).
 - `zero -p TEXT` is short for `zero session send TEXT`.

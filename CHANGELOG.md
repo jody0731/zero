@@ -3,6 +3,11 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.7
+
+- ZERO defaults to Answer alone for conversation and routine results. Why is
+  for context needed to interpret an answer. Next is for work still required.
+
 ## 0.7.7.4.6
 
 - ZERO shows its proposed edit to your personal or project instructions and

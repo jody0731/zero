@@ -51,17 +51,21 @@ def limit(limits, name):
     return (limits or {}).get(name, DEFAULT_LIMITS[name])
 
 
+def read_header(path):
+    try:
+        with path.open("rb") as source:
+            return json.loads(source.readline())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 def parent_cutoffs(logs, asking, listed):
     """Last inherited record in each ancestor, including a fork of a fork."""
     cutoffs = {}
     sid = asking
     cutoff = None
     while sid in listed:
-        try:
-            with (logs / f"{sid}.jsonl").open("rb") as source:
-                head = json.loads(source.readline())
-        except (FileNotFoundError, ValueError):
-            break
+        head = read_header(logs / f"{sid}.jsonl")
         fork = head.get("forked_from") if isinstance(head, dict) else None
         if not isinstance(fork, dict) or not isinstance(fork.get("seq"), int):
             break
@@ -224,7 +228,10 @@ def near(target, path, around, each_side, cutoffs=None):
     records = []
     left = off_branch(path)
     cutoff = (cutoffs or {}).get(target["id"])
-    for record in log_records(path):
+    origins = history.attributed_records(
+        log_records(path), target["id"],
+        lambda parent: read_header(path.with_name(f"{parent}.jsonl")))
+    for record in history.transcript(origins):
         seq = record.get("seq", 0)
         if cutoffs is not None and seq in left:
             continue
@@ -234,8 +241,11 @@ def near(target, path, around, each_side, cutoffs=None):
         if found is None or not found[2]:
             continue
         kind, tool_or_source, text = found
+        event = history.interaction(record, target["id"])
         records.append({"seq": record.get("seq"), "kind": kind,
                         "time": record.get("time"), "text": text,
+                        "interaction": event, "sender_name": history.sender_name(
+                            event["sender"], event.get("sender_session")),
                         **named(kind, tool_or_source),
                         **({"left_behind": True}
                            if record.get("seq") in left else {})})

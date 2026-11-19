@@ -141,6 +141,7 @@ class Log:
             "type": type,
             **fields,
         }
+        record = history.logged_interaction(record, self.path.stem)
         new = not self.path.exists()
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

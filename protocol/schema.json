@@ -193,6 +193,10 @@
         "ask": {
           "type": "string"
         },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        },
         "values": {
           "type": "object",
           "additionalProperties": {
@@ -997,6 +1001,31 @@
               "type": {
                 "type": "string"
               },
+              "interaction": {
+                "type": "object",
+                "required": [
+                  "sender",
+                  "action",
+                  "target"
+                ],
+                "properties": {
+                  "sender": {
+                    "type": "string"
+                  },
+                  "action": {
+                    "type": "string"
+                  },
+                  "sender_session": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "type": "object"
+                  }
+                }
+              },
+              "sender_name": {
+                "type": "string"
+              },
               "audience": {
                 "type": "string",
                 "description": "model: internal context, not shown in a person's conversation"
@@ -1177,6 +1206,31 @@
               "description": "its place in the session's log"
             },
             "type": {
+              "type": "string"
+            },
+            "interaction": {
+              "type": "object",
+              "required": [
+                "sender",
+                "action",
+                "target"
+              ],
+              "properties": {
+                "sender": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "sender_session": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "object"
+                }
+              }
+            },
+            "sender_name": {
               "type": "string"
             },
             "audience": {
@@ -1852,6 +1906,31 @@
             "type": {
               "type": "string"
             },
+            "interaction": {
+              "type": "object",
+              "required": [
+                "sender",
+                "action",
+                "target"
+              ],
+              "properties": {
+                "sender": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "sender_session": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "object"
+                }
+              }
+            },
+            "sender_name": {
+              "type": "string"
+            },
             "audience": {
               "type": "string",
               "description": "model: internal context, not shown in a person's conversation"
@@ -2164,7 +2243,7 @@
             "type": "object",
             "additionalProperties": true
           },
-          "description": "records: seq, kind (user, notice, reply, call, handoff), a call's tool or a notice's source, time, and a snippet (a match marked « ») or, near around, the whole text"
+          "description": "records: seq, kind (user, notice, reply, call, handoff), a call's tool or a notice's source, sender, action, target, time and a snippet (a match marked « ») or, near around, the whole text"
         },
         "session_count": {
           "type": "integer"
@@ -4038,6 +4117,31 @@
         "type": {
           "type": "string"
         },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
+        },
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
@@ -4064,6 +4168,31 @@
         "type": {
           "const": "session"
         },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
+        },
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
@@ -4089,6 +4218,31 @@
         },
         "type": {
           "const": "user"
+        },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
         },
         "audience": {
           "type": "string",
@@ -4146,6 +4300,31 @@
         },
         "type": {
           "const": "assistant"
+        },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
         },
         "audience": {
           "type": "string",
@@ -4315,6 +4494,31 @@
         "type": {
           "const": "ask"
         },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
+        },
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
@@ -4372,6 +4576,31 @@
         "type": {
           "const": "answer"
         },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
+        },
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
@@ -4379,6 +4608,15 @@
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "question_text": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "choice": {
+          "type": "string"
         },
         "kind": {
           "type": "string"
@@ -4413,6 +4651,31 @@
         "type": {
           "const": "note"
         },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
+        },
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
@@ -4440,6 +4703,31 @@
         },
         "type": {
           "const": "switch"
+        },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
         },
         "audience": {
           "type": "string",
@@ -4469,6 +4757,31 @@
         },
         "type": {
           "const": "compaction"
+        },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
         },
         "audience": {
           "type": "string",
@@ -4515,6 +4828,31 @@
         "type": {
           "const": "compaction_failed"
         },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
+        },
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
@@ -4543,6 +4881,31 @@
         "type": {
           "const": "nothing_to_compact"
         },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
+        },
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
@@ -4567,6 +4930,31 @@
         },
         "type": {
           "const": "rewind"
+        },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
         },
         "audience": {
           "type": "string",
@@ -4597,6 +4985,31 @@
         },
         "type": {
           "const": "turn_end"
+        },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
         },
         "audience": {
           "type": "string",

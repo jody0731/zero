@@ -3,6 +3,16 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.11
+
+- An answer stays attached to its original question in conversation history,
+  after a restart, and in search. The apps show who answered it.
+- A message sent while a question is open waits as a separate task. The reply
+  box answers the displayed question. From the command line, pass its ID with
+  `--reply-to`. MCP callers pass the ID from `zero_wait` to `zero_reply`.
+- Two clients answering the same question can submit one decision. A late answer
+  to an earlier question leaves the current question open.
+
 ## 0.7.7.4.10
 
 - New session opens an empty conversation. Click its title to rename it, adjust its

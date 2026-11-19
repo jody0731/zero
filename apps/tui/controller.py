@@ -64,11 +64,11 @@ class SessionInput(SessionState):
         """Whether this line means leave, as Ctrl+D does."""
         return text.strip().lower() in LEAVE
 
-    def line(self, text, follow_up=False, choice=None):
+    def line(self, text, follow_up=False, choice=None, reply_to=None):
         """A line typed disarms Ctrl+C's second press (SessionState.line)."""
         with self.lock:
             self.interrupt_armed = False
-        return super().line(text, follow_up, choice)
+        return super().line(text, follow_up, choice, reply_to)
 
     def ctrl_c(self, empty=True, stop=None):
         """Stop a moving turn; a parked one isn't moving, so only say so.

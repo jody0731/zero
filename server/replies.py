@@ -80,6 +80,10 @@ def call_summaries(message):
 
 def record(record):
     """A log's record as an app reads it."""
+    record = history.attributed(record)
+    if details := record.get("interaction"):
+        name = history.sender_name(details["sender"], details.get("sender_session"))
+        record = {**record, "sender_name": name}
     kind = record.get("type")
     if "reply" not in record:
         if kind == "turn_end" and isinstance(record.get("answer"), str):

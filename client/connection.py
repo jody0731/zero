@@ -201,6 +201,8 @@ class Connection:
         """The server's reply as it came, its no too (a relay passes it on
         whole)."""
         self.ready()
+        if payload.get("message") == "vault/answer":
+            payload = {**payload, "source": self.source}
         payload = whole(payload, self.token(), self.relayed_for_pid)
         try:
             reply = request(self.paths.socket, payload, timeout)

@@ -16,6 +16,31 @@ from types import SimpleNamespace
 from openai import APIError
 
 
+class InvalidHistory(ValueError):
+    """A model request would split a call from its result."""
+
+
+def check_tool_results(messages):
+    pending = set()
+    for message in messages:
+        if message["role"] == "tool":
+            call = message.get("tool_call_id")
+            if call not in pending:
+                raise InvalidHistory(f"tool result has no matching call: {call}")
+            pending.remove(call)
+        else:
+            if pending:
+                missing = ", ".join(sorted(pending))
+                raise InvalidHistory(f"missing tool results: {missing}")
+            for call in message.get("tool_calls") or ():
+                key = call.get("id")
+                if not isinstance(key, str) or not key or key in pending:
+                    raise InvalidHistory("tool calls need distinct nonempty ids")
+                pending.add(key)
+    if pending:
+        raise InvalidHistory(f"missing tool results: {', '.join(sorted(pending))}")
+
+
 class CutShort(Exception):
     """The reply didn't complete: the stream ended without its end, or the
     API said it failed or stopped for a reason other than the output limit.
@@ -119,6 +144,7 @@ def complete(api, client, model, messages, *, silence, check=None,
     event that carried something. Raises CutShort for a reply that didn't
     complete, and the API's errors as they come (MODEL_ERRORS).
     """
+    check_tool_results(messages)
     events = queue.Queue()
     streams = []
     closed = threading.Event()

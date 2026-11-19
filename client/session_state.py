@@ -113,7 +113,7 @@ class SessionState:
         self.activity = what if command is None else (what, command)
         self.since = time.monotonic()
 
-    def line(self, text, follow_up=False, choice=None):
+    def line(self, text, follow_up=False, choice=None, reply_to=None):
         """Send a line: a new turn when idle, a steer mid-turn (or a follow-up,
         after the turn's answer), and the reply to the open ask while one
         waits, marked with its id, and with `choice` when it was picked at
@@ -121,7 +121,6 @@ class SessionState:
         if not text.strip():
             return None
         with self.lock:
-            reply_to = self.ask["ask"] if self.ask is not None else None
             options = {
                 "session": self.session, "mode": self.mode, "model": self.model,
                 "reply_to": reply_to, "workspace": self.workspace,

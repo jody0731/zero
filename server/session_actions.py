@@ -63,13 +63,17 @@ class SessionActions:
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
         records = upgrade.migrate(self.log(sid).branch(), time=upgrade.timestamp())
-        records = [r for r in history.without_question_echoes(records)
+        records = [r for r in history.transcript(self.with_origins(sid, records))
                    if r["seq"] > after and (before is None or r["seq"] < before)]
         earlier_count = 0
         if limit is not None and len(records) > limit:
             earlier_count = len(records) - limit
             records = records[earlier_count:]
         return records, earlier_count
+
+    def with_origins(self, sid, records):
+        return history.attributed_records(
+            records, sid, lambda parent: self.log(parent).first_record())
 
     def context_meter(self, sid):
         """The session's context as the user's meter shows it (core/history.py's
@@ -434,7 +438,9 @@ class SessionActions:
             new = new_id()
             path = self.paths.sessions / f"{new}.jsonl"
             try:
-                write_copy(path, [header, *copied[1:]])
+                parent_records = self.with_origins(sid, copied)
+                next(parent_records)
+                write_copy(path, [header, *parent_records])
             except FileExistsError:
                 continue
             try:

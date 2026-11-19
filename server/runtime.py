@@ -66,13 +66,14 @@ from sessions import upgrade
 from sessions.log import Log, fresh_log
 from sessions.lock import Busy, SessionLock
 from server import rebuild, replies
+from server.idempotency import request_hash
 from server.rebuild import FAILED
 from server.services import Refused
 from server.session_actions import (
     ID_TRIES, SessionActions, check_thinking_effort, new_id, title,
 )
 from server.session_state import SessionState
-from server.store import Store, UnknownSession
+from server.store import ReplyUnavailable, Store, UnknownSession
 
 MAX_RESUMES = 3
 WHEN_BUSY = ("steer", "queue")
@@ -114,12 +115,16 @@ class Message:
     title: str | None = None
 
 
-def sent_before(row, message):
+def sent_before(row, message, digest):
     """What a message sent again gets, its id already in the inbox: the
     first's ack, nothing run again; refused when the id came with another
     message (its text, or the session it named)."""
     payload = json.loads(row["payload"])
     same = (row["kind"] == "user" and payload.get("text") == message.text
+            and row["source"] == message.source
+            and payload.get("reply_to") == message.reply_to
+            and payload.get("choice") == message.choice
+            and payload.get("request_hash", digest) == digest
             and (message.session is None or message.session == row["session"]))
     if not same:
         raise Refused(f"message id {message.id!r} was used for another "
@@ -468,19 +473,15 @@ class Runtime(SessionActions):
         its handled_as, what became of it. `extra`: payload fields."""
         if not self.accepting:
             raise Refused("the server is shutting down; send it again once it's back")
-        if message.reply_to is not None:
-            ask = self.store.open_ask(message.session)
-            if (ask and ask.get("kind") == "secret"
-                    and (extra or {}).get("reply_kind") != "secret"):
-                raise Refused("This input uses the vault's masked form.")
         message.text = self.redact(message.text)
         if not message.text.strip():
             raise Refused("empty message")
         if message.when_busy not in WHEN_BUSY:
             raise Refused(f"when_busy is one of {WHEN_BUSY}")
+        digest = request_hash({**vars(message), "fields": extra or {}})
         seen = self.store.query("SELECT * FROM inbox WHERE id = ?", message.id)
         if seen:
-            return sent_before(seen[0], message)
+            return sent_before(seen[0], message, digest)
         new = None
         sid = message.session
         if message.title is not None and (sid is not None or not message.title.strip()):
@@ -515,9 +516,11 @@ class Runtime(SessionActions):
                     "thinking_effort", message.thinking_effort
                 )
                 new["switch"] = json.dumps({"thinking_effort": effort})
-        payload = {"text": message.text, **(extra or {})}
-        if message.choice is not None:
-            self.check_choice(sid, message)
+        payload = {"text": message.text, "request_hash": digest, **(extra or {})}
+        if message.choice is not None and message.reply_to is None:
+            raise Refused("a choice answers the question named in reply_to")
+        if message.reply_to is not None and sid is None:
+            raise Refused("a reply needs the session of its question")
         if message.reply_to is not None:
             payload["reply_to"] = message.reply_to
             if message.choice is not None:
@@ -539,17 +542,21 @@ class Runtime(SessionActions):
                 self.activity.notify_all()
         return {"admitted": admitted, "session": sid, "handled_as": handled_as}
 
-    def check_choice(self, sid, message):
-        """Refused unless the message answers the session's open ask with one
-        of its choices."""
-        ask = self.store.open_ask(sid) if sid is not None else None
-        if ask is None or message.reply_to != ask["id"]:
-            raise Refused("a choice answers the question waiting in its "
-                          "session, named in reply_to; none waits there")
-        offered = replies.ask_row(ask)["choices"]
-        if message.choice not in offered:
-            raise Refused(f"the question's choices are {', '.join(offered)}, "
-                          f"not {message.choice!r}")
+    def check_reply(self, sid, message, expected):
+        ask = self.store.open_ask(sid)
+        if not ask or ask["id"] != message.reply_to:
+            raise Refused("the addressed question no longer waits in this session")
+        if ask["kind"] == "secret" and expected != "secret":
+            raise Refused("This input uses the vault's masked form.")
+        if expected and ask["kind"] != expected:
+            raise Refused("the addressed question has another kind")
+        if ask["requires_user"] and not history.is_user_source(message.source):
+            raise Refused("this change needs an answer from the user")
+        if message.choice is not None:
+            offered = replies.ask_row(ask)["choices"]
+            if message.choice not in offered:
+                raise Refused(f"the question's choices are {', '.join(offered)}, "
+                              f"not {message.choice!r}")
 
     def admit_to_session(self, message, sid, new, payload):
         """(admitted, session id, handled_as): what becomes of the message
@@ -560,13 +567,17 @@ class Runtime(SessionActions):
                 sid = new_id()
             state = self.state(sid)
             with state.lock:
-                expected = payload.get("reply_kind")
-                if expected is not None:
-                    ask = self.store.open_ask(sid)
-                    if (ask is None or ask.get("kind") != expected
-                            or ask["id"] != message.reply_to):
-                        raise Refused("the addressed question no longer waits")
-                handled_as = "started" if new else self.handled_as(sid, state, message)
+                if message.reply_to is not None:
+                    seen = self.store.query("SELECT * FROM inbox WHERE id = ?",
+                                            message.id)
+                    if seen:
+                        ack = sent_before(seen[0], message, payload["request_hash"])
+                        return False, ack["session"], ack["handled_as"]
+                    self.check_reply(sid, message, payload.get("reply_kind"))
+                    handled_as = "reply"
+                else:
+                    handled_as = ("started" if new else
+                                  self.handled_as(sid, state, message))
                 said = dict(payload)
                 if handled_as == "queued":
                     said["follow_up"] = True
@@ -577,12 +588,19 @@ class Runtime(SessionActions):
                         message.id, sid, "user", message.source, said,
                         new_session=new,
                     )
+                except ReplyUnavailable as error:
+                    raise Refused(str(error)) from None
                 except UnknownSession:
                     raise Refused(f"no session {sid!r}") from None
                 except sqlite3.IntegrityError:
                     if not new or tries == ID_TRIES:
                         raise
                     continue
+                if not admitted:
+                    row, = self.store.query("SELECT * FROM inbox WHERE id = ?",
+                                            message.id)
+                    ack = sent_before(row, message, payload["request_hash"])
+                    handled_as = ack["handled_as"]
                 return admitted, sid, handled_as
 
     def handled_as(self, sid, state, message):
@@ -592,8 +610,8 @@ class Runtime(SessionActions):
         info = self.store.session(sid)
         if info is None:
             raise Refused(f"no session {sid!r}")
-        if info["state"] == "waiting" and self.store.open_ask(sid) is not None:
-            return "reply"
+        if info["state"] == "waiting":
+            return "queued"
         busy = state.runner is not None or self.store.has_queued(sid)
         if not busy:
             return "started"
@@ -608,8 +626,9 @@ class Runtime(SessionActions):
             raise Refused(f"no session {sid!r}")
         seen = self.store.query("SELECT * FROM inbox WHERE id = ?", msg_id)
         if seen:
-            return sent_before(seen[0], Message(msg_id, CONTINUE, session=sid,
-                                                source=source))
+            message = Message(msg_id, CONTINUE, session=sid, source=source)
+            digest = request_hash({**vars(message), "fields": {"continue": True}})
+            return sent_before(seen[0], message, digest)
         state = self.state(sid)
         with state.lock:
             if state.runner is not None or self.store.has_queued(sid):
@@ -944,14 +963,20 @@ class Runtime(SessionActions):
             return
         ask = history.parked_ask(records)
         payload = json.loads(row["payload"])
-        if payload.get("reply_kind") is not None and (
-            ask is None or ask.get("kind") != payload["reply_kind"]
-            or ask["ask"] != payload.get("reply_to")
-        ):
-            self.store.mark_steer_done(row["id"])
-            return
-        if ask is not None and pending[0].get("inbox") != row["id"]:
-            self.take_reply(sid, row, ask, pending[0]["inbox"], log, control)
+        if payload.get("reply_to") is not None:
+            # An old inbox can contain submissions from before admission checks.
+            expected = payload.get("reply_kind")
+            matches = (ask and ask["ask"] == payload["reply_to"]
+                       and (not expected or ask.get("kind", "permission") == expected)
+                       and (ask.get("kind") != "secret" or expected == "secret")
+                       and (not history.requires_user(ask)
+                            or history.is_user_source(row["source"]))
+                       and (payload.get("choice") is None or picked(ask, payload)))
+            if matches:
+                self.take_reply(sid, row, ask, pending[0]["inbox"], log, control)
+            else:
+                # A stale submission in an older inbox cannot become a new turn.
+                self.store.mark_steer_done(row["id"])
             return
         if pending and pending[0].get("inbox") != row["id"]:
             raise ValueError("the queued message is not the log's open turn")
@@ -1004,6 +1029,7 @@ class Runtime(SessionActions):
             turn = session.open_turn(
                 text, inbox=row["id"], source=row["source"], control=control,
                 continued=bool(payload.get("continue")),
+                queued=bool(payload.get("follow_up")),
                 carried={name: payload[name] for name in self.message_fields()
                          if payload.get(name) is not None},
             )
@@ -1065,12 +1091,16 @@ class Runtime(SessionActions):
             "ask": ask["ask"], "yes": yes, "inbox": row["id"],
             "source": row["source"], "text": text, "consent": verdict,
         }
+        if payload.get("sender_session"):
+            fields["sender_session"] = payload["sender_session"]
         if choice is not None:
             fields["choice"] = choice
+        if ask.get("kind"):
+            fields["kind"] = ask["kind"]
         if ask.get("kind") == "question":
-            fields["kind"] = "question"
             fields["yes"] = False
-            fields["text"] = ask["choice_labels"].get(choice, text)
+            if payload.get("choice") is not None:
+                fields["text"] = ask["choice_labels"].get(choice, text)
         turn = session.reply(fields, control=control)
         self.store.close_ask(ask["ask"], row["id"], fields["yes"], row["source"])
         turn_row = self.store.query("SELECT * FROM inbox WHERE id = ?", turn_id)[0]

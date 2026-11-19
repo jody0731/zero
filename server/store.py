@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS asks (
     -- Its answers with the words the box shows for each, as JSON (an
     -- object, in order): what apps draw
     choice_labels TEXT,
-    kind TEXT DEFAULT 'permission'
+    kind TEXT DEFAULT 'permission',
+    requires_user INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS asks_open ON asks (session, status);
 CREATE TABLE IF NOT EXISTS message_replies (
@@ -157,12 +158,13 @@ ADDED_COLUMNS = {
     "sessions": {"parent": "TEXT", "started_by": "TEXT",
                  "log_seq": "INTEGER NOT NULL DEFAULT 0"},
     "asks": {"reason": "TEXT NOT NULL DEFAULT ''", "about": "TEXT",
-             "choice_labels": "TEXT", "kind": "TEXT DEFAULT 'permission'"},
+             "choice_labels": "TEXT", "kind": "TEXT DEFAULT 'permission'",
+             "requires_user": "INTEGER NOT NULL DEFAULT 0"},
 }
 # Added columns a session's log fills (0.7.6.1): once added, the sessions
 # with rows in their table are rebuilt from their logs at the server's start
 # (their log_seq set back), so the rows made before carry them too (rule 9)
-FROM_THE_LOG = {"asks": ("choice_labels", "kind")}
+FROM_THE_LOG = {"asks": ("choice_labels", "kind", "requires_user")}
 # Beside the database, a copy of it as it was before a rename
 BACKUP_SUFFIX = ".before-renames-"
 # A user message that waits for the turn's answer instead of steering it
@@ -184,6 +186,10 @@ def stops_done(db, session, arrival):
     if row is not None:
         db.execute(f"UPDATE inbox SET status = 'done' WHERE {STOP_OF_TURN}",
                    (session, arrival, row[0], row[0]))
+
+
+class ReplyUnavailable(ValueError):
+    """Another submission or completion claimed the addressed question."""
 
 
 class UnknownSession(Exception):
@@ -490,6 +496,19 @@ class Store:
                 "SELECT 1 FROM sessions WHERE id = ?", (session,)
             ).fetchone():
                 raise UnknownSession(session)
+            target = payload.get("reply_to")
+            if target is not None:
+                open_ask = db.execute(
+                    "SELECT 1 FROM asks WHERE session = ? AND id = ? "
+                    "AND status = 'open'", (session, target),
+                ).fetchone()
+                waiting = db.execute(
+                    "SELECT 1 FROM inbox WHERE session = ? AND status = 'queued' "
+                    "AND json_extract(payload, '$.reply_to') = ? LIMIT 1",
+                    (session, target),
+                ).fetchone()
+                if not open_ask or waiting:
+                    raise ReplyUnavailable("the question already has a reply or closed")
             db.execute(
                 "INSERT INTO inbox (id, session, kind, source, payload, status, "
                 "created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
@@ -546,9 +565,9 @@ class Store:
     # A notice starts a turn only while its session isn't parked on an ask (a
     # notice is never the reply)
     STARTS = (
-        f"status = 'queued' AND (kind = 'user' OR ({NOTICE} AND "
-        "(SELECT state != 'waiting' FROM sessions "
-        "WHERE sessions.id = inbox.session)))"
+        "status = 'queued' AND kind != 'stop' AND "
+        "(json_extract(payload, '$.reply_to') IS NOT NULL OR "
+        "(SELECT state != 'waiting' FROM sessions WHERE sessions.id = inbox.session))"
     )
 
     def next_queued(self, session):
@@ -579,7 +598,9 @@ class Store:
         """Messages a running turn takes in: a client's sent after the turn began,
         not a follow-up, and every queued notice. `notices_only`: once
         the turn is stopped, its untaken messages go back to their sender."""
-        user = "0" if notices_only else f"(kind = 'user' AND NOT {FOLLOW_UP})"
+        user = "0" if notices_only else (
+            f"(kind = 'user' AND NOT {FOLLOW_UP} AND "
+            "json_extract(payload, '$.reply_to') IS NULL)")
         rows = self.query(
             "SELECT * FROM inbox WHERE session = ? AND status = 'queued' AND "
             f"(({user} AND arrival > ?) OR {NOTICE}) ORDER BY arrival",
@@ -645,12 +666,12 @@ class Store:
         def change(db):
             db.execute(
                 "INSERT OR IGNORE INTO asks (id, session, call, turn, tool, command, "
-                "why, reason, about, status, created_at, choice_labels, kind) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)",
+                "why, reason, about, status, created_at, choice_labels, kind, "
+                "requires_user) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
                 (ask["ask"], session, ask["call"], turn, ask["tool"],
                  str(ask["command"]), ask["why"], ask["reason"],
                  ask.get("about"), created_at, labels_of(ask),
-                 ask.get("kind", "permission")),
+                 ask.get("kind", "permission"), history.requires_user(ask)),
             )
             db.execute(
                 "UPDATE sessions SET state = 'waiting', updated_at = ?, "
@@ -728,10 +749,10 @@ class Store:
             db.executemany(
                 "INSERT INTO asks (id, session, call, turn, tool, command, why, "
                 "reason, about, status, created_at, closed_at, reply, source, "
-                "choice_labels, kind) "
+                "choice_labels, kind, requires_user) "
                 "VALUES (:id, :session, :call, :turn, :tool, :command, :why, "
                 ":reason, :about, :status, :created_at, :closed_at, :reply, "
-                ":source, :choice_labels, :kind)",
+                ":source, :choice_labels, :kind, :requires_user)",
                 [{**ask, "session": session} for ask in rows.asks],
             )
             for id, status in rows.inbox.items():

@@ -112,6 +112,17 @@ def who(source, mine=None):
     return source
 
 
+def interaction_label(record):
+    event = record.get("interaction") or {}
+    sender = record.get("sender_name") or who(
+        event.get("sender") or record.get("source"))
+    verbs = {"approve": "approved", "decline": "declined", "answer": "answered",
+             "ask": "asked", "queue": "queued", "steer": "steer"}
+    action = verbs.get(event.get("action"), "")
+    ask = event.get("target", {}).get("ask", "")
+    return " ".join(word for word in (sender, action, ask) if word)
+
+
 def divider(title, workspace, width=80):
     text = f"── {title} · {workspace} "
     return text + "─" * max(3, width - len(text))
@@ -218,6 +229,8 @@ class Renderer:
             ):
                 return []
             mark = " (steer)" if record.get("steer") else ""
+            if record.get("interaction"):
+                return [f"{interaction_label(record)}> {record['text']}"]
             return [f"{who(source, self.source)}{mark}> {record['text']}"]
         if kind == "assistant":
             message = record["message"]
@@ -232,6 +245,8 @@ class Renderer:
             # The CLI's box holds the question; the transcript keeps one line
             return [ask_line(record)]
         if kind == "answer":
+            if record.get("interaction"):
+                return [f"({interaction_label(record)}: {record.get('text', '')})"]
             by = who(record.get("source"), self.source)
             if record.get("kind") == "secret":
                 return [f"({by}: {record['text']})"]

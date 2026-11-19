@@ -636,13 +636,15 @@
     if (record.notice) {
       node.className = "entry notice";
       const name = record.notice_source || "Background notice";
-      node.append(who(name, record));
+      node.append(who(record.interaction?.sender_session ? record.sender_name : name,
+        record));
       node.append(el("div", "bubble", record.text || ""));
       if (record.reference) node.append(jobLink(record.reference));
       return node;
     }
-    const more = record.steer ? "steer" : (record.continue ? "go on" : "");
-    node.append(who(sourceWho(record.source), record, more));
+    const more = record.interaction?.action === "queue" ? "queued" :
+      record.steer ? "steer" : (record.continue ? "go on" : "");
+    node.append(who(record.sender_name || sourceWho(record.source), record, more));
     if (record.continue && !record.text) return node;
     node.append(el("div", "bubble", record.text || ""));
     if (state.rewindPoints.has(record.seq)) {
@@ -778,10 +780,16 @@
     const turn = turnFor(record);
     showProgress(turn, turn.phase, false);
     const node = el("div", "entry you");
-    node.append(who(sourceWho(record.source), record, "answered"));
-    const words = record.choice && record.choice !== record.text
-      ? `${record.choice}${record.text ? ": " + record.text : ""}`
-      : (record.text || (record.yes ? "yes" : "no"));
+    const event = record.interaction;
+    const action = { approve: "approved", decline: "declined" }[event?.action]
+      || "answered";
+    const target = event?.target?.ask;
+    node.append(who(record.sender_name || sourceWho(record.source), record,
+      [action, target].filter(Boolean).join(" · ")));
+    if (record.question_text) {
+      node.append(el("div", "meta", record.question_text));
+    }
+    const words = record.text || record.choice || (record.yes ? "yes" : "no");
     node.append(el("div", "bubble", words));
     return node;
   }

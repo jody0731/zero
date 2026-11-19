@@ -118,7 +118,10 @@ def kernel_rows(records):
     begun, done = [], set()
     # The inbox id of the turn under way, as the log is read
     turn = None
+    inherited = (records[0].get("forked_from") or {}).get("seq", 0)
     for record in records:
+        if record.get("seq", 0) <= inherited:
+            continue
         kind, inbox = record["type"], record.get("inbox")
         if kind == "user" and not record.get("steer"):
             turn = inbox
@@ -163,4 +166,5 @@ def ask_row(ask, turn, answer, parked):
         "source": answer.get("source") if answer else None,
         "choice_labels": labels_of(ask),
         "kind": ask.get("kind", "permission"),
+        "requires_user": history.requires_user(ask),
     }

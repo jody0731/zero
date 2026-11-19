@@ -29,7 +29,7 @@ from pathlib import Path
 from core import history
 
 # The index's layout: an index of another is made again
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
 # The search's own tool: its calls' results repeat records found elsewhere,
 # and a later search would find its own earlier ones first
 SEARCH_TOOL = "session_search"
@@ -45,6 +45,9 @@ CREATE TABLE discarded (
     session TEXT NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL,
     PRIMARY KEY (session, first, last)
 );
+CREATE TABLE answers (
+    session TEXT NOT NULL, inbox TEXT NOT NULL, PRIMARY KEY (session, inbox)
+);
 CREATE VIRTUAL TABLE records USING fts5(
     text,
     session UNINDEXED,
@@ -54,6 +57,7 @@ CREATE VIRTUAL TABLE records USING fts5(
     -- A call's tool, a notice's source; empty for the rest
     tool_or_source UNINDEXED,
     time UNINDEXED,
+    interaction UNINDEXED,
     tokenize = 'unicode61 remove_diacritics 2'
 );
 """
@@ -96,6 +100,8 @@ def searchable(record):
         if history.is_notice(record):
             return "notice", record.get("source", ""), record.get("text", "")
         return "user", "", record.get("text", "")
+    if kind == "ask" and record.get("command"):
+        return "reply", "", record["command"]
     if kind == "answer" and record.get("text"):
         # The user's own words, answering an ask
         return "user", "", record["text"]
@@ -238,6 +244,7 @@ class Index:
             raise
 
     def _drop(self, db, sid):
+        db.execute("DELETE FROM answers WHERE session = ?", (sid,))
         db.execute("DELETE FROM discarded WHERE session = ?", (sid,))
         db.execute("DELETE FROM records WHERE session = ?", (sid,))
         db.execute("DELETE FROM logs WHERE session = ?", (sid,))
@@ -282,15 +289,22 @@ class Index:
                            (sid, record["left_from"], record["left_to"]))
             if copied_to and (record.get("seq") or 0) <= copied_to:
                 continue
+            inbox = record.get("inbox")
+            if inbox and record.get("type") == "answer":
+                db.execute("INSERT OR IGNORE INTO answers VALUES (?, ?)", (sid, inbox))
+            if inbox and record.get("steer") and db.execute(
+                "SELECT 1 FROM answers WHERE session = ? AND inbox = ?", (sid, inbox),
+            ).fetchone():
+                continue
             found = searchable(record)
             if found is None or not found[2]:
                 continue
             kind, tool_or_source, text = found
             db.execute(
                 "INSERT INTO records (text, session, seq, kind, tool_or_source,"
-                " time) VALUES (?, ?, ?, ?, ?, ?)",
+                " time, interaction) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (text, sid, record.get("seq"), kind, tool_or_source,
-                 record.get("time")),
+                 record.get("time"), json.dumps(history.interaction(record, sid))),
             )
         db.execute(
             "INSERT OR REPLACE INTO logs (session, file_id, bytes_read) "
@@ -360,7 +374,7 @@ class Index:
     def _fields(snippet_words):
         # A whole number from the settings, never the caller's text
         return (
-            "session, seq, kind, tool_or_source, time, "
+            "session, seq, kind, tool_or_source, time, interaction, "
             f"snippet(records, 0, '{MARKS[0]}', '{MARKS[1]}', '…', "
             f"{int(snippet_words)}) "
             "AS snippet"
@@ -371,6 +385,10 @@ def hit(row):
     """A matching record as a search's reply gives it."""
     found = {"seq": row["seq"], "kind": row["kind"], "time": row["time"],
              "snippet": row["snippet"]}
+    found["interaction"] = json.loads(row["interaction"])
+    event = found["interaction"]
+    found["sender_name"] = history.sender_name(
+        event["sender"], event.get("sender_session"))
     found.update(named(row["kind"], row["tool_or_source"]))
     return found
 

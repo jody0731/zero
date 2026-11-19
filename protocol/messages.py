@@ -249,6 +249,10 @@ ROWS = {
 RECORD_FIELDS = {
     "seq": {**INTEGER, "description": "its place in the session's log"},
     "type": STRING,
+    "interaction": {"type": "object", "required": ["sender", "action", "target"],
+                    "properties": {"sender": STRING, "action": STRING,
+                                   "sender_session": STRING, "target": OBJECT}},
+    "sender_name": STRING,
     "audience": {**STRING, "description": "model: internal context, not "
                  "shown in a person's conversation"},
     "time": {**STRING, "description": "when it was written (ISO 8601, with "
@@ -323,6 +327,7 @@ RECORDS = {
         "choice_labels": CHOICE_LABELS,
     },
     "answer": {
+        "question_text": STRING, "text": STRING, "choice": STRING,
         "kind": STRING,
         "ask": STRING, "yes": BOOLEAN, "source": maybe(STRING),
     },
@@ -423,7 +428,7 @@ def message(about, fields=None, required=(), reply=None, stream=None,
 MESSAGES = {
     "vault/answer": message(
         "Supply private values directly to a waiting vault request.",
-        {"session": SESSION, "ask": STRING,
+        {"session": SESSION, "ask": STRING, "source": SOURCE,
          "values": {"type": "object", "additionalProperties": STRING},
          "cancel": BOOLEAN}, required=("session", "ask"),
         reply={"saved": BOOLEAN}, changes=True,
@@ -664,8 +669,8 @@ MESSAGES = {
                                   "best record"),
             "records": open_rows("records: seq, kind (user, notice, reply, "
                                  "call, handoff), a call's tool or a notice's "
-                                 "source, time, and a snippet (a match marked "
-                                 "« ») or, near around, the whole text"),
+                                 "source, sender, action, target, time and a snippet "
+                                 "(a match marked « ») or, near around, the whole text"),
             "session_count": INTEGER, "record_count": INTEGER,
             "matched_by": {**one_of("every word", "any word"),
                            "description": "what the records hold: every word, "

@@ -367,6 +367,8 @@ class Handler(BaseHTTPRequestHandler):
         payload.pop("token", None)
         payload.pop("relayed_for_pid", None)
         connection = self.server.connection(proof.pid)
+        if "source" in payload:
+            payload["source"] = WEB_SOURCE
         try:
             reply = connection.reply_to(
                 payload, MESSAGE_SECONDS.get(name, 30))

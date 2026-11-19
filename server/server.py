@@ -730,6 +730,8 @@ class Server:
             emit(error(str(exc)))
             return
         conn.settimeout(WATCH_SEND_SECONDS)
+        peer = select.poll()
+        peer.register(conn, select.POLLIN)
         try:
             # Subscribed first, so a record appended meanwhile is in the queue
             # and the seq check drops the copy
@@ -769,8 +771,7 @@ class Server:
                 if watcher.bye:
                     emit({"bye": watcher.bye})
                     return
-                readable, _, _ = select.select([conn], [], [], 0)
-                if readable:
+                if peer.poll(0):
                     # There is only one request on a watch connection; EOF leaves
                     conn.recv(1)
                     return
@@ -792,6 +793,8 @@ class Server:
             emit(error(str(exc)))
             return
         conn.settimeout(WATCH_SEND_SECONDS)
+        peer = select.poll()
+        peer.register(conn, select.POLLIN)
         sent = None
         version = self.runtime.list_version
         try:
@@ -804,8 +807,7 @@ class Server:
                     if self.stopping.is_set():
                         emit({"bye": self.reason})
                         return
-                    readable, _, _ = select.select([conn], [], [], 0)
-                    if readable:
+                    if peer.poll(0):
                         conn.recv(1)
                         return
                     now = self.runtime.wait_list(version, 0.2)

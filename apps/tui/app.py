@@ -611,11 +611,15 @@ class ZeroApp(SafeClicks, App):
         if not text.strip():
             return
         client = self.client
+        target = (client.ask or {}).get("ask") if reply else None
+        if reply and target is None:
+            return
 
         def work():
             # Asked here, in turn: a line before it may have made the session
             made = client.session is None
-            return made, client.line(text, follow_up=follow_up, choice=choice)
+            return made, client.line(text, follow_up=follow_up, choice=choice,
+                                     reply_to=target)
 
         self.request(work, then=lambda sent: self.sent(client, text, *sent))
 
@@ -625,7 +629,8 @@ class ZeroApp(SafeClicks, App):
             return
         handled_as = answer.get("handled_as")
         mark = {"steered": "steer", "queued": "queued"}.get(handled_as)
-        self.transcript.sent(text, answer.get("id"), mark)
+        if handled_as != "reply":
+            self.transcript.sent(text, answer.get("id"), mark)
         if made or self.follower is None or self.follower.stopped:
             # A new session, or the server was stopped by hand and starts again
             after = self.follower.after if self.follower and not made else 0

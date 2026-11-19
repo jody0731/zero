@@ -372,7 +372,7 @@ class SubagentsService(Service):
         def rows_beside(db, child):
             self.store.add(db, {**row, "session": child},
                            (f"subagent-task:{child}", child, subtools.ACROSS,
-                            {"text": text}))
+                            {"text": text, "sender_session": sid}))
 
         try:
             if start_from == "fork":
@@ -422,7 +422,7 @@ class SubagentsService(Service):
                 raise Refused("mode and model apply to a new subagent only")
             if to not in [row["session"] for row in self.below(sid)]:
                 raise Refused(f"{to} isn't a subagent below session {sid}")
-            payload = {"text": subtools.WORKFLOW_MESSAGE.format(
+            payload = {"sender_session": sid, "text": subtools.WORKFLOW_MESSAGE.format(
                 parent=sid, title=info["title"], text=text)}
             self.store.notice(f"workflow:{request['id']}", to, subtools.ACROSS,
                               payload)
@@ -470,11 +470,11 @@ class SubagentsService(Service):
             self.runtime.admit(Message(
                 id=f"question-answer:{reply_to}", session=to,
                 source=subtools.ACROSS, text=text, reply_to=reply_to,
-            ), extra={"reply_kind": "question"})
+            ), extra={"reply_kind": "question", "sender_session": sid})
             return f"{SENT} {to}."
         info = self.runtime.store.session(sid)
-        payload = {"text": subtools.MESSAGE.format(id=sid, title=info["title"],
-                                                   text=text)}
+        payload = {"sender_session": sid, "text": subtools.MESSAGE.format(
+            id=sid, title=info["title"], text=text)}
         row = self.store.subagent(sid)
         if row is not None and row["parent"] == to:
             payload["started_from_seq"] = row["started_from_seq"]
@@ -513,7 +513,7 @@ class SubagentsService(Service):
         records = self.runtime.log(sid).branch()
         info = self.runtime.store.session(sid)
         found = {**row, "title": info["title"]}
-        payload = {}
+        payload = {"sender_session": sid}
         if outcome == "waiting":
             ask = history.parked_ask(records)
             if ask is None:
@@ -577,7 +577,8 @@ class SubagentsService(Service):
                     self.store.notice(
                         f"subagent:{sid}:past_estimate", row["parent"],
                         subtools.UP,
-                        {"text": text, "started_from_seq": row["started_from_seq"]},
+                        {"text": text, "sender_session": sid,
+                         "started_from_seq": row["started_from_seq"]},
                     )
                     self.store.mark_past(sid, self.clock())
                     self.runtime.wake()

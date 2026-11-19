@@ -276,6 +276,8 @@ def sent(record):
             text = f"{LEFT_BEHIND.format(seq=record['started_from_seq'])}\n{text}"
         text = NOTICE.format(source=record["source"],
                              text=CLOSING_TAG.sub(r"<\\\1", text))
+    elif record.get("source") == "mcp":
+        text = f"[Message from {record['source']}]\n{text}"
     return f"{text}\n\n{SENT.format(when=when(record['time']))}"
 
 
@@ -310,7 +312,9 @@ def message(record):
     kind = record["type"]
     if kind == "session":
         return {"role": "system", "content": record["system_prompt"]}
-    if kind == "user" and record.get("mid_turn"):
+    if kind == "answer" and record.get("as_message"):
+        return {"role": "user", "content": sent(record)}
+    if kind == "user" and record.get("mid_turn") and record.get("source") != "mcp":
         return {"role": "user", "content": f"{MID_TURN}\n{sent(record)}"}
     if kind == "user":
         return {"role": "user", "content": sent(record)}
@@ -353,6 +357,149 @@ def add_notice_senders(senders):
         NOTICES[source] = what
 
 
+def is_user_source(source):
+    """The built-in human clients. An unfamiliar sender has no approval authority."""
+    return source in ("web", "cli", "user") or (
+        isinstance(source, str) and re.fullmatch(r"terminal-[0-9]+", source) is not None
+    )
+
+
+def requires_user(ask):
+    """The original proposal stays human-only across a log or database upgrade."""
+    notes = ask.get("notes") or {}
+    return bool(notes.get("requires_user") or notes.get("approval_proposal"))
+
+
+# Each input action has one delivery record and one kind of addressee.
+# Other components send notices under their own declared source.
+INPUT_ACTIONS = {
+    "send": ("user", "session"), "steer": ("user", "session"),
+    "queue": ("user", "session"), "continue": ("user", "session"),
+    "notify": ("user", "session"), "answer": ("answer", "ask"),
+    "approve": ("answer", "ask"), "decline": ("answer", "ask"),
+    "ask": ("ask", "ask"),
+}
+
+
+def logged_interaction(record, session):
+    """Construct input attribution at the writer. A caller cannot replace it."""
+    if any(key in record for key in ("interaction", "sender", "action", "target")):
+        raise ValueError("interaction is assigned by the session log")
+    result = attributed(record, session)
+    event = result.get("interaction")
+    if event is None and ("source" in record or "reply_to" in record):
+        raise ValueError(f"declare attribution for the new {record['type']} record")
+    if event is not None and record["type"] in ("user", "answer", "ask"):
+        kind, target = INPUT_ACTIONS[event["action"]]
+        if record["type"] != kind or not event["target"].get(target):
+            raise ValueError(f"{event['action']} requires a {kind} addressing {target}")
+    return result
+
+
+def interaction(record, session=None):
+    """The same sender, action and addressed object on disk and in every view.
+
+    Older records supply only their recorded facts. In particular a missing
+    source cannot provide evidence of who approved a change.
+    """
+    if "interaction" in record:
+        return record["interaction"]
+    kind = record.get("type")
+    target = {"session": session} if session else {}
+    sender = record.get("source") or "unknown"
+    if kind == "user":
+        if is_notice(record):
+            action = "notify"
+            if record.get("reference"):
+                target["reference"] = record["reference"]
+        elif record.get("continue"):
+            action = "continue"
+        elif record.get("steer"):
+            action = "steer"
+            if record.get("turn_inbox"):
+                target["turn"] = record["turn_inbox"]
+        elif record.get("queued"):
+            action = "queue"
+        else:
+            action = "send"
+    elif kind == "answer":
+        action = "answer"
+        if record.get("decision") in ("approve", "decline"):
+            action = record["decision"]
+        elif record.get("kind") not in ("question", "secret"):
+            if record.get("yes"):
+                action = "approve"
+            elif record.get("choice") == "no":
+                action = "decline"
+        if record.get("ask"):
+            target["ask"] = record["ask"]
+    elif kind == "ask":
+        sender, action = "zero", "ask"
+        if record.get("ask"):
+            target["ask"] = record["ask"]
+    elif kind == "tool":
+        sender, action = record.get("tool") or "unknown", "result"
+        if record.get("call"):
+            target["call"] = record["call"]
+    elif kind in ("assistant", "compaction"):
+        sender = "zero"
+        action = "reply" if kind == "assistant" else "summarize"
+    else:
+        return None
+    result = {"sender": sender, "action": action, "target": target}
+    if record.get("sender_session"):
+        result["sender_session"] = record["sender_session"]
+    return result
+
+
+def sender_name(sender, sender_session=None):
+    if sender_session:
+        return f"{sender} {sender_session}"
+    if is_user_source(sender):
+        return "You"
+    return {"mcp": "Agent", "zero": "ZERO", "unknown": "Unknown sender"}.get(
+        sender, sender)
+
+
+def attributed(record, session=None):
+    details = interaction(record, session)
+    if details is None or "interaction" in record:
+        return record
+    return {**record, "interaction": details}
+
+
+def attributed_records(records, sid, read_header):
+    """Resolve legacy targets from fork headers. New records carry their own target."""
+    origins = []
+    fork = (records[0].get("forked_from") or {}) if records else {}
+    if fork and any("interaction" not in row and row["type"] in (
+            "user", "ask", "answer", "tool", "assistant", "compaction")
+            for row in records):
+        visited = {sid}
+        while fork:
+            parent, cutoff = fork.get("session"), fork.get("seq")
+            if not (isinstance(parent, str) and "/" not in parent
+                    and parent not in visited and isinstance(cutoff, int)):
+                break
+            visited.add(parent)
+            origins.append((cutoff, parent))
+            if len(fork.get("ancestors", [parent])) <= 1:
+                break
+            head = read_header(parent)
+            if head is None:
+                # A deleted ancestor leaves several possible original sessions.
+                origins[-1] = (cutoff, None)
+                break
+            fork = head.get("forked_from")
+    for record in records:
+        origin = sid
+        for cutoff, parent in origins:
+            if record.get("seq", 0) > cutoff:
+                break
+            origin = parent
+        yield attributed(record, origin)
+
+
 def is_notice(message):
     """Whether a message, a user record or a steer, is a notice."""
     return message.get("source") in NOTICES
@@ -362,7 +509,7 @@ def is_notice(message):
 # record: the record its sender started from (`started_from_seq`, for a
 # notice from a part a rewind left behind) and, for a notice that quotes
 # output, what it says without it (`summary`, which the judge reads)
-MESSAGE_FIELDS = ("started_from_seq", "summary", "reference")
+MESSAGE_FIELDS = ("started_from_seq", "summary", "reference", "sender_session")
 
 
 def steer_fields(steer):
@@ -401,6 +548,19 @@ def in_context(records):
     they happened; else all of them."""
     compaction = latest_compaction(records)
     kept = compaction["kept_from"] if compaction else 0
+    if compaction and kept:
+        # An older compactor could cut at a notice inside a tool batch.
+        pending = {}
+        for record in records:
+            if record["seq"] >= kept:
+                break
+            if record["type"] == "assistant":
+                pending = {call["id"]: record["seq"] for call in
+                           record["message"].get("tool_calls") or ()}
+            elif record["type"] == "tool":
+                pending.pop(record.get("call"), None)
+        if pending:
+            kept = min(pending.values())
     return [r for r in without_question_echoes(records)
             if r["seq"] >= kept and r["type"] not in ("session", "system")]
 
@@ -433,13 +593,27 @@ def append_message(messages, message):
 
 def without_question_echoes(records):
     """Older question replies also logged the prompt and choice as a user steer."""
-    answer_inbox = None
+    answered = set()
     for record in records:
-        if not (answer_inbox is not None and record["type"] == "user"
-                and record.get("steer") and record.get("inbox") == answer_inbox):
-            yield record
-        answer_inbox = (record.get("inbox") if record["type"] == "answer"
-                        and record.get("kind") == "question" else None)
+        if (record["type"] == "answer" and record.get("kind") == "question"
+                and record.get("inbox")):
+            answered.add(record["inbox"])
+        if (record["type"] == "user" and record.get("steer")
+                and record.get("inbox") in answered):
+            continue
+        yield record
+
+
+def transcript(records):
+    """Old reply echoes can follow tool results, even across a page boundary."""
+    answers = set()
+    for record in records:
+        if record["type"] == "answer" and record.get("inbox"):
+            answers.add(record["inbox"])
+        if (record["type"] == "user" and record.get("steer")
+                and record.get("inbox") in answers):
+            continue
+        yield record
 
 
 def replay(records):
@@ -557,7 +731,9 @@ def lost_reply(records):
     answer = None
     for record in unfinished_turn(records):
         if record["type"] == "answer":
-            cancelled = not record["yes"] and record.get("kind") != "question"
+            cancelled = (not record["yes"] and record.get("kind") != "question"
+                         and "interaction" not in record
+                         and record.get("choice") != "no")
             answer = record if cancelled else None
         elif answer and record["type"] == "user" and (
             record.get("inbox") == answer["inbox"]
@@ -578,11 +754,20 @@ def dangling_calls(records):
     return list(calls.values())
 
 
+def question_result(record, text):
+    event = interaction(record)
+    sender = event["sender"]
+    if is_user_source(sender):
+        return text
+    return f"[Answer from {event.get('sender_session') or sender}]\n{text}"
+
+
 def closing_results(records, result, closed):
     """Result records for unresolved calls, without inventing an execution."""
     asks = {r["ask"]: (r["step"], r["call"]) for r in records
             if r["type"] == "ask" and r.get("kind") == "question"}
-    answers = {asks[r["ask"]]: r["text"] for r in records if r["type"] == "answer"
+    answers = {asks[r["ask"]]: question_result(r, r["text"])
+               for r in records if r["type"] == "answer"
                and r.get("kind") == "question" and r["ask"] in asks}
     for step, raw in dangling_calls(records):
         name = raw["function"]["name"]

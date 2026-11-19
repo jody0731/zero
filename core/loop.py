@@ -22,7 +22,7 @@ from core.asking import (
 from core.control import Stopped
 from core.history import LOG_FORMAT, NewerLog, OldLog, log_format
 from core.hooks import Deny, HookRunner, ModelAsk, Park, Question, Stop
-from core.llm import MODEL_ERRORS
+from core.llm import InvalidHistory, MODEL_ERRORS
 from core.records import Call, ModelFailure, Step, Turn
 
 CUT_OFF = "[Your last reply hit the output limit and was cut off.]"
@@ -238,7 +238,7 @@ class Session:
         return record
 
     def open_turn(self, text, inbox=None, source=None, control=None,
-                  continued=False, carried=None):
+                  continued=False, carried=None, queued=False):
         """`continued`: the turn is a server's `continue`, its text a
         harness note the user asked for, not words they typed. `carried`:
         what the message carries beside its text, kept on its record
@@ -265,6 +265,8 @@ class Session:
             fields["inbox"] = inbox
         if source is not None:
             fields["source"] = source
+        if queued:
+            fields["queued"] = True
         if continued:
             fields["continue"] = True
         fields.update(carried or {})
@@ -484,7 +486,7 @@ class Session:
             stop = self.hooks.decide("before_model", step)
             if isinstance(stop, ModelAsk):
                 record = self.write(
-                    "ask", ask=f"ask-{secrets.token_hex(4)}", step=step.number,
+                    "ask", ask=f"ask-{secrets.token_hex(16)}", step=step.number,
                     call="", tool="", command=stop.command, why=stop.why,
                     reason="", about=stop.about,
                     notes={**stop.notes, "before_model": True},
@@ -495,6 +497,8 @@ class Session:
                 return stop
             try:
                 step.reply = self.call_model(step)
+            except InvalidHistory as error:
+                return Stop("failed", str(error))
             except MODEL_ERRORS as e:
                 failure = ModelFailure(step, e, attempt)
                 retry = self.hooks.decide("model_error", failure)
@@ -527,7 +531,10 @@ class Session:
         for steer in turn.control.steers():
             turn.reply_format_errors = 0
             turn.unformatted_reply = None
-            self.write("user", **self.fitted(history.steer_fields(steer)))
+            fields = history.steer_fields(steer)
+            if turn.inbox:
+                fields["turn_inbox"] = turn.inbox
+            self.write("user", **self.fitted(fields))
             turn.control.delivered(steer)
 
     def fitted(self, fields):
@@ -724,7 +731,7 @@ class Session:
             asked["choice_labels"] = decision.labels
         reason = decision.reason or str(call.args.get("reason") or "").strip()
         record = self.write(
-            "ask", ask=f"ask-{secrets.token_hex(4)}", step=call.step.number,
+            "ask", ask=f"ask-{secrets.token_hex(16)}", step=call.step.number,
             call=call.id, tool=call.name, command=command, why=decision.why,
             reason=reason, notes=call.notes,
             choices=(list(decision.labels) if isinstance(decision, Question)
@@ -745,6 +752,19 @@ class Session:
         ask = history.parked_ask(records)
         if ask is None or ask["ask"] != fields["ask"]:
             raise ValueError(f"no open ask {fields['ask']!r} in this session")
+        fields = {**fields, "question_text": ask["command"]}
+        if ask.get("kind"):
+            fields["kind"] = ask["kind"]
+        if history.requires_user(ask):
+            if not history.is_user_source(fields.get("source")):
+                raise ValueError("this change needs an answer from the user")
+            if fields.get("choice") in ("yes", "no"):
+                fields["decision"] = ("approve" if fields["choice"] == "yes"
+                                      else "decline")
+        if (not fields.get("yes") and fields.get("choice") != NO
+                and ask.get("kind", "permission") == "permission"
+                and not ask.get("notes", {}).get("before_model")):
+            fields["as_message"] = True
         pending = history.unfinished_turn(records)
         user = pending[0]
         asked = datetime.fromisoformat(ask["time"])
@@ -813,7 +833,8 @@ class Session:
             def answered_question():
                 labels = call.notes["question"]["choice_labels"]
                 answer = labels.get(fields.get("choice"), fields["text"])
-                call.result = answer
+                call.result = history.question_result(
+                    {"type": "answer", **fields}, answer)
                 call.ran = True
                 self.answer(call)
 
@@ -842,9 +863,7 @@ class Session:
             self.hooks.notify("after_tool", call)
             self.close_dangling_calls(NOT_ASKED, "not_started")
 
-        stop = self.run_calls(step, [], cancel)
-        self.write_reply(fields)
-        return stop
+        return self.run_calls(step, [], cancel)
 
     def write_reply(self, fields):
         """A reply that wasn't a yes joins the turn as the user's message."""

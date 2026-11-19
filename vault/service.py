@@ -60,6 +60,9 @@ class VaultService(Service):
         sid, ask_id = request.get("session"), request.get("ask")
         if not isinstance(sid, str) or not isinstance(ask_id, str):
             raise Refused("A vault answer needs its session and ask id.")
+        source = request.get("source", "user")
+        if not isinstance(source, str) or not source:
+            raise Refused("A private input receipt needs its sender.")
         message_id = "vault-answer-" + ask_id
         prior = self.runtime.store.query(
             "SELECT payload FROM inbox WHERE id = ? AND session = ?",
@@ -86,7 +89,7 @@ class VaultService(Service):
         status = ("Private input cancelled." if cancelled
                   else "Private information saved.")
         self.runtime.admit(Message(
-            id=message_id, text=status, source="user",
+            id=message_id, text=status, source=source,
             session=sid, reply_to=ask_id,
         ), extra={"reply_kind": "secret", "private_saved": not cancelled})
         return {"ok": True, "saved": not cancelled}

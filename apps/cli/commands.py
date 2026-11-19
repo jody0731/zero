@@ -133,7 +133,8 @@ def history_text(info, records, working=True, runs_with=None, context=None):
                 started, restarts = record["time"], 0
             mark = " (steer)" if record.get("steer") else ""
             # A background job's notice isn't the user's
-            who = "job" if record.get("source") == "job" else "you"
+            who = record.get("sender_name") or render.who(record.get("source"))
+            who = "you" if who == "You" else who
             lines.append(f"{clock}  {who}{mark}  {record['text']}")
         elif record["type"] == "ask":
             reason = record.get("reason") or ""
@@ -141,8 +142,8 @@ def history_text(info, records, working=True, runs_with=None, context=None):
                      + (f" ({reason})" if reason else ""))
             lines.append(f"{clock}  {NAME}  {asked}")
         elif record["type"] == "answer":
-            reply = "approved" if record["yes"] else "replied; not run"
-            lines.append(f"{clock}  you  {reply}")
+            label = render.interaction_label(record)
+            lines.append(f"{clock}  {label}  {record.get('text', '')}")
         elif record["type"] in render.COMPACTION_RECORDS:
             lines.append(f"--- {render.compaction_text(record)} ---")
         elif record["type"] == "rewind":
@@ -213,7 +214,7 @@ def ending(record, started=None, restarts=0):
 # The flags a workflow's send refuses, and their names in the arguments
 WORKFLOW_REFUSES = (
     ("--thinking-effort", "thinking_effort"), ("--cd", "cd"),
-    ("--when-busy", "when_busy"), ("--choice", "choice"),
+    ("--when-busy", "when_busy"), ("--choice", "choice"), ("--reply-to", "reply_to"),
     ("--rounds", "rounds"),
 )
 
@@ -250,7 +251,8 @@ def follow(connection, sid, after, args, out, user_answers=True):
                     out(render.ask_line(result.ask))
                     offered = "|".join(result.ask.get("choices") or ())
                     out(f"Answer with: zero -p [TEXT] --session {sid}"
-                        + (f", or --choice {offered}" if offered else ""))
+                        f" --reply-to {result.ask['id']}"
+                        + (f" [--choice {offered}]" if offered else ""))
                 elif result.last is None:
                     out("(nothing ran)")
                 else:
@@ -298,15 +300,13 @@ def print_turn(connection, args, workspace, out=print):
     for_session = getattr(args, "for_session", None)
     if for_session:
         return print_workflow_turn(connection, args, for_session, out)
-    sid, after, reply_to = None, 0, None
+    sid, after = None, 0
+    reply_to = getattr(args, "reply_to", None)
     if args.session is not None:
         info = match_session(connection.sessions(), args.session)
         sid = info["id"]
         records, _ = connection.history(sid, limit=1)
         after = records[-1]["seq"] if records else 0
-        # A reply to the waiting question, marked for it, as its box sends one
-        if info.get("ask") is not None:
-            reply_to = info["ask"]["id"]
     options = {"session": sid, "mode": args.mode, "model": args.model,
                "workspace": workspace, "reply_to": reply_to,
                "thinking_effort": getattr(args, "thinking_effort", None)}
@@ -372,6 +372,7 @@ def send_flags(parser):
     parser.add_argument("--when-busy", choices=("steer", "queue"),
                         help="while a turn runs: steer it (the default) or "
                              "queue a follow-up")
+    parser.add_argument("--reply-to", metavar="ASK", help="the question id to answer")
     parser.add_argument("--choice", metavar="CHOICE",
                         help="answer the waiting question with one of its "
                              "choices, as its line names them")
@@ -840,10 +841,15 @@ def clock_of(time):
 
 def record_kind(record):
     """Whose a record is, in a word or two."""
+    if (record.get("interaction") or {}).get("action") == "ask":
+        return render.interaction_label(record)
+    if record["kind"] == "user" and record.get("interaction"):
+        label = render.interaction_label(record)
+        return "you" if label == "You" else label
     if record["kind"] == "call":
         return f"{record.get('tool', '')} call"
     if record["kind"] == "notice":
-        return f"notice from {record.get('source', '')}"
+        return f"notice from {record.get('sender_name') or record.get('source', '')}"
     return {"user": "you", "reply": NAME, "handoff": "handoff"}[record["kind"]]
 
 

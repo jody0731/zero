@@ -23,6 +23,7 @@ class Questions(Hook):
                     proposed["tool"], proposed["arguments"], session.tool_context)
             except (ValueError, OSError) as error:
                 return Deny(f"No proposal opened: {error}")
+            call.notes["requires_user"] = True
             call.notes["approval_proposal"] = proposal
             call.notes["approval_session"] = str(session.log.path)
             text += "\n\n" + shown

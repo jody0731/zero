@@ -233,15 +233,23 @@ class Transcript(VerticalScroll):
         if kind in ("user", "answer"):
             if kind == "user" and not record.get("steer"):
                 self.started, self.restarts = record.get("time"), 0
-            if record.get("source") == "job":
-                first = record["text"].strip().splitlines()[0]
-                return [Plain(f"◈ {first}", classes="note")]
+            if record.get("notice") or record.get("source") == "job":
+                first = record["text"].partition("\n")[0]
+                sender = (record.get("interaction") or {}).get("sender_session")
+                text = f"{record['sender_name']} · {first}" if sender else first
+                return [Plain(f"◈ {text}", classes="note")]
             inbox = record.get("inbox")
             if inbox is not None and inbox in self.shown:
                 return []
             self.shown.add(inbox)
             if record.get("continue"):
                 return [yours("/continue")]
+            if record.get("interaction"):
+                label = render.interaction_label(record)
+                if record.get("question_text"):
+                    label += " · " + record["question_text"]
+                mark = None if label == "You" else label
+                return [yours(record.get("text", ""), mark)]
             label = who(record.get("source"), source)
             marks = [] if label == "you" else [label]
             if record.get("steer") and kind == "user":
@@ -346,6 +354,8 @@ class Transcript(VerticalScroll):
 
     def sent(self, text, inbox, mark=None):
         """A message of the user's, shown as it is sent from here."""
+        if inbox in self.shown:
+            return
         self.shown.add(inbox)
         self.echoes[inbox] = yours(text, mark)
         self.mount(self.echoes[inbox])

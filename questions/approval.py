@@ -33,10 +33,10 @@ def approved_ask(session, proposal):
     for record in reversed(records):
         if record["type"] != "answer" or record.get("ask") not in asks:
             continue
-        # MCP replies come from another agent, not the human using an app.
-        if (record.get("choice") == "yes" and record.get("source")
-                and record["source"] != "mcp"
-                and not history.is_notice(record) and record["ask"] not in used):
+        event = history.interaction(record)
+        if (record.get("choice") == "yes" and history.is_user_source(event["sender"])
+                and event["target"].get("ask") == record["ask"]
+                and record["ask"] not in used):
             return record["ask"]
         # A newer refusal supersedes any earlier permission for this proposal.
         return None

@@ -173,14 +173,18 @@ def cut_points(body):
     still open)."""
     points = []
     before = None
+    pending = set()
     for i, record in enumerate(body):
         kind = record["type"]
-        if kind in ("user", "note"):
+        if not pending and kind in ("user", "note"):
             points.append(i)
         elif kind == "assistant":
             calls = (record.get("message") or {}).get("tool_calls")
-            if calls or before not in ("user", "note"):
+            if not pending and (calls or before not in ("user", "note")):
                 points.append(i)
+            pending.update(call["id"] for call in calls or ())
+        elif kind == "tool":
+            pending.discard(record.get("call"))
         if history.message(record) is not None:
             before = kind
     return points

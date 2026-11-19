@@ -277,8 +277,10 @@ zero doctor                                        # what ZERO needs from the ma
   input belongs in `next.user`. If you ask how to proceed, the steps belong in Answer.
   The browser hides empty sections. The result also includes the session, outcome, any waiting
   question, tokens and seconds.
-- The exit status is 0 when it worked, 1 when not, 2 when a question waits: answer it with `zero session send TEXT --session ID`, or pick its displayed choice with `--choice KEY` (a number for a question;
-  `yes`, `session`, `saved` or `no` for a permission ask).
+- Exit status 2 means a question is waiting. Answer with
+  `zero session send TEXT --session ID --reply-to ASK`. The prompt prints the ask ID.
+  Add `--choice KEY` to select an offered choice. A separate message waits its turn.
+  Exit status 0 means the turn succeeded and 1 means it failed.
 - `zero -p TEXT` is short for `zero session send TEXT`.
 
 </details>

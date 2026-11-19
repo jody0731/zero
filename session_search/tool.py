@@ -41,11 +41,25 @@ def kind_text(record):
     """What a record is, in words."""
     kind = record["kind"]
     if kind == "user":
-        return "the user's message"
+        event = record.get("interaction", {})
+        source = event.get("sender")
+        who = ("the user" if source is None or history.is_user_source(source)
+               else history.sender_name(source, event.get("sender_session")))
+        action = event.get("action")
+        ask = event.get("target", {}).get("ask")
+        if ask:
+            verbs = {"approve": "approved", "decline": "declined"}
+            verb = verbs.get(action, "answered")
+            return f"{who} {verb} {ask}"
+        return f"{who}'s message"
     if kind == "notice":
         source = record.get("source", "")
-        return f"a notice from {history.NOTICES.get(source, source)}"
+        sender = record.get("interaction", {}).get("sender_session")
+        return f"a notice from {sender or history.NOTICES.get(source, source)}"
     if kind == "reply":
+        event = record.get("interaction", {})
+        if event.get("action") == "ask" and event["target"].get("ask"):
+            return f"your question {event['target']['ask']}"
         return "your reply"
     if kind == "call":
         return f"your {record.get('tool', '')} call and its result"

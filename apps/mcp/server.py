@@ -139,16 +139,18 @@ class ZeroTools:
             time.sleep(min(RECONNECT_SECONDS,
                            max(0.0, deadline - time.monotonic())))
 
-    def reply(self, session, text=None, choice=None):
+    def reply(self, session, text=None, choice=None, reply_to=None):
         info = self.session(session)
         ask = info.get("ask")
+        if choice is not None and reply_to is None and ask is not None:
+            raise ValueError("a choice needs the ask id from zero_wait in reply_to")
         if choice is not None and ask is None:
             raise ValueError("no question waits in this session")
         if choice is None and not text:
             raise ValueError("a reply takes text, or a choice")
         sent = self.connection.send(
             text or choice, session=info["id"],
-            reply_to=None if ask is None else ask["id"], choice=choice,
+            reply_to=reply_to, choice=choice,
         )
         return {"ok": True, "session": info["id"],
                 "handled_as": sent.get("handled_as")}
@@ -231,11 +233,13 @@ TOOLS = (
      }, ("session",)),
      "outputSchema": result_schema("zero_wait")},
     {"name": "zero_reply", "description": (
-        "Answer the question waiting in a ZERO session: `text` in words, or "
+        "Pass the ask id from zero_wait in `reply_to` to answer that question. "
+        "Send `text` in words, or "
         "`choice`, one of the `choices` its ask in zero_wait's result lists "
-        "(their words in `choice_labels`). With no question waiting, `text` "
+        "(their words in `choice_labels`). With no reply_to, `text` "
         "is a follow-up message. Then zero_wait."),
      "inputSchema": arguments_schema("zero_reply", {
+         "reply_to": optional("string", "Question id from zero_wait"),
          "session": {"title": "Session", "type": "string"},
          "text": optional("string", "Text"),
          "choice": optional("string", "Choice"),

@@ -63,8 +63,8 @@ class SessionActions:
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
         records = upgrade.migrate(self.log(sid).branch(), time=upgrade.timestamp())
-        records = [r for r in records if r["seq"] > after
-                   and (before is None or r["seq"] < before)]
+        records = [r for r in history.without_question_echoes(records)
+                   if r["seq"] > after and (before is None or r["seq"] < before)]
         earlier_count = 0
         if limit is not None and len(records) > limit:
             earlier_count = len(records) - limit

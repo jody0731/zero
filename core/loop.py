@@ -234,7 +234,7 @@ class Session:
         record = self.log.append(type, **fields)
         message = history.message(record)
         if message is not None:
-            self.messages.append(message)
+            history.append_message(self.messages, message)
         return record
 
     def open_turn(self, text, inbox=None, source=None, control=None,
@@ -817,10 +817,6 @@ class Session:
                 call.ran = True
                 self.answer(call)
 
-            labels = call.notes["question"]["choice_labels"]
-            answer = labels.get(fields.get("choice"), fields["text"])
-            self.write_reply({**fields, "text":
-                              call.notes["question"]["text"] + "\n" + answer})
             return self.run_calls(step, later, answered_question)
         if fields.get("choice") == NO:
             def decline():

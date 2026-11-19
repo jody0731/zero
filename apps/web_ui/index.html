@@ -27,7 +27,7 @@
         <img src="/ui/wordmark-light.svg" alt="ZERO" width="174" height="64">
       </picture>
     </header>
-    <button id="new-session" class="new-session" type="button">
+    <button id="new-session" class="new-session" type="button" disabled>
       + New session
     </button>
     <ul id="session-list" class="session-list" role="list"></ul>
@@ -41,7 +41,8 @@
       <button id="back" class="ghost back" type="button"
               aria-label="Sessions">‹</button>
       <div class="titles">
-        <h1 id="session-title"></h1>
+        <h1><button id="session-title" type="button"
+                    title="Rename session"></button></h1>
       </div>
       <button id="details-toggle" class="ghost" type="button"
               aria-label="Expand side panel" title="Expand side panel">◧</button>
@@ -68,21 +69,6 @@
   <div class="handle" data-handle="right"></div>
   <aside id="details" class="panel details" aria-label="Details"></aside>
 </div>
-<dialog id="new-dialog" class="dialog">
-  <form id="new-form" method="dialog">
-    <h2>New session</h2>
-    <label>Folder <input id="new-folder" required readonly></label>
-    <button id="new-folder-choose" type="button">Choose workspace…</button>
-    <label>Mode <select id="new-mode"></select></label>
-    <label>Message <textarea id="new-text" rows="4" required></textarea></label>
-    <p id="new-error" class="error" hidden></p>
-    <div class="composer-row">
-      <span class="spacer"></span>
-      <button value="cancel" class="ghost" type="button" id="new-cancel">Cancel</button>
-      <button value="start" class="primary" type="submit">Start</button>
-    </div>
-  </form>
-</dialog>
 <dialog id="settings-dialog" class="dialog settings-dialog">
   <header class="panel-head">
     <h2>Settings</h2>

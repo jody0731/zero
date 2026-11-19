@@ -400,11 +400,9 @@ def in_context(records):
     `kept_from`) and every one after it, the compactions among them where
     they happened; else all of them."""
     compaction = latest_compaction(records)
-    body = records
-    if compaction is not None:
-        kept = compaction["kept_from"]
-        body = [r for r in records if r["seq"] >= kept]
-    return [r for r in body if r["type"] not in ("session", "system")]
+    kept = compaction["kept_from"] if compaction else 0
+    return [r for r in without_question_echoes(records)
+            if r["seq"] >= kept and r["type"] not in ("session", "system")]
 
 
 def handoff(compaction):
@@ -415,6 +413,33 @@ def handoff(compaction):
     head = HANDOFF.format(when=when(compaction.get("handoff_at")
                                     or compaction["time"]))
     return {"role": "user", "content": f"{head}\n\n{compaction['summary']}"}
+
+
+def append_message(messages, message):
+    """Keep tool results together if a notice arrived while a call was parked."""
+    if message["role"] == "tool" and messages and messages[-1]["role"] == "user":
+        position = len(messages)
+        while position and messages[position - 1]["role"] == "user":
+            position -= 1
+        start = position
+        while start and messages[start - 1]["role"] == "tool":
+            start -= 1
+        calls = messages[start - 1].get("tool_calls") if start else None
+        if any(call["id"] == message["tool_call_id"] for call in calls or ()):
+            messages.insert(position, message)
+            return
+    messages.append(message)
+
+
+def without_question_echoes(records):
+    """Older question replies also logged the prompt and choice as a user steer."""
+    answer_inbox = None
+    for record in records:
+        if not (answer_inbox is not None and record["type"] == "user"
+                and record.get("steer") and record.get("inbox") == answer_inbox):
+            yield record
+        answer_inbox = (record.get("inbox") if record["type"] == "answer"
+                        and record.get("kind") == "question" else None)
 
 
 def replay(records):
@@ -439,7 +464,7 @@ def replay(records):
             continue
         if record["type"] == "tool" and str(record["seq"]) in cleared:
             found = {**found, "content": cleared[str(record["seq"])]}
-        messages.append(found)
+        append_message(messages, found)
     return messages
 
 
@@ -447,7 +472,7 @@ def turns(records):
     """Turns in the trajectory's shape; a restart keeps the same turn."""
     result = []
     steps = {}
-    for record in records:
+    for record in without_question_echoes(records):
         kind = record["type"]
         if kind == "user":
             if record.get("steer") and result:
@@ -532,7 +557,8 @@ def lost_reply(records):
     answer = None
     for record in unfinished_turn(records):
         if record["type"] == "answer":
-            answer = None if record["yes"] else record
+            cancelled = not record["yes"] and record.get("kind") != "question"
+            answer = record if cancelled else None
         elif answer and record["type"] == "user" and (
             record.get("inbox") == answer["inbox"]
         ):
@@ -554,6 +580,10 @@ def dangling_calls(records):
 
 def closing_results(records, result, closed):
     """Result records for unresolved calls, without inventing an execution."""
+    asks = {r["ask"]: (r["step"], r["call"]) for r in records
+            if r["type"] == "ask" and r.get("kind") == "question"}
+    answers = {asks[r["ask"]]: r["text"] for r in records if r["type"] == "answer"
+               and r.get("kind") == "question" and r["ask"] in asks}
     for step, raw in dangling_calls(records):
         name = raw["function"]["name"]
         arguments = raw["function"]["arguments"]
@@ -565,11 +595,15 @@ def closing_results(records, result, closed):
             through = {"called_through": name}
             name, arguments = inner
         _, error = tools.check(name, arguments)
-        yield {
+        fields = {
             "step": step, "call": raw["id"], "tool": name, "arguments": arguments,
             "result": result, "bad_call": bool(error), "denied": False, "ran": False,
             "notes": {}, "closed": closed, **through,
         }
+        if (step, raw["id"]) in answers:
+            fields.update(result=answers[step, raw["id"]], ran=True)
+            del fields["closed"]
+        yield fields
 
 
 def restart_note(records, now=None, extra=""):

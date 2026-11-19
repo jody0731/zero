@@ -519,6 +519,10 @@
           "maxLength": 200,
           "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
+        "title": {
+          "type": "string",
+          "description": "initial title for a new session"
+        },
         "text": {
           "type": "string"
         },

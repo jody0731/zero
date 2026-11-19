@@ -469,6 +469,7 @@ MESSAGES = {
         "A message to a session, or to a new one: a turn starts, or it "
         "steers or queues behind the running one, or it answers the open ask.",
         {
+            "title": {**STRING, "description": "initial title for a new session"},
             "text": STRING, "session": maybe(SESSION),
             "mode": maybe(STRING), "model": maybe(STRING), "source": SOURCE,
             "thinking_effort": {**maybe(STRING), "description": "a new session's "

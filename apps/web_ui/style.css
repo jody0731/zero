@@ -621,3 +621,15 @@ button { font-size: 12px; font-weight: 500; border-radius: 4px;
 .row.open, .tree .row.open { background: var(--raise); }
 
 .tree li { margin: 0; }
+
+#session-title, #title-editor {
+  max-width: 100%; font: inherit; letter-spacing: inherit; color: inherit;
+}
+#session-title:not([hidden]) {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: start; border: 0; background: transparent; padding: 0;
+}
+#session-title:hover { text-decoration: underline; text-underline-offset: .16em; }
+#title-editor { width: 100%; }
+
+.queue[hidden] { display: none; }

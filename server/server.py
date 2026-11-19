@@ -687,7 +687,7 @@ class Server:
         if not isinstance(text, str):
             return error("a message needs its text, a string")
         names = ("session", "mode", "model", "thinking_effort", "reply_to", "workspace",
-                 "choice")
+                 "choice", "title")
         fields = {name: request.get(name) for name in names}
         fields["when_busy"] = request.get("when_busy") or "steer"
         fields["source"] = request.get("source")

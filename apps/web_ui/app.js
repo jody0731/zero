@@ -21,10 +21,11 @@
   // A hidden page lets go of its stream after this long
   const HIDDEN_SECONDS = 60;
   const PAGE_RECORDS = 150;
+  const RESULT_CHARS = 20000;
   const WIDTHS = { left: [245, 200, 460], right: [285, 260, 640] };
 
   const state = {
-    hello: null, sessions: [], open: null, records: [], earlier: 0,
+    hello: null, sessions: [], open: null, newSession: null, records: [], earlier: 0,
     runsWith: null, context: null, events: null, asleep: false,
     calls: new Map(), lastSeq: 0, lastTime: null, draft: null,
     hiddenTimer: null, seenSent: 0, turn: null, archived: false,
@@ -133,12 +134,6 @@
     return String(source);
   }
 
-  function modeAbout(name) {
-    const mode = (state.hello && state.hello.modes || []).find(
-      (each) => each.name === name);
-    return mode ? mode.about : "";
-  }
-
   // ------------------------------------------------------------ stream
 
   function connect() {
@@ -149,6 +144,7 @@
     const events = new EventSource(`/api/events${query}`);
     state.events = events;
     events.addEventListener("list", (event) => {
+      if (state.events !== events) return;
       const data = JSON.parse(event.data);
       if (data.sessions) {
         state.sessions = data.sessions;
@@ -346,16 +342,23 @@
 
   // ------------------------------------------------------------ a session
 
-  async function openSession(id) {
+  async function openSession(id, draft = null) {
     const version = (state.openVersion || 0) + 1;
     state.openVersion = version;
     if (state.events) state.events.close();
     state.events = null;
     saveComposerDraft();
+    $("title-editor")?.remove();
+    $("session-title").hidden = false;
     state.open = id;
+    state.newSession = draft;
+    state.runsWith = draft;
+    state.context = null;
+    $("queue").checked = false;
     state.rewindPoints = new Set();
     restoreComposerDraft();
-    history.replaceState(null, "", `#session=${encodeURIComponent(id)}`);
+    history.replaceState(null, "", id ? `#session=${encodeURIComponent(id)}`
+      : "#view=new");
     state.turn = null;
     state.settingsDirty = false;
     state.turnStarted = null;
@@ -369,6 +372,14 @@
     drawSessions();
     drawHead();
     const timeline = $("timeline");
+    if (draft) {
+      timeline.replaceChildren();
+      drawDetails();
+      drawAsk();
+      connect();
+      $("text").focus();
+      return;
+    }
     timeline.replaceChildren(el("div", "loading", "…"));
     try {
       const [reply, points] = await Promise.all([
@@ -398,6 +409,8 @@
     state.openVersion = (state.openVersion || 0) + 1;
     saveComposerDraft();
     state.open = null;
+    state.newSession = null;
+    $("title-editor")?.remove();
     state.turn = null;
     restoreComposerDraft();
     $("session-title").textContent = "";
@@ -476,9 +489,51 @@
   $("follow").addEventListener("click", scrollToEnd);
 
   function drawHead() {
-    const row = rowOf(state.open);
+    const row = state.newSession || rowOf(state.open);
     $("session-title").textContent = row ? row.title || row.id : state.open || "";
+    $("session-title").disabled = !row;
   }
+
+  $("session-title").addEventListener("click", () => {
+    const draft = state.newSession;
+    const id = state.open;
+    const button = $("session-title");
+    const input = el("input");
+    input.id = "title-editor";
+    input.setAttribute("aria-label", "Session name");
+    input.value = button.textContent;
+    button.hidden = true;
+    button.after(input);
+    input.focus();
+    input.select();
+    let finished = false;
+    const finish = async (save, focus) => {
+      if (finished || !input.isConnected) return;
+      finished = true;
+      const title = input.value.trim();
+      input.remove();
+      button.hidden = false;
+      if (focus) button.focus();
+      if (!save || !title || title === button.textContent) return;
+      try {
+        if (draft) draft.title = title;
+        else {
+          await change("session/rename", { session: id, title });
+          const row = rowOf(id);
+          if (row) row.title = title;
+        }
+        drawHead();
+        drawSessions();
+      } catch (error) { alert(error.message); }
+    };
+    input.addEventListener("blur", () => finish(true, false));
+    input.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === "Escape") {
+        event.preventDefault();
+        finish(event.key === "Enter", true);
+      }
+    });
+  });
 
   async function markSeen() {
     const row = rowOf(state.open);
@@ -656,15 +711,17 @@
     }
     showProgress(turn, message.tool_calls?.length ? "Working" : "Thinking");
     for (const call of message.tool_calls || []) {
-      node.append(workEntry(call.id));
+      node.append(workEntry(call.id, call.function?.name, call.function?.arguments));
     }
     return null;
   }
 
-  function workEntry(call) {
+  function workEntry(call, name, args) {
     const fold = el("details", "call");
     fold.dataset.call = call;
     fold.append(el("summary", null, "Working"), el("div", "body", "In progress"));
+    if (name) fold.append(el("strong", null, name));
+    if (args && args !== "{}") fold.append(el("pre", null, args));
     state.calls.set(call, fold);
     return fold;
   }
@@ -688,7 +745,7 @@
     let fold = state.calls.get(record.call);
     if (!fold) {
       // The history window can start between a call and its result.
-      fold = workEntry(record.call);
+      fold = workEntry(record.call, record.tool, record.arguments);
       const step = el("div", "process-step");
       step.dataset.seq = record.seq;
       step.append(fold);
@@ -699,6 +756,14 @@
     }
     fold.querySelector(".body").textContent = record.denied ? "Declined"
       : record.failed || record.bad_call ? "Failed" : "Finished";
+    const result = record.result || "";
+    if (result) {
+      const output = result.length > RESULT_CHARS
+        ? result.slice(0, RESULT_CHARS) + `\n… +${result.length - RESULT_CHARS}`
+        : result;
+      fold.append(el("pre", null, output));
+    }
+    if (record.saved_path) fold.append(el("div", "saved", record.saved_path));
     if (record.fields?.job_id) fold.append(jobLink(record.fields.job_id));
     return null;
   }
@@ -952,7 +1017,8 @@
     if (state.turn && (waiting || !box.hidden)) {
       showProgress(state.turn, state.turn.phase, waiting);
     }
-    $("composer").hidden = !row || Boolean(ask);
+    $("composer").hidden = (!row && !state.newSession) || Boolean(ask);
+    $("queue").parentElement.hidden = Boolean(state.newSession);
     $("stop").hidden = !(row && (row.state === "running" || row.ask));
     if (!ask) {
       box.hidden = true;
@@ -1076,14 +1142,33 @@
 
   async function send(event) {
     if (event) event.preventDefault();
-    const text = $("text").value.trim();
-    if (await runCommand(text)) return;
-    if (!text || !state.open) return;
-    const session = state.open;
     const original = $("text").value;
     const button = $("send");
+    let text = original.trim();
+    if (!text || button.disabled) return;
+    const draft = state.newSession;
+    const session = state.open;
+    if (!session && !draft) return;
     button.disabled = true;
     try {
+      if (draft && text === "/init") text = state.hello.init_request;
+      else if (await runCommand(text)) return;
+      if (draft) {
+        const fields = { ...draft, text, source: "web" };
+        const content = JSON.stringify(fields);
+        if (state.firstSend?.content !== content) {
+          state.firstSend = { content, id: newId() };
+        }
+        const reply = await change("session/send", {
+          ...fields, id: state.firstSend.id,
+        });
+        if (state.newSession === draft) {
+          const remaining = $("text").value;
+          if (remaining !== original) writeComposerDraft(reply.session, remaining);
+          await openSession(reply.session);
+        }
+        return;
+      }
       await change("session/send", {
         session, text, source: "web",
         when_busy: $("queue").checked ? "queue" : "steer",
@@ -1216,10 +1301,14 @@
 
   async function drawDetails() {
     const panel = $("details");
-    const row = rowOf(state.open);
+    const draft = state.newSession;
+    const row = draft || rowOf(state.open);
     drawUsage();
     const version = ++state.detailsVersion;
-    if (row && (state.settingsDirty || panel.contains(document.activeElement))) {
+    if (draft && panel.draftRow === draft) return;
+    panel.draftRow = draft;
+    const editing = state.settingsDirty || panel.contains(document.activeElement);
+    if (!draft && row && editing) {
       const family = familySection(row);
       const oldFamily = panel.querySelector(".session-family");
       if (oldFamily) {
@@ -1235,7 +1324,7 @@
     }
     panel.replaceChildren();
     if (!row) {
-      if (state.open) return;
+      if (state.open || !state.hello) return;
       $("timeline").replaceChildren();
       const welcome = el("div", "empty-session");
       welcome.append(el("h2", null, "Ready when you are."),
@@ -1254,6 +1343,7 @@
       showPanel("session");
     });
     panel.append(back, runsWithSection(row));
+    if (draft) return;
     const family = familySection(row);
     if (family) panel.append(family);
     const context = state.context;
@@ -1471,6 +1561,10 @@
     const status = el("div", "sub save-status");
     status.setAttribute("aria-live", "polite");
     const apply = async (name, value, control) => {
+      if (row === state.newSession) {
+        row[name] = value;
+        return;
+      }
       const previous = name === "thinking_effort" ? runs[name] : row[name];
       control.disabled = true;
       state.settingsDirty = true;
@@ -1708,6 +1802,7 @@
               await change("session/rename", { session: row.id, title });
               const current = rowOf(row.id);
               if (current) current.title = title;
+              drawHead();
               menu.open = false;
               input.blur();
               drawSessions();
@@ -1753,6 +1848,7 @@
   }
 
   function drawUsage() {
+    $("usage").hidden = Boolean(state.newSession);
     const context = state.context || {};
     const cache = context.cached_share;
     $("usage").textContent = `Context ${tokens(context.tokens)}`
@@ -1786,55 +1882,18 @@
   // ------------------------------------------------------------ new session
 
   function openNew() {
-    const dialog = $("new-dialog");
-    const select = $("new-mode");
-    select.replaceChildren();
-    for (const each of (state.hello && state.hello.modes) || []) {
-      const option = el("option", null, each.name);
-      option.value = each.name;
-      if (each.name === (state.hello.mode || "default")) option.selected = true;
-      select.append(option);
-    }
-    select.title = modeAbout(select.value);
-    const row = rowOf(state.open);
-    if (!$("new-folder").value) {
-      $("new-folder").value = state.launch.workspace || (row && row.workspace) || "/";
-    }
-    if (state.launch.mode) select.value = state.launch.mode;
-    $("new-error").hidden = true;
-    dialog.showModal();
+    const defaults = Object.fromEntries(state.settings.map(s => [s.name, s.value]));
+    const { workspace, mode, model, thinking_effort } = state.launch;
+    state.firstSend = null;
+    openSession(null, {
+      title: "New session", workspace: workspace || "/",
+      mode: mode || defaults.mode || state.hello?.mode || "default",
+      model: model || defaults.model || state.hello?.model,
+      thinking_effort: thinking_effort || defaults.thinking_effort || undefined,
+    });
   }
 
-  $("new-folder-choose").addEventListener("click", () => {
-    chooseWorkspace($("new-folder").value, async (folder) => {
-      $("new-folder").value = folder;
-    });
-  });
-
-  $("new-mode").addEventListener("change", () => {
-    $("new-mode").title = modeAbout($("new-mode").value);
-  });
   $("new-session").addEventListener("click", openNew);
-  $("new-cancel").addEventListener("click", () => $("new-dialog").close());
-  $("new-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const error = $("new-error");
-    try {
-      const reply = await change("session/send", {
-        text: $("new-text").value.trim(), workspace: $("new-folder").value.trim(),
-        mode: $("new-mode").value, source: "web",
-        ...(state.launch.model ? { model: state.launch.model } : {}),
-        ...(state.launch.thinking_effort
-          ? { thinking_effort: state.launch.thinking_effort } : {}),
-      });
-      $("new-dialog").close();
-      $("new-text").value = "";
-      openSession(reply.session);
-    } catch (failure) {
-      error.textContent = failure.message;
-      error.hidden = false;
-    }
-  });
 
   // ------------------------------------------------------------ layout
 
@@ -1938,6 +1997,10 @@
     const value = text.slice(name.length).trim();
     const session = state.open;
     try {
+      if (state.newSession && !["/new", "/sessions", "/settings", "/help",
+        "/rename", "/mode", "/model", "/cd", "/init"].includes(name)) {
+        throw new Error("Send the first message to use this session command.");
+      }
       switch (name) {
         case "/new": openNew(); break;
         case "/sessions": showPanel("sessions"); break;
@@ -1949,12 +2012,20 @@
         case "/jobs": showPanel("details"); break;
         case "/mode": case "/model": case "/cd":
           if (!value) { showPanel("details"); break; }
+          if (state.newSession) {
+            state.newSession[name === "/cd" ? "workspace" : name.slice(1)] = value;
+            $("details").draftRow = null;
+            drawDetails();
+            break;
+          }
           await change("session/set", { session,
             [name === "/cd" ? "workspace" : name.slice(1)]: value });
           break;
         case "/rename":
           if (!value) throw new Error("Use /rename followed by a name");
-          await change("session/rename", { session, title: value }); break;
+          if (state.newSession) { state.newSession.title = value; drawHead(); }
+          else await change("session/rename", { session, title: value });
+          break;
         case "/archive":
           await change(rowOf(session).archived
             ? "session/unarchive" : "session/archive", { session }); break;
@@ -2321,10 +2392,11 @@
         await change("session/set", { session: target, ...fields });
       }
       await openSession(target);
-    } else connect();
-    if (!state.open && !$("new-dialog").open
+    } else { connect(); drawDetails(); }
+    if (!state.open
         && (state.launch.view === "new" || (!target && state.launch.workspace
         && state.launch.view !== "sessions"))) openNew();
+    $("new-session").disabled = false;
     sizeComposer();
   }
 

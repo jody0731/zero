@@ -111,6 +111,7 @@ class Message:
     workspace: str | None = None
     # While a turn runs: "steer" it, or "queue" as a follow-up after its answer
     when_busy: str = "steer"
+    title: str | None = None
 
 
 def sent_before(row, message):
@@ -482,6 +483,8 @@ class Runtime(SessionActions):
             return sent_before(seen[0], message)
         new = None
         sid = message.session
+        if message.title is not None and (sid is not None or not message.title.strip()):
+            raise Refused("an initial title needs a new session and a nonblank name")
         if sid is None:
             workspace = message.workspace or "/"
             if not Path(workspace).is_absolute():
@@ -496,8 +499,11 @@ class Runtime(SessionActions):
                     "(Connect a model; later /settings, Models and keys), or "
                     "--model names one"
                 )
+            initial_title = message.text
+            if message.title:
+                initial_title = self.redact(message.title)
             new = {
-                "title": title(message.text),
+                "title": title(initial_title),
                 "source": message.source,
                 "model": model,
                 "mode": mode,

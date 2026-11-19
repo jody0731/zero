@@ -170,8 +170,11 @@ zero -p "a question"
 ```
 
 `zero` and `zero web` open your default browser, at this folder's latest session.
-`zero new` opens a new-session form; `zero -r` opens the session list. `zero tui`
-opens the terminal app. `zero -p` remains the plain command for scripts.
+`zero new` opens an empty conversation titled **New session**. Click the title
+to rename it or change its settings in the right panel. Sending the first message
+creates the session. You can switch to an existing session to discard an unsent one.
+`zero -r` opens the session list, `zero tui` opens the terminal app, and
+`zero -p` runs a plain command for scripts.
 
 A browser is paired on its first `zero web`. Its pairing has no time limit: opening
 its saved address restores access even after the short-lived login cookie expires.

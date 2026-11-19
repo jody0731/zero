@@ -3,6 +3,17 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.10
+
+- New session opens an empty conversation. Click its title to rename it, adjust its
+  settings on the right, and send the first message to create it. Switching away
+  before sending discards the draft. Existing session titles are clickable too.
+- Expand a Working entry to see the action, its arguments and the recorded result.
+- ZERO leaves Why empty for a self-explanatory answer and Next empty when the
+  next move is simple or obvious.
+- Answering an approval to edit your instructions records your answer once.
+  Resuming keeps the tool call and its result together, including after a restart.
+
 ## 0.7.7.4.9
 
 - The browser shows one folded progress box beneath ZERO’s live reply. The O

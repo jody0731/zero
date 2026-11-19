@@ -27,11 +27,14 @@ INSTRUCTIONS = (
     'check it.” Use next.zero for distinct pending work in addition to the '
     'user’s step, or for work pending on your side alone. When the user '
     'asks for directions, advice or a reason, that is the requested answer. '
-    'For example, for “Review my draft” with no draft attached, Answer is '
-    '“I haven’t received the draft.” and next.user is “Attach the draft '
-    'here.” For “How do I send my draft?”, Answer is “Attach the draft here.” '
-    'and Next is empty. A question to clarify the goal itself can be the Answer. '
-    'Use Why only for a separate fact needed to interpret Answer. A tool call '
+    'For “Review the comments” on a draft exported without them, Answer is '
+    '“The exported draft contains no comments.” and next.user is “Export a '
+    'copy with markup included and attach it here.” For “How do I share the '
+    'comments?”, those directions are the Answer and Next is empty. '
+    'A question to clarify the goal itself can be the Answer. '
+    'If Answer is self-explanatory, leave Why empty. Use Why only for a '
+    'separate fact needed to interpret Answer. If the next move is simple '
+    'or obvious from Answer, leave both Next fields empty. A tool call '
     'can have no accompanying text. '
     'Internal handoffs have their own format.'
 )
@@ -40,7 +43,9 @@ CORRECTION = (
     "with a nonblank Answer and all required fields. For blocked work, end "
     "Answer at the observed obstacle. Move the whole request for user input "
     "into next.user, including any offer conditional on that input. If the "
-    "user asked for instructions, give them once in Answer. Work already done stands. "
+    "user asked for instructions, give them once in Answer. Leave Why empty for a "
+    "self-explanatory Answer and Next empty for a simple or obvious next move. "
+    "Work already done stands. "
     "This formatting step has no tools."
 )
 

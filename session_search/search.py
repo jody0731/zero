@@ -61,20 +61,13 @@ def read_header(path):
 
 def parent_cutoffs(logs, asking, listed):
     """Last inherited record in each ancestor, including a fork of a fork."""
-    cutoffs = {}
-    sid = asking
-    cutoff = None
-    while sid in listed:
-        head = read_header(logs / f"{sid}.jsonl")
-        fork = head.get("forked_from") if isinstance(head, dict) else None
-        if not isinstance(fork, dict) or not isinstance(fork.get("seq"), int):
-            break
-        if not isinstance(fork.get("session"), str) or fork["session"] in cutoffs:
-            break
-        sid = fork["session"]
-        cutoff = fork["seq"] if cutoff is None else min(cutoff, fork["seq"])
-        cutoffs[sid] = cutoff
-    return cutoffs
+    def header(sid):
+        return read_header(logs / f"{sid}.jsonl") if sid in listed else None
+
+    def records(sid):
+        return log_records(logs / f"{sid}.jsonl") if sid in listed else []
+
+    return history.ancestor_cutoffs(asking, header(asking), header, records)
 
 
 def find(index, sessions, logs, query=None, session=None, around=None,

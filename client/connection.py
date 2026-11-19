@@ -227,7 +227,8 @@ class Connection:
         box. `rounds`: to be worked on in rounds."""
         msg_id = str(uuid.uuid4())
         request = build(
-            "session/send", id=msg_id, text=text, session=session, mode=mode,
+            "session/submit" if session else "session/send",
+            id=msg_id, text=text, session=session, mode=mode,
             model=model, source=self.source, reply_to=reply_to,
             workspace=workspace, when_busy=when_busy,
         )
@@ -403,6 +404,10 @@ class Connection:
         return self.call(build(
             "session/list", archived=archived, workspace=workspace,
         ))["sessions"]
+
+    def deliveries(self, session, ids):
+        reply = self.call(build("session/deliveries", session=session, ids=ids))
+        return reply["deliveries"]
 
     def read(self, session, after=0, limit=None, before=None):
         """`session/read`'s whole reply: the records after the seq (and

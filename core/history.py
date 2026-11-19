@@ -468,6 +468,50 @@ def attributed(record, session=None):
     return {**record, "interaction": details}
 
 
+def ancestor_cutoffs(session, header, read_header, read_records):
+    """Each ancestor's last inherited seq, even after intermediate forks are gone."""
+    limits = {}
+    fallback = set()
+    ceiling = None
+    while isinstance(header, dict):
+        fork = header.get("forked_from") or {}
+        if not isinstance(fork, dict):
+            break
+        parent, seq = fork.get("session"), fork.get("seq")
+        if (not isinstance(parent, str) or "/" in parent or parent in limits
+                or type(seq) is not int):
+            break
+        ceiling = seq if ceiling is None else min(ceiling, seq)
+        limits[parent] = ceiling
+        fallback.update(sid for sid in fork.get("ancestors") or ()
+                        if isinstance(sid, str) and "/" not in sid)
+        saved = fork.get("ancestor_cutoffs")
+        if isinstance(saved, dict):
+            for sid, end in saved.items():
+                if type(end) is int:
+                    limits.setdefault(sid, min(end, ceiling))
+            break
+        header = read_header(parent)
+    # Old headers named every ancestor but kept only the direct parent's cutoff.
+    # Beyond a deleted intermediate, only matching copied records prove a limit.
+    missing = fallback - limits.keys()
+    if missing:
+        copied = [r for r in read_records(session) if 1 < r.get("seq", 0) <= ceiling]
+        for sid in missing:
+            original = {r.get("seq"): r for r in read_records(sid)}
+            limits[sid] = 0
+            for row in copied:
+                before = original.get(row["seq"])
+                if before is None:
+                    break
+                # Forking may have added attribution to a legacy source record.
+                if row != before and ({**row, "interaction": None}
+                                      != {**before, "interaction": None}):
+                    break
+                limits[sid] = row["seq"]
+    return limits
+
+
 def attributed_records(records, sid, read_header):
     """Resolve legacy targets from fork headers. New records carry their own target."""
     origins = []

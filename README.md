@@ -276,7 +276,7 @@ zero doctor                                        # what ZERO needs from the ma
   to interpret it. When work is blocked, Answer reports the obstacle. A request for missing
   input belongs in `next.user`. If you ask how to proceed, the steps belong in Answer.
   The browser hides empty sections. The result also includes the session, outcome, any waiting
-  question, tokens and seconds.
+  question, tokens and seconds. Concurrent requests each return their own answer.
 - Exit status 2 means a question is waiting. Answer with
   `zero session send TEXT --session ID --reply-to ASK`. The prompt prints the ask ID.
   Add `--choice KEY` to select an offered choice. A separate message waits its turn.
@@ -389,19 +389,24 @@ about the task wait for an answer through `zero_reply` in every mode.
 The full screen, the web UI, the commands and the MCP server are apps of ZERO's server, and a program in any language can be one. `zero server start --json` starts the server when none runs and names the way in:
 
 ```json
-{"ok": true, "socket": "/home/you/.zero/run/zero.sock", "token_file": "/home/you/.zero/app-token", "protocol": 5, "version": "0.7.6.1", "pid": 4242}
+{"ok": true, "socket": "/home/you/.zero/run/zero.sock", "token_file": "/home/you/.zero/app-token", "protocol": 6, "version": "0.7.7.4.12", "pid": 4242}
 ```
 
-A request is one JSON object on a line, answered by one line; [`protocol/schema.json`](protocol/schema.json) describes every message, its reply and the rows replies carry. Name the protocol in each request (`"protocol": 5`). A message that changes something (marked `x-changes`) carries an `id` you pick, new for each message: send the same id again when you don't know whether it got through, and it runs once, its first reply coming back marked `replayed`. A reply may carry fields your app doesn't know yet; read what you know. A program of yours on this machine is known by the socket itself; where it isn't (a relay, a container), put the token file's text in each request's `token`. The token lets your apps in and nothing more.
+A request is one JSON object on a line, answered by one line; [`protocol/schema.json`](protocol/schema.json) describes every message, its reply and the rows replies carry. Name the protocol in each request (`"protocol": 6`). A message that changes something (marked `x-changes`) carries an `id` you pick, new for each message: send the same id again when you don't know whether it got through, and it runs once, its first reply coming back marked `replayed`. A reply may carry fields your app doesn't know yet; read what you know. A program of yours on this machine is known by the socket itself; where it isn't (a relay, a container), put the token file's text in each request's `token`. The token lets your apps in and nothing more.
 
 ```python
 import json, socket
 
 with socket.socket(socket.AF_UNIX) as s:
     s.connect("/home/you/.zero/run/zero.sock")
-    s.sendall(b'{"message": "server/hello", "protocol": 5}\n')
+    s.sendall(b'{"message": "server/hello", "protocol": 6}\n')
     print(json.loads(s.makefile().readline())["modes"])
 ```
+
+Protocol 6 clients use `session/submit` for an existing session. Include
+`reply_to` to answer a specific question. A separate message queues while the
+question waits. If the previous server is busy during an upgrade, finish its
+work in the already-open app. The new client can replace it once idle.
 
 Over HTTP, the door takes the same request at `POST http://127.0.0.1:4747/api/request` and answers with the reply; it knows a program of yours by its connection, and where it can't, `Authorization: Bearer` with the token file's text lets it in.
 

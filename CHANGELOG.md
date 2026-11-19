@@ -3,6 +3,17 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.12
+
+- Restoring a session from its log lets you answer a waiting question and
+  finish the original turn. Older clients must identify the question they answer.
+- Concurrent command-line requests each return their own turn's answer.
+- A fork keeps its search limits when an intermediate session is deleted.
+- In the browser you can queue separate work while a question waits. Type a
+  number and press Enter to send it as text, or click a choice to select it.
+  Stopping work puts withdrawn messages back above newer typing in the sending
+  tab's draft. The tab can recover them after reconnecting.
+
 ## 0.7.7.4.11
 
 - An answer stays attached to its original question in conversation history,

@@ -34,9 +34,16 @@
     expandedJobs: new Map(), expandedFamilies: new Map(),
     settingsDraft: new Map(), settingsErrors: new Map(), settingsSaving: false,
     settingsView: "General", modelLookup: null,
-    rewindPoints: new Set(), composerDrafts: new Map(),
+    rewindPoints: new Set(), composerDrafts: new Map(), submissions: new Map(),
     jobs: new Map(), settingsDirty: false, features: new Map(), turnStarted: null,
   };
+
+  try {
+    state.submissions = new Map(JSON.parse(sessionStorage.getItem("zero.submissions")
+      || "[]"));
+  } catch {
+    // This tab can still track submissions in memory.
+  }
 
   // ------------------------------------------------------------ requests
 
@@ -168,6 +175,8 @@
       drawServer();
     });
     events.onopen = () => {
+      if (state.events !== events) return;
+      checkDeliveries(state.open);
       state.asleep = false;
       drawServer();
     };
@@ -183,7 +192,12 @@
       closeSession();
       return;
     }
+    if (event.withdrawn) {
+      restoreWithdrawn(state.open, event.withdrawn.map(item => item.id));
+      return;
+    }
     if (event.record) {
+      if (state.submissions.delete(event.record.inbox)) saveSubmissions();
       addRecord(event.record);
       return;
     }
@@ -1025,9 +1039,12 @@
     if (state.turn && (waiting || !box.hidden)) {
       showProgress(state.turn, state.turn.phase, waiting);
     }
-    $("composer").hidden = (!row && !state.newSession) || Boolean(ask);
-    $("queue").parentElement.hidden = Boolean(state.newSession);
-    $("stop").hidden = !(row && (row.state === "running" || row.ask));
+    $("composer").hidden = !row && !state.newSession;
+    $("queue").parentElement.hidden = Boolean(state.newSession) || waiting;
+    $("stop").hidden = !row || row.state !== "running" || waiting;
+    $("text").placeholder = waiting ? "Queue a separate message" : "Message";
+    $("text").setAttribute("aria-label", $("text").placeholder);
+    $("send").textContent = waiting ? "Queue message" : "Send";
     if (!ask) {
       box.hidden = true;
       box.replaceChildren();
@@ -1068,12 +1085,6 @@
     words.addEventListener("submit", (event) => {
       event.preventDefault();
       if (input.value.trim()) answer(ask, { text: input.value.trim() });
-    });
-    input.addEventListener("keydown", (event) => {
-      if (!input.value && (ask.choices || []).includes(event.key)) {
-        event.preventDefault();
-        answer(ask, { choice: event.key });
-      }
     });
     box.append(words);
   }
@@ -1136,7 +1147,7 @@
     const box = $("ask");
     for (const button of box.querySelectorAll("button")) button.disabled = true;
     try {
-      await change("session/send", {
+      await change("session/submit", {
         session: state.open, source: "web", reply_to: ask.id,
         text: given.text || given.choice, choice: given.choice,
       });
@@ -1177,9 +1188,10 @@
         }
         return;
       }
-      await change("session/send", {
-        session, text, source: "web",
-        when_busy: $("queue").checked ? "queue" : "steer",
+      const id = newId();
+      const queued = Boolean(rowOf(session)?.ask) || $("queue").checked;
+      const receipt = await change("session/submit", {
+        id, session, text, source: "web", when_busy: queued ? "queue" : "steer",
       });
       if (readComposerDraft(session) === original) {
         writeComposerDraft(session, "");
@@ -1190,10 +1202,65 @@
         sizeComposer();
         $("queue").checked = false;
       }
+      if (["steered", "queued"].includes(receipt.handled_as)) {
+        state.submissions.set(id, { session, text: original });
+        saveSubmissions();
+        // A stop or delivery may have preceded the acknowledgement.
+        checkDeliveries(session);
+      }
     } catch (error) {
       alert(error.message);
     } finally {
       button.disabled = false;
+    }
+  }
+
+  function saveSubmissions() {
+    try {
+      const pending = JSON.stringify([...state.submissions]);
+      sessionStorage.setItem("zero.submissions", pending);
+    } catch {
+      // Keep tracking in memory when this tab cannot use session storage.
+    }
+  }
+
+  function restoreWithdrawn(session, ids) {
+    const texts = [];
+    for (const id of ids) {
+      const message = state.submissions.get(id);
+      if (message?.session !== session) continue;
+      texts.push(message.text);
+      state.submissions.delete(id);
+    }
+    if (!texts.length) return;
+    const draft = state.open === session ? $("text").value : readComposerDraft(session);
+    writeComposerDraft(session, [...texts, draft].filter(Boolean).join("\n\n"));
+    if (state.open === session) restoreComposerDraft();
+    saveSubmissions();
+  }
+
+  async function checkDeliveries(session) {
+    const ids = [...state.submissions].filter(([, m]) => m.session === session)
+      .map(([id]) => id);
+    const withdrawn = [];
+    try {
+      for (let i = 0; i < ids.length; i += 100) {
+        const batch = ids.slice(i, i + 100);
+        const reply = await look("session/deliveries", {
+          session, ids: batch,
+        });
+        const statuses = reply.deliveries || {};
+        for (const id of batch) {
+          if (statuses[id] === "withdrawn") withdrawn.push(id);
+          else if (["delivered", "done"].includes(statuses[id])) {
+            state.submissions.delete(id);
+          }
+        }
+      }
+      restoreWithdrawn(session, withdrawn);
+      if (ids.length) saveSubmissions();
+    } catch {
+      // Outstanding messages are checked again on reconnect.
     }
   }
 
@@ -1299,7 +1366,9 @@
   });
   $("stop").addEventListener("click", async () => {
     try {
-      await change("session/stop", { session: state.open, source: "web" });
+      const session = state.open;
+      const receipt = await change("session/stop", { session, source: "web" });
+      restoreWithdrawn(session, (receipt.withdrawn || []).map(item => item.id));
     } catch (error) {
       alert(error.message);
     }
@@ -2067,7 +2136,7 @@
           } else await permissionsView(session);
           break;
         case "/init": {
-          const reply = await change("session/send", {
+          const reply = await change("session/submit", {
             ...(session ? { session } : {}),
             source: "web", text: state.hello.init_request,
           });

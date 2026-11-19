@@ -71,6 +71,8 @@ class KernelRows:
     # The newest turn_end's seq, and the newest record's
     end_seq: int = 0
     log_seq: int = 0
+    # The original message that owns the current unfinished turn.
+    open_turn: dict | None = None
     # Every ask the log holds, as the asks table keeps it
     asks: list = field(default_factory=list)
     # Each inbox message the log names: id → delivered or done
@@ -119,6 +121,9 @@ def kernel_rows(records):
     # The inbox id of the turn under way, as the log is read
     turn = None
     inherited = (records[0].get("forked_from") or {}).get("seq", 0)
+    pending = history.unfinished_turn(branch)
+    if pending and pending[0].get("seq", 0) > inherited and pending[0].get("inbox"):
+        rows.open_turn = pending[0]
     for record in records:
         if record.get("seq", 0) <= inherited:
             continue

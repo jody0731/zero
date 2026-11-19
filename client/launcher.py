@@ -141,7 +141,8 @@ def ensure_server(paths, unit=None, command=None, popen=subprocess.Popen,
     with StartLock(paths, seconds):
         # Another terminal may have started one while this one waited
         reply = probe(paths, seconds)
-        if reply is not None:
+        if reply is not None and server_is_current(paths, reply, report, seconds,
+                                                   kept_older):
             return reply
         argv = command if command is not None else [*SERVER_PYTHON, str(SERVER_SCRIPT)]
         if systemd is None:
@@ -179,18 +180,23 @@ def server_is_current(paths, reply, report, seconds, kept_older=None):
     `kept_older()`: called when an older one stays."""
     kept_older = kept_older or (lambda: None)
     old = reply["protocol"] < version.PROTOCOL
-    if old and reply.get("busy_with"):
-        raise ProtocolError(
-            f"ZERO's server speaks protocol {reply['protocol']}, this zero "
-            f"{version.PROTOCOL}: it is replaced once it is idle, or stop it "
-            "now with zero server stop --force"
-        )
-    if reply["build"] == version.build_hash() or newer(reply):
-        return True
-    if reply.get("busy_with"):
+    def busy():
+        if old:
+            raise ProtocolError(
+                f"ZERO's server speaks protocol {reply['protocol']}, this zero "
+                f"{version.PROTOCOL}: it is replaced once it is idle, or stop it "
+                "now with zero server stop --force"
+            )
         report(KEPT_OLDER)
         kept_older()
         return True
+
+    if old and reply.get("busy_with"):
+        return busy()
+    if reply["build"] == version.build_hash() or newer(reply):
+        return True
+    if reply.get("busy_with"):
+        return busy()
     if reply["protocol"] == 1:
         stopping = request(paths.socket, OLD_RESTART, PROBE_SECONDS)
     elif reply["protocol"] == 2:
@@ -200,9 +206,7 @@ def server_is_current(paths, reply, report, seconds, kept_older=None):
                             reason="restart")
     if not stopping.get("stopping"):
         # It got busy in the meantime
-        report(KEPT_OLDER)
-        kept_older()
-        return True
+        return busy()
     report("ZERO's server runs older code: restarting it.")
     deadline = time.monotonic() + seconds
     while hello(paths) is not None:

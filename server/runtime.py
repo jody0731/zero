@@ -468,7 +468,7 @@ class Runtime(SessionActions):
             names += [n for n in service.message_fields if n not in names]
         return names
 
-    def admit(self, message, extra=None):
+    def admit(self, message, extra=None, *, legacy_send=False):
         """Commit a message to the inbox, then return the ack: its session and
         its handled_as, what became of it. `extra`: payload fields."""
         if not self.accepting:
@@ -533,7 +533,7 @@ class Runtime(SessionActions):
             self.admissions += 1
         try:
             admitted, sid, handled_as = self.admit_to_session(
-                message, sid, new, payload)
+                message, sid, new, payload, legacy_send)
             if admitted and self.started:
                 self.dispatch(sid)
         finally:
@@ -558,7 +558,7 @@ class Runtime(SessionActions):
                 raise Refused(f"the question's choices are {', '.join(offered)}, "
                               f"not {message.choice!r}")
 
-    def admit_to_session(self, message, sid, new, payload):
+    def admit_to_session(self, message, sid, new, payload, legacy_send):
         """(admitted, session id, handled_as): what becomes of the message
         decided and its row committed under the session's own lock. A new
         session takes a new id, and another when one is taken."""
@@ -577,7 +577,7 @@ class Runtime(SessionActions):
                     handled_as = "reply"
                 else:
                     handled_as = ("started" if new else
-                                  self.handled_as(sid, state, message))
+                                  self.handled_as(sid, state, message, legacy_send))
                 said = dict(payload)
                 if handled_as == "queued":
                     said["follow_up"] = True
@@ -603,7 +603,7 @@ class Runtime(SessionActions):
                     handled_as = ack["handled_as"]
                 return admitted, sid, handled_as
 
-    def handled_as(self, sid, state, message):
+    def handled_as(self, sid, state, message, legacy_send=False):
         """What becomes of a message to this session, decided under its
         lock: `reply` to its open ask, `steered` or `queued` (a follow-up)
         while a turn runs or waits to, `started` otherwise."""
@@ -611,6 +611,9 @@ class Runtime(SessionActions):
         if info is None:
             raise Refused(f"no session {sid!r}")
         if info["state"] == "waiting":
+            if legacy_send:
+                raise Refused("A question is waiting. Name it with reply_to "
+                              "to answer, or use session/submit for new work.")
             return "queued"
         busy = state.runner is not None or self.store.has_queued(sid)
         if not busy:
@@ -706,6 +709,11 @@ class Runtime(SessionActions):
         last record, read from the end. A log with no row is adopted first."""
         self.adopt_logs()
         services = [service.rebuild for service in self.services.values()]
+        missing = {row["id"] for row in self.store.query(
+            "SELECT id FROM sessions WHERE state IN ('running', 'waiting') "
+            "AND NOT EXISTS (SELECT 1 FROM inbox WHERE session = sessions.id "
+            "AND status = 'delivered')"
+        )}
         for row in self.store.sessions():
             sid = row["id"]
             log = self.log(sid)
@@ -715,7 +723,8 @@ class Runtime(SessionActions):
                 # A broken log: its next turn records the failure
                 traceback.print_exc()
                 continue
-            if last is None or last.get("seq", 0) <= row["log_seq"]:
+            if last is None or (sid not in missing
+                                and last.get("seq", 0) <= row["log_seq"]):
                 continue
             lock = self.session_lock(sid)
             try:
@@ -1083,6 +1092,8 @@ class Runtime(SessionActions):
         and joins the turn as a message. The box's No declines the call and
         ends the turn."""
         payload = json.loads(row["payload"])
+        turn_row, = self.store.query(
+            "SELECT * FROM inbox WHERE session = ? AND id = ?", sid, turn_id)
         text = payload["text"]
         choice, verdict = self.reply_step(sid, ask, payload)
         yes = choice is not None and choice != NO
@@ -1103,7 +1114,6 @@ class Runtime(SessionActions):
                 fields["text"] = ask["choice_labels"].get(choice, text)
         turn = session.reply(fields, control=control)
         self.store.close_ask(ask["ask"], row["id"], fields["yes"], row["source"])
-        turn_row = self.store.query("SELECT * FROM inbox WHERE id = ?", turn_id)[0]
         state = self.state(sid)
         with state.lock:
             # A stop now belongs to the parked turn, not to the reply

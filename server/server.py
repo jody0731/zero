@@ -63,8 +63,10 @@ DRAFT_EVERY_SECONDS = 0.1
 WATCH_SEND_SECONDS = 30
 STOP_REASONS = ("stopped", "restart")
 # The messages the kernel serves itself; a service adds its own (server/services.py)
-SERVED = ("server/hello", "server/stop", "session/send", "session/continue",
+SERVED = ("server/hello", "server/stop", "session/send", "session/submit",
+          "session/continue",
           "session/stop", "session/list", "session/read", "session/watch",
+          "session/deliveries",
           "session/mark_seen", "session/rename", "session/archive",
           "session/unarchive", "session/delete", "session/set", "session/compact",
           "session/user_messages", "session/rewind", "session/fork",
@@ -72,13 +74,13 @@ SERVED = ("server/hello", "server/stop", "session/send", "session/continue",
 # Those of them that only look, which ZERO's own commands may send too
 # (peers.py); a service names its own in `looking`
 LOOKING_MESSAGES = ("server/hello", "session/list", "session/read", "session/watch",
-                    "session/user_messages")
+                    "session/user_messages", "session/deliveries")
 SESSION_EDITS = ("session/mark_seen", "session/rename", "session/archive",
                  "session/unarchive", "session/delete", "session/set")
 # The messages that change something whose id the inbox keeps, committed
 # with the change itself (server/runtime.py); every other one's is
 # message_replies' (server/idempotency.py)
-INBOX_KEPT = ("session/send", "session/continue", "session/stop")
+INBOX_KEPT = ("session/submit", "session/send", "session/continue", "session/stop")
 # What every request carries besides its message's own fields
 ENVELOPE = ("message", "protocol")
 
@@ -477,7 +479,7 @@ class Server:
             if request.get("for_session") != scope:
                 raise Refused("the workflow credential belongs to another session")
             return
-        if name in ("session/read", "session/watch"):
+        if name in ("session/read", "session/watch", "session/deliveries"):
             if self.in_workflow_scope(request.get("session"), scope):
                 return
         raise Refused("the workflow credential does not permit this request")
@@ -523,7 +525,7 @@ class Server:
         name = request.get("message")
         if name == "server/hello":
             return self.hello(protocol)
-        if name == "session/send":
+        if name in ("session/submit", "session/send"):
             return self.send(request)
         if name == "session/stop":
             sid = request.get("session")
@@ -561,6 +563,12 @@ class Server:
         if name == "session/list":
             archived, workspace = list_filters(request)
             return {"ok": True, "sessions": self.runtime.sessions(archived, workspace)}
+        if name == "session/deliveries":
+            sid, ids = request.get("session"), request.get("ids")
+            if (not isinstance(sid, str) or not isinstance(ids, list)
+                    or len(ids) > 100 or not all(isinstance(id, str) for id in ids)):
+                return error("deliveries needs a session and up to 100 message ids")
+            return {"ok": True, "deliveries": self.runtime.store.deliveries(sid, ids)}
         if name == "session/read":
             before = request.get("before")
             if before is not None and type(before) is not int:
@@ -711,7 +719,8 @@ class Server:
                 extra[name] = value
         try:
             ack = self.runtime.admit(Message(msg_id, text, **fields),
-                                     extra or None)
+                                     extra or None,
+                                     legacy_send=request["message"] == "session/send")
         except Refused as e:
             return error(str(e))
         return {"ok": True, **ack}

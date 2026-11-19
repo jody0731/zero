@@ -37,11 +37,9 @@ How a message becomes a command:
   (`session watch`, `session list --watch`) print one JSON object a line.
 - Exit 0 done, 1 not (the error on stderr), 2 a question waits.
 
-`session send` and `session continue` follow the session until it settles
-(Pi's `agent_settled`: a queued message or a job's notice may start another
-turn), then print the answer, or with `--json` one result object: session,
-outcome, answer, ask, tokens and seconds; `--events` prints every event as it
-comes; `--no-wait` only the session's id.
+`session send` and `session continue` print the answer to the message they sent.
+`--json` adds its outcome, ask, tokens and seconds. `--events` follows the
+session until it settles, and `--no-wait` returns the session id immediately.
 """
 
 import argparse
@@ -61,6 +59,8 @@ FAMILIES = ("session", "job", "rounds", "grant", "model", "setting", "mcp", "vau
             "private-input")
 # The messages with no command, and why: what only a screen needs
 NO_COMMAND = {
+    "session/deliveries": "a browser checks its outstanding submissions on reconnect",
+    "session/submit": "session send uses this when addressing an existing session",
     "workspace/list": "folders for a screen's workspace picker",
     "session/mark_seen": "a person's read mark, which the full screen sends for what "
                     "it has shown; a caller reads a session with session read",
@@ -226,20 +226,25 @@ def text_of(value, stdin=None):
     return value
 
 
-def follow(connection, sid, after, args, out, user_answers=True):
+def follow(connection, sid, after, args, out, user_answers=True, message_id=None):
     """Follow a session from `after` until it settles: the answer, the
     result object (`--json`) or every event (`--events`). Exits 0 answered,
     1 not, 2 when a question waits. A workflow keeps following while the
     user answers through their app; it cannot answer for them."""
     as_json = getattr(args, "json", False)
     events = getattr(args, "events", False)
-    result = Result(sid)
+    result = Result(sid, None if events else message_id)
     with connection.watch(sid, after=after) as stream:
         for event in stream:
             if events:
                 out(json.dumps(event, ensure_ascii=False))
             if not result.add(event):
                 continue
+            if message_id and not result.delivered and result.last is None:
+                delivery = connection.deliveries(sid, [message_id]).get(message_id)
+                if delivery == "withdrawn":
+                    result.last = {"outcome": "withdrawn"}
+                    result.ask = None
             if result.ask is not None and not user_answers:
                 result.settled = False
                 result.ask = None
@@ -290,7 +295,8 @@ def print_workflow_turn(connection, args, for_session, out=print):
     if getattr(args, "no_wait", False):
         out(json.dumps(reply) if getattr(args, "json", False) else sid)
         return 0
-    return follow(connection, sid, after, args, out, user_answers=False)
+    return follow(connection, sid, after, args, out, user_answers=False,
+                  message_id=reply.get("inbox"))
 
 
 def print_turn(connection, args, workspace, out=print):
@@ -321,7 +327,7 @@ def print_turn(connection, args, workspace, out=print):
     if getattr(args, "no_wait", False):
         out(json.dumps(reply) if getattr(args, "json", False) else sid)
         return 0
-    return follow(connection, sid, after, args, out)
+    return follow(connection, sid, after, args, out, message_id=reply.get("id"))
 
 
 def continue_session(connection, args, out=print):
@@ -333,7 +339,7 @@ def continue_session(connection, args, out=print):
     if getattr(args, "no_wait", False):
         out(json.dumps(reply) if args.json else sid)
         return 0
-    return follow(connection, sid, after, args, out)
+    return follow(connection, sid, after, args, out, message_id=reply.get("id"))
 
 
 # --------------------------------------------------------------- parser

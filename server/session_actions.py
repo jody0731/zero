@@ -431,6 +431,9 @@ class SessionActions:
             # Every session it came from, the parent first: their saved
             # outputs, which its copied context names, stay readable
             "ancestors": [sid, *earlier.get("ancestors", [])],
+            "ancestor_cutoffs": history.ancestor_cutoffs(
+                sid, copied[0], lambda parent: self.log(parent).first_record(),
+                lambda parent: self.log(parent).records()),
             "started_by": row["started_by"],
             **({"went_on": went_on} if went_on else {}),
         }, "row": header_row(full)}

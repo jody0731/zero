@@ -1,16 +1,17 @@
 """What a session's work came to, as one object: `zero session send --json`'s
 and `zero mcp serve`'s zero_wait's.
 
-A Result reads a session's watch, event by event, until it settles: the
-outcome of its last turn (or "waiting" while a question waits), the answer,
-the waiting question, what still runs on its own once it settles (jobs,
-work in rounds, subagents), the tokens of every model call it saw and the
-seconds its turns took.
+A Result follows one submitted message to the end of the turn that took it.
+Without a message id it follows the whole session until it settles. It reports
+the outcome, answer, open question, token use, duration and background work
+reported by the watch.
 """
 
 class Result:
-    def __init__(self, session):
+    def __init__(self, session, message_id=None):
         self.session = session
+        self.message_id = message_id
+        self.delivered = message_id is None
         self.last = None
         self.ask = None
         self.settled = False
@@ -23,6 +24,19 @@ class Result:
     def add(self, event):
         """Take one event; True once the session has settled."""
         record = event.get("record", {})
+        if self.message_id:
+            if any(row["id"] == self.message_id for row in event.get("withdrawn", ())):
+                self.last = {"outcome": "withdrawn"}
+                self.settled = True
+                return True
+            if record and self.last:
+                # A new turn can start before the session as a whole settles.
+                self.settled = record["type"] == "user" and not record.get("steer")
+                return self.settled
+            if record.get("inbox") == self.message_id:
+                self.delivered = True
+            if record and not self.delivered:
+                return False
         if record.get("type") == "assistant":
             for name in self.tokens:
                 self.tokens[name] += record.get(f"{name}_tokens") or 0
@@ -31,7 +45,7 @@ class Result:
             self.seconds += record.get("seconds") or 0
         settled = event.get("settled")
         if settled is not None:
-            self.ask = settled.get("ask")
+            self.ask = None if self.message_id and self.last else settled.get("ask")
             self.still_running = {
                 kind: left for kind, left in settled.items()
                 if kind != "ask" and left

@@ -25,7 +25,7 @@ import re
 import sys
 from pathlib import Path
 
-PROTOCOL = 5
+PROTOCOL = 6
 # The oldest protocol the server still answers in: 4 is what a request
 # naming none is written in
 OLDEST = 4

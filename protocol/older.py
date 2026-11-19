@@ -34,7 +34,8 @@ def step_to_4(name, reply):
 
 
 # protocol n → the step that turns its replies into protocol n-1's
-STEPS = {5: step_to_4}
+# Protocol 6 adds an explicit submission verb. Its replies retain version 5's shape.
+STEPS = {6: lambda name, reply: reply, 5: step_to_4}
 
 
 def reply_in(protocol, name, reply):

@@ -424,10 +424,10 @@ class SubagentsService(Service):
                 raise Refused(f"{to} isn't a subagent below session {sid}")
             payload = {"sender_session": sid, "text": subtools.WORKFLOW_MESSAGE.format(
                 parent=sid, title=info["title"], text=text)}
-            self.store.notice(f"workflow:{request['id']}", to, subtools.ACROSS,
-                              payload)
+            inbox = f"workflow:{request['id']}"
+            self.store.notice(inbox, to, subtools.ACROSS, payload)
             self.runtime.wake()
-            return {"ok": True, "session": to, "started": False}
+            return {"ok": True, "session": to, "started": False, "inbox": inbox}
         deepest, depth = self.max_depth(), self.depth(sid) + 1
         if deepest <= 0:
             raise Refused("subagents are off (Subagents depth is 0 in ZERO's "
@@ -450,7 +450,8 @@ class SubagentsService(Service):
             sid, title, "handoff", row, task, WORKFLOW, mode=mode, model=model)
         if child is None:
             raise Refused(why)
-        return {"ok": True, "session": child, "started": True}
+        return {"ok": True, "session": child, "started": True,
+                "inbox": f"subagent-task:{child}"}
 
     def send(self, sid, to, text, reply_to=None):
         """A message to any other session, by its id, as a notice. A

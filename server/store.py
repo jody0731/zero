@@ -619,6 +619,14 @@ class Store:
             found.append(steer)
         return found
 
+    def deliveries(self, session, ids):
+        rows = self.query(
+            "SELECT id, CASE WHEN json_extract(payload, '$.withdrawn') THEN "
+            "'withdrawn' ELSE status END AS delivery FROM inbox WHERE session = ? "
+            "AND id IN (SELECT value FROM json_each(?))", session, json.dumps(ids),
+        )
+        return {r["id"]: r["delivery"] for r in rows}
+
     def withdraw_messages(self, session, after):
         """A stop takes back the user's steers and follow-ups its turn hasn't
         taken (Pi): done here, and returned for their sender's input."""
@@ -629,7 +637,8 @@ class Store:
                 "kind = 'user' AND arrival > ? ORDER BY arrival", (session, after),
             ).fetchall()
             db.executemany(
-                "UPDATE inbox SET status = 'done' WHERE arrival = ?",
+                "UPDATE inbox SET status = 'done', "
+                "payload = json_set(payload, '$.withdrawn', 1) WHERE arrival = ?",
                 [(row["arrival"],) for row in rows],
             )
             return [dict(row) for row in rows]
@@ -755,6 +764,22 @@ class Store:
                 ":source, :choice_labels, :kind, :requires_user)",
                 [{**ask, "session": session} for ask in rows.asks],
             )
+            turn = rows.open_turn
+            if turn:
+                source = turn.get("source") or "unknown"
+                kind = source if history.is_notice(turn) else "user"
+                payload = {"text": turn.get("text", ""), "handled_as":
+                           "queued" if turn.get("queued") else "started"}
+                # An existing follow-up must still sort after the turn it follows.
+                db.execute(
+                    "INSERT INTO inbox (arrival, id, session, kind, source, payload, "
+                    "status, created_at) VALUES "
+                    "((SELECT COALESCE(MIN(arrival), 0) - 1 FROM inbox), "
+                    "?, ?, ?, ?, ?, 'delivered', ?) "
+                    "ON CONFLICT(id) DO NOTHING",
+                    (turn["inbox"], session, kind, source, json.dumps(payload),
+                     datetime.fromisoformat(turn["time"]).timestamp()),
+                )
             for id, status in rows.inbox.items():
                 db.execute(
                     "UPDATE inbox SET status = ? WHERE id = ? AND session = ?",

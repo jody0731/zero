@@ -4,9 +4,9 @@ Every app goes through it: the full screen, the plain commands (each mirrors
 one message), other agents (through `zero mcp serve`) and apps to come, in any
 language. A client sends one JSON object on one line and gets one line back:
 
-    {"message": "server/hello", "protocol": 5}
-        → {"ok": true, "protocol": 5, "version": "0.7.6.1", "pid": 1234, ...}
-    {"message": "session/send", "protocol": 5, "id": "<uuid>", "text": "...",
+    {"message": "server/hello", "protocol": 6}
+        → {"ok": true, "protocol": 6, "version": "0.7.7.4.12", "pid": 1234, ...}
+    {"message": "session/submit", "protocol": 6, "id": "<uuid>", "text": "...",
      "source": "cli", "workspace": "/a/folder", "when_busy": "steer"}
         → {"ok": true, "admitted": true, "session": "<id>",
            "handled_as": "started" | "steered" | "queued" | "reply"}
@@ -471,8 +471,8 @@ MESSAGES = {
         changes=True,
     ),
     "session/send": message(
-        "A message to a session, or to a new one: a turn starts, or it "
-        "steers or queues behind the running one, or it answers the open ask.",
+        "Start a session or send with a legacy client. While a question is "
+        "open, this message requires its reply_to id.",
         {
             "title": {**STRING, "description": "initial title for a new session"},
             "text": STRING, "session": maybe(SESSION),
@@ -524,6 +524,13 @@ MESSAGES = {
         },
         reply={"sessions": rows("session", "one row a session")},
         stream={"sessions": rows("session", "the whole list"), "bye": STRING},
+    ),
+    "session/deliveries": message(
+        "Delivery status of the named messages in this session.",
+        {"session": SESSION, "ids": {**STRINGS, "maxItems": 100}},
+        required=("session", "ids"),
+        reply={"deliveries": {"type": "object", "additionalProperties":
+                              one_of("queued", "delivered", "done", "withdrawn")}},
     ),
     "session/read": message(
         "A session's records: those after a seq, or the newest `limit` "
@@ -700,8 +707,8 @@ MESSAGES = {
             "source": SOURCE,
         },
         required=("text", "for_session", "source"),
-        reply={"session": SESSION, "started": {**BOOLEAN, "description":
-                                               "a new subagent was started"}},
+        reply={"session": SESSION, "inbox": STRING,
+               "started": {**BOOLEAN, "description": "a new subagent was started"}},
         changes=True,
     ),
     "job/list": message(
@@ -871,6 +878,13 @@ MESSAGES = {
         changes=True,
     ),
 }
+# A distinct wire name makes older servers refuse new submissions before admission.
+MESSAGES["session/submit"] = {
+    **MESSAGES["session/send"],
+    "about": "Submit a message. Only reply_to answers a question. Other messages "
+             "queue while the session waits for a reply.",
+}
+
 # The messages that change something, each carrying an id run once
 CHANGING = tuple(name for name, spec in MESSAGES.items() if spec["changes"])
 

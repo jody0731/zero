@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "zero-protocol-5",
-  "title": "Z.E.R.O. protocol 5",
+  "$id": "zero-protocol-6",
+  "title": "Z.E.R.O. protocol 6",
   "description": "One JSON object a line over the server's Unix socket (~/.zero/run/zero.sock; `zero server start --json` names it, starting the server when none answers): a request, then its reply; session/watch and session/list with watch stream events. Each request names its message in `message` and its protocol in `protocol`; a message marked x-changes carries an `id` the sender picks, run once. Where the socket can't tell who connects, `token` carries the token file's text.",
-  "x-protocol": 5,
+  "x-protocol": 6,
   "x-oldest-protocol": 4,
   "oneOf": [
     {
@@ -29,6 +29,9 @@
     },
     {
       "$ref": "#/$defs/session.list"
+    },
+    {
+      "$ref": "#/$defs/session.deliveries"
     },
     {
       "$ref": "#/$defs/session.read"
@@ -131,6 +134,9 @@
     },
     {
       "$ref": "#/$defs/setting.set"
+    },
+    {
+      "$ref": "#/$defs/session.submit"
     }
   ],
   "$defs": {
@@ -499,7 +505,7 @@
     },
     "session.send": {
       "type": "object",
-      "description": "A message to a session, or to a new one: a turn starts, or it steers or queues behind the running one, or it answers the open ask.",
+      "description": "Start a session or send with a legacy client. While a question is open, this message requires its reply_to id.",
       "properties": {
         "message": {
           "const": "session/send"
@@ -926,6 +932,75 @@
           "type": "string"
         }
       }
+    },
+    "session.deliveries": {
+      "type": "object",
+      "description": "Delivery status of the named messages in this session.",
+      "properties": {
+        "message": {
+          "const": "session/deliveries"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "message",
+        "session",
+        "ids"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "session.deliveries.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "deliveries": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "queued",
+              "delivered",
+              "done",
+              "withdrawn"
+            ]
+          }
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
     },
     "session.read": {
       "type": "object",
@@ -2380,6 +2455,9 @@
           "type": "string",
           "description": "a session's id"
         },
+        "inbox": {
+          "type": "string"
+        },
         "started": {
           "type": "boolean",
           "description": "a new subagent was started"
@@ -3758,6 +3836,169 @@
         },
         "set": {
           "type": "object"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.submit": {
+      "type": "object",
+      "description": "Submit a message. Only reply_to answers a question. Other messages queue while the session waits for a reply.",
+      "properties": {
+        "message": {
+          "const": "session/submit"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "title": {
+          "type": "string",
+          "description": "initial title for a new session"
+        },
+        "text": {
+          "type": "string"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "a session's id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        },
+        "thinking_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's thinking effort: off, low, high or max"
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the open ask's id: this text answers it"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's folder"
+        },
+        "when_busy": {
+          "enum": [
+            "steer",
+            "queue"
+          ]
+        },
+        "choice": {
+          "type": "string",
+          "description": "one of the open ask's `choices`, as picked at its box"
+        },
+        "rounds": {
+          "type": "boolean",
+          "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "text",
+        "source"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "session.submit.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "admitted": {
+          "type": "boolean",
+          "description": "false: this id was sent before and its message is already in"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "handled_as": {
+          "enum": [
+            "started",
+            "steered",
+            "queued",
+            "reply"
+          ]
         },
         "replayed": {
           "type": "boolean",

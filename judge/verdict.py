@@ -40,7 +40,7 @@ import json
 import re
 import time
 
-from core.llm import MODEL_ERRORS, complete
+from core.llm import MODEL_ERRORS, complete, request_error_text
 from model import features
 from model.servers import make_client, resolve
 
@@ -307,7 +307,7 @@ class Judge:
                     verdict["decision"] = "allow"
                 break
             except (*MODEL_ERRORS, VerdictError) as e:
-                errors.append(f"{type(e).__name__}: {e}")
+                errors.append(request_error_text(e, self.client))
                 # A reply that came back, whatever it held, isn't an outage
                 down = down and not isinstance(e, VerdictError)
         else:

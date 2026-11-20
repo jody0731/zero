@@ -5,7 +5,7 @@ from textual.binding import Binding
 from textual.content import Content
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
-from textual.widgets import Markdown, Static, TextArea
+from textual.widgets import Collapsible, Markdown, Static, TextArea
 
 from apps.tui import clipboard, keybindings
 from client import render
@@ -23,6 +23,28 @@ class Plain(Static):
 
     def __init__(self, content="", **options):
         super().__init__(content, markup=False, **options)
+
+
+class ModelFailureView(Vertical):
+    DEFAULT_CSS = """
+    ModelFailureView { height: auto; }
+    ModelFailureView Collapsible { background: transparent; border: none;
+                                   padding: 0; }
+    """
+
+    def __init__(self, failure):
+        super().__init__()
+        self.failure = failure
+
+    def compose(self):
+        yield Plain(render.model_failure_heading(self.failure), classes="note failed")
+        action = self.failure["next_action"]
+        if action == "retry":
+            yield Plain("Retrying model request…")
+        elif action == "fallback":
+            yield Plain(f"Using fallback · {self.failure['fallback']}")
+        yield Collapsible(Plain(render.model_failure_details(self.failure)),
+                          title="Details")
 
 
 class Fold(Static):
@@ -230,6 +252,8 @@ class Transcript(VerticalScroll):
         if record.get("audience") == "model":
             self.restarts += record.get("kind") == "restarted"
             return []
+        if failure := record.get("model_failure"):
+            return [ModelFailureView(failure)]
         if kind in ("user", "answer"):
             if kind == "user" and not record.get("steer"):
                 self.started, self.restarts = record.get("time"), 0

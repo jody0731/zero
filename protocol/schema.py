@@ -20,7 +20,8 @@ from pathlib import Path
 
 from protocol import version
 from protocol.messages import (
-    EVERY_REQUEST, MESSAGES, RECORD, RECORD_FIELDS, RECORDS, REPLAYED, ROWS,
+    EVERY_REQUEST, MESSAGES, MODEL_FAILURE, MODEL_FAILURE_REF, RECORD,
+    RECORD_FIELDS, RECORDS, REPLAYED, ROWS,
     TOOL_RECORD, UNKNOWN_FIELDS,
 )
 
@@ -73,9 +74,11 @@ def build():
     defs = {"error": {
         "type": "object",
         "properties": {"ok": {"const": False}, "error": {"type": "string"},
-                       "replayed": REPLAYED, "unknown_fields": UNKNOWN_FIELDS},
+                       "replayed": REPLAYED, "unknown_fields": UNKNOWN_FIELDS,
+                       "model_failure": MODEL_FAILURE_REF},
         "required": ["ok", "error"],
     }}
+    defs["model_failure"] = MODEL_FAILURE
     for name, spec in MESSAGES.items():
         defs[key(name)] = request_schema(name, spec)
         defs[key(name) + ".reply"] = reply_schema(spec)

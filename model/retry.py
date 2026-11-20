@@ -42,9 +42,4 @@ class ModelRetry(Hook):
             return None
         delay = retry_delay(failure.error, failure.attempt,
                             self._limits["model_retry_seconds"])
-        if delay is None:
-            return None
-        error = f"{type(failure.error).__name__}: {failure.error}"
-        attempt = failure.attempt + 1
-        print(f"(model call failed: {error}; retry {attempt} in {delay:.1f} s)")
-        return Retry(delay)
+        return Retry(delay) if delay is not None else None

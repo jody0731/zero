@@ -37,7 +37,9 @@ class NoAnswer(NotRunning):
 
 
 class ProtocolError(Exception):
-    pass
+    def __init__(self, *args, model_failure=None):
+        super().__init__(*args)
+        self.model_failure = model_failure
 
 
 def connect(path, timeout=30):
@@ -194,7 +196,9 @@ class Connection:
         """The server's reply; ProtocolError for its no."""
         reply = self.reply_to(payload, timeout)
         if not reply["ok"]:
-            raise ProtocolError(reply["error"])
+            raise ProtocolError(
+                reply["error"], model_failure=reply.get("model_failure"),
+            )
         return reply
 
     def reply_to(self, payload, timeout=30):

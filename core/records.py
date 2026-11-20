@@ -29,6 +29,7 @@ class Turn:
         self.reply_format_errors = 0
         self.unformatted_reply = None
         self.outcome = self.detail = self.answer = self.error = None
+        self.model_failure = None
         self.reply = None
         self.errors = []
 
@@ -45,7 +46,7 @@ class Turn:
             "agent_seconds": round(self.agent_seconds(), 1),
             "wait_seconds": round(self.waiting, 1),
         }
-        for name in ("detail", "answer", "error", "inbox"):
+        for name in ("detail", "answer", "error", "inbox", "model_failure"):
             if getattr(self, name) is not None:
                 fields[name] = getattr(self, name)
         if self.reply is not None and self.answer is not None:

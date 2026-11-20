@@ -20,7 +20,7 @@ import openai
 from openai import Stream
 from openai.types.responses import Response, ResponseStreamEvent
 
-from core.llm import CutShort, NoReply, complete
+from core.llm import CutShort, NoReply, StreamFailure, complete
 from model.apis.search import (
     SearchError,
     SearchResponse,
@@ -183,10 +183,11 @@ def fold(draft, event):
         return True
     if kind == "response.failed":
         error = getattr(event.response, "error", None)
-        said = getattr(error, "message", None) or "no reason given"
-        raise CutShort(f"the response failed: {said}")
+        raise StreamFailure(getattr(error, "code", None),
+                            getattr(error, "message", None))
     if kind == "error":
-        raise CutShort(f"the response failed: {event.message}")
+        raise StreamFailure(getattr(event, "code", None),
+                            getattr(event, "message", None))
     return False
 
 

@@ -192,7 +192,7 @@ def progress(client, row, now=None):
             pieces.append(f"writing {seconds} s")
         else:
             pieces.append(f"thinking {seconds} s")
-        if client.retry is not None:
+        if client.retry is not None and not client.retry.get("model_failure"):
             error = " ".join(str(client.retry.get("error", "")).split())
             if len(error) > 60:
                 error = error[:59] + "…"

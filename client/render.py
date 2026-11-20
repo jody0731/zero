@@ -71,6 +71,23 @@ def clipped_line(text, chars=80):
     return text if len(text) <= chars else text[:chars - 1].rstrip() + "…"
 
 
+def model_failure_heading(failure):
+    return f"Model request failed · {failure['server_title']}"
+
+
+def model_failure_details(failure):
+    operation = failure["operation"]
+    operations = {"generate_reply": "Generate reply", "test_model": "Test model",
+                  "compact_context": "Compact context"}
+    lines = [operations.get(operation, operation)]
+    if failure.get("http_status") is not None:
+        lines.append(f"HTTP {failure['http_status']}")
+    lines.extend(failure[field]
+                 for field in ("provider_code", "provider_message", "observation")
+                 if failure.get(field))
+    return "\n".join(lines)
+
+
 def rewind_text(record):
     """A rewind, in a line: the records it left behind."""
     return (f"rewound here: records {record['left_from']}–{record['left_to']} "

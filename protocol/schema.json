@@ -165,12 +165,63 @@
             "type": "string"
           },
           "description": "the request's fields this server's protocol doesn't have, left out"
+        },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
         }
       },
       "required": [
         "ok",
         "error"
       ]
+    },
+    "model_failure": {
+      "type": "object",
+      "description": "What happened on a model request, with provider details redacted",
+      "required": [
+        "operation",
+        "server",
+        "server_title",
+        "next_action"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "enum": [
+            "generate_reply",
+            "test_model",
+            "compact_context"
+          ]
+        },
+        "server": {
+          "type": "string"
+        },
+        "server_title": {
+          "type": "string"
+        },
+        "http_status": {
+          "type": "integer"
+        },
+        "provider_code": {
+          "type": "string"
+        },
+        "provider_message": {
+          "type": "string"
+        },
+        "observation": {
+          "type": "string"
+        },
+        "next_action": {
+          "enum": [
+            "retry",
+            "fallback",
+            "stop"
+          ]
+        },
+        "fallback": {
+          "type": "string"
+        }
+      }
     },
     "vault.answer": {
       "type": "object",
@@ -1111,6 +1162,9 @@
                 "type": "string",
                 "description": "model: internal context, not shown in a person's conversation"
               },
+              "model_failure": {
+                "$ref": "#/$defs/model_failure"
+              },
               "time": {
                 "type": "string",
                 "description": "when it was written (ISO 8601, with its offset)"
@@ -1317,6 +1371,9 @@
             "audience": {
               "type": "string",
               "description": "model: internal context, not shown in a person's conversation"
+            },
+            "model_failure": {
+              "$ref": "#/$defs/model_failure"
             },
             "time": {
               "type": "string",
@@ -2015,6 +2072,9 @@
             "audience": {
               "type": "string",
               "description": "model: internal context, not shown in a person's conversation"
+            },
+            "model_failure": {
+              "$ref": "#/$defs/model_failure"
             },
             "time": {
               "type": "string",
@@ -4544,6 +4604,9 @@
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
         },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -4595,6 +4658,9 @@
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
         },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -4645,6 +4711,9 @@
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
+        },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
         },
         "time": {
           "type": "string",
@@ -4727,6 +4796,9 @@
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
+        },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
         },
         "time": {
           "type": "string",
@@ -4921,6 +4993,9 @@
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
         },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -5003,6 +5078,9 @@
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
         },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -5078,6 +5156,9 @@
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
         },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -5087,6 +5168,68 @@
         },
         "text": {
           "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "record.retry": {
+      "type": "object",
+      "description": "a `retry` record",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "description": "its place in the session's log"
+        },
+        "type": {
+          "const": "retry"
+        },
+        "interaction": {
+          "type": "object",
+          "required": [
+            "sender",
+            "action",
+            "target"
+          ],
+          "properties": {
+            "sender": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string"
+            },
+            "sender_session": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object"
+            }
+          }
+        },
+        "sender_name": {
+          "type": "string"
+        },
+        "audience": {
+          "type": "string",
+          "description": "model: internal context, not shown in a person's conversation"
+        },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
+        },
+        "time": {
+          "type": "string",
+          "description": "when it was written (ISO 8601, with its offset)"
+        },
+        "step": {
+          "type": "integer"
+        },
+        "retry": {
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        },
+        "delay": {
+          "type": "number"
         }
       },
       "additionalProperties": true
@@ -5130,6 +5273,9 @@
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
+        },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
         },
         "time": {
           "type": "string",
@@ -5184,6 +5330,9 @@
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
+        },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
         },
         "time": {
           "type": "string",
@@ -5255,6 +5404,9 @@
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
         },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -5308,6 +5460,9 @@
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
         },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
+        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
@@ -5357,6 +5512,9 @@
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
+        },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
         },
         "time": {
           "type": "string",
@@ -5412,6 +5570,9 @@
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
+        },
+        "model_failure": {
+          "$ref": "#/$defs/model_failure"
         },
         "time": {
           "type": "string",

@@ -25,7 +25,7 @@ from pathlib import Path
 import openai
 
 import paths
-from core.llm import complete
+from core.llm import complete, request_error_text
 from model import THINKING_EFFORT_FEATURES
 
 # Each feature: what it is, in words, as the screens say it
@@ -197,8 +197,8 @@ def measure(model, api, client, server_model, timeout):
             found[feature] = False
         except Exception as e:
             raise FeatureError(
-                f"couldn't measure {model}: {type(e).__name__}: {e}"
-            ) from e
+                f"couldn't measure {model}: {request_error_text(e, client)}"
+            ) from None
 
     test("thinking_off",
          lambda: not ask(SUM, effort="off").reasoning)

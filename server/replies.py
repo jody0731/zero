@@ -92,9 +92,10 @@ def record(record):
             text = record.get("message", {}).get("content")
             if isinstance(text, str) and text:
                 record = {**record, "reply": public_reply.sections(text)}
-    if kind in ("note", "switch"):
+    if kind in ("note", "switch") and "model_failure" not in record:
         # Harness notes belong to the model's context. Operational state
-        # reaches people through turn outcomes, asks, jobs and session rows.
+        # reaches people through turn outcomes, asks, jobs and session rows,
+        # or a fallback note with a model failure report.
         return {**record, "audience": "model"}
     if kind == "user" and history.is_notice(record):
         return {**record, "notice": True,

@@ -139,10 +139,16 @@ Save stores the credential and reads that server's model directory. Its IDs
 appear in General and in the session's model picker. Using a picker refreshes
 directories whose last read was at least a minute ago. Use **Manage → View
 models** to refresh that server now or retry a failed directory read.
+If the key was saved and the directory failed, **Details** shows the error
+from that read.
 
 Choose the default in **General**. If ZERO needs a model's context window,
 use **Manage → Connect a model**. A provider may charge for an explicit
 connection test or **Test model** action.
+
+When a model request fails, both apps show the model server and any retry
+or fallback in progress. Open **Details** to see the operation, the
+provider's redacted error, or what ZERO observed.
 
 Under **Settings → General**, leave **Web search service** empty for Automatic.
 Automatic prefers the session's model server when it can search, then

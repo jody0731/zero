@@ -22,7 +22,7 @@ from core.asking import (
 from core.control import Stopped
 from core.history import LOG_FORMAT, NewerLog, OldLog, log_format
 from core.hooks import Deny, HookRunner, ModelAsk, Park, Question, Stop
-from core.llm import InvalidHistory, MODEL_ERRORS
+from core.llm import InvalidHistory, MODEL_ERRORS, failure_text, request_failure
 from core.records import Call, ModelFailure, Step, Turn
 
 CUT_OFF = "[Your last reply hit the output limit and was cut off.]"
@@ -291,14 +291,28 @@ class Session:
             return None
         return self.fallback()
 
-    def use_fallback(self, error, spare):
+    def model_request_failure(self, error, operation):
+        """Describe this model's failed request before reporting it anywhere."""
+        server = getattr(self.model, "server", None)
+        client = getattr(self.model, "client", None)
+        boundary = self.tool_context.get("tool_boundary")
+        return request_failure(
+            error, operation, getattr(server, "name", self.model.name),
+            title=getattr(server, "title", None), key=getattr(client, "api_key", None),
+            redact=boundary.redact if boundary is not None else None,
+        )
+
+    def use_fallback(self, error, spare, report):
         """The rest of this turn on the fallback model `spare`, said in a
         note."""
         self.model = spare
-        self.write("note", kind="fallback", text=FALLBACK.format(
-            main=self.main_model.name, fallback=spare.name,
-            error=f"{type(error).__name__}: {error}",
-        ))
+        observed = failure_text(report, provider_details=False)
+        self.write(
+            "note", kind="fallback",
+            text=FALLBACK.format(main=self.main_model.name, fallback=spare.name,
+                                 error=f"{type(error).__name__}: {observed}"),
+            model_failure={**report, "next_action": "fallback", "fallback": spare.name},
+        )
 
     def run_turn(self, question):
         return self.run(self.open_turn(question))
@@ -500,20 +514,24 @@ class Session:
             except InvalidHistory as error:
                 return Stop("failed", str(error))
             except MODEL_ERRORS as e:
+                report = self.model_request_failure(e, "generate_reply")
                 failure = ModelFailure(step, e, attempt)
                 retry = self.hooks.decide("model_error", failure)
                 spare = self.spare_model() if retry is None else None
                 if spare is not None:
-                    self.use_fallback(e, spare)
+                    self.use_fallback(e, spare, report)
                     attempt = 0
                     continue
                 if retry is None:
-                    return Stop("model_error", f"{type(e).__name__}: {e}")
-                # Logged, so a client watching can say why the model is slow
-                #; the model's history leaves it out
+                    step.turn.model_failure = {**report, "next_action": "stop"}
+                    return Stop("model_error", f"{type(e).__name__}: "
+                                f"{failure_text(report)}")
+                # A watcher sees the retry as soon as it is scheduled.
                 self.write(
-                    "retry", step=step.number, retry=attempt + 1, error=str(e),
+                    "retry", step=step.number, retry=attempt + 1,
+                    error=failure_text(report),
                     delay=round(retry.delay, 1),
+                    model_failure={**report, "next_action": "retry"},
                 )
                 if step.turn.control is None:
                     time.sleep(retry.delay)

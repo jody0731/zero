@@ -3,6 +3,14 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.8.2
+
+- Model request failures identify the model server in the browser and terminal.
+  Details shows the operation, redacted provider error, or what ZERO observed.
+  The turn shows when ZERO retries or uses a fallback.
+- A saved key with a failed model directory read offers the redacted error
+  under Details. Use View models to retry with the saved key.
+
 ## 0.7.8.1
 
 - Saving or replacing a model-server key loads that server's model directory.

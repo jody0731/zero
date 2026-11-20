@@ -26,7 +26,7 @@ import paths
 from apps.tui import controller
 from apps.tui.dialogs import ChoiceView, PromptView, TextView
 from apps.tui.widgets import ERRORS, Plain
-from client import session_list
+from client import render, session_list
 
 # The last row: a server the catalog doesn't know
 OWN = "Your own server…"
@@ -433,20 +433,43 @@ class ServersView(Screen):
             )
 
     def show_error(self, error):
-        self.notify(str(error), severity="error")
+        failure = getattr(error, "model_failure", None)
+        if failure is None:
+            self.notify(str(error), severity="error")
+            return
+        self.failure_details(render.model_failure_heading(failure),
+                             render.model_failure_details(failure))
+
+    def failure_details(self, heading, detail, row=None):
+        choices = ["Details", "View models", "Close"] if row else ["Details", "Close"]
+
+        def chosen(choice):
+            if choice == "Details":
+                self.app.push_screen(TextView(heading, detail))
+            elif choice == VIEW_MODELS:
+                self.act(row, VIEW_MODELS)
+
+        self.app.push_screen(
+            ChoiceView(heading, choices),
+            chosen,
+        )
 
     def save_key(self, row, key):
         def saved(reply):
             action = "Saved key for" if reply["has_saved_key"] else "Removed key for"
             message = f"{action} {row['title']}."
             directory = reply.get("directory")
+            self.fetch()
             if reply["has_saved_key"] and directory is not None:
                 if directory.get("error"):
-                    message += f" {directory['error']} Choose View models to retry."
-                elif not directory["models"]:
+                    self.failure_details(
+                        f"Key saved. Couldn’t load {row['title']}’s model list.",
+                        directory["error"], row,
+                    )
+                    return
+                if not directory["models"]:
                     message += " No models listed."
             self.notify(message)
-            self.fetch()
 
         self.zero.request(
             lambda: self.zero.connection.set_model_server_key(row["name"], key),
@@ -497,7 +520,7 @@ class ServersView(Screen):
     def connected(self, reply, error):
         """The server's answer to a connect (Connecting.connect)."""
         if error is not None:
-            self.notify(str(error), severity="error")
+            self.show_error(error)
             return
         model = reply["model"]
         said = f"Connected {model}: its test call answered."

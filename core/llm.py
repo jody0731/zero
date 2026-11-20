@@ -8,12 +8,16 @@ how its events fold into the draft); which model, at which server, with
 which key, is the model component's too.
 """
 
+import json
 import queue
+import re
 import threading
 import time
+import unicodedata
 from types import SimpleNamespace
+from urllib.parse import quote, quote_plus
 
-from openai import APIError
+from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError
 
 
 class InvalidHistory(ValueError):
@@ -53,8 +57,104 @@ class NoReply(Exception):
     token or between two; a retry may get a reply."""
 
 
+class StreamFailure(CutShort):
+    """A provider error event that ends the stream."""
+
+    def __init__(self, code, message):
+        super().__init__(f"the response failed: {message or 'no reason given'}")
+        self.code = code
+        self.message = message
+
+
 # What a model call can raise that the loop hands to the model_error hook
 MODEL_ERRORS = (APIError, CutShort, NoReply)
+
+
+def safe_error_text(text, key=None, redact=None):
+    """Remove credentials and control characters before clipping a detail."""
+    if not isinstance(text, str):
+        return ""
+    if isinstance(key, str) and key:
+        forms = {key, quote(key, safe=""), quote_plus(key),
+                 json.dumps(key, ensure_ascii=False)[1:-1]}
+        pattern = "|".join(map(re.escape, sorted(forms, key=len, reverse=True)))
+        text = re.sub(pattern, "[redacted]", text)
+    if redact is not None:
+        text = redact(text)
+    text = "".join(" " if unicodedata.category(char).startswith("C") else char
+                   for char in text)
+    text = " ".join(text.split())
+    return text if len(text) <= 600 else text[:599].rstrip() + "…"
+
+
+def request_failure(error, operation, server, *, title=None, key=None, redact=None):
+    """The facts a failed model request can tell an app, safe to write to a log."""
+    return {"operation": operation, "server": server, "server_title": title or server,
+            **request_error_details(error, key=key, redact=redact)}
+
+
+def request_error_details(error, *, key=None, redact=None):
+    """The provider's reported fields and what the harness observed."""
+    report = {}
+    code = message = observation = None
+    if isinstance(error, APIStatusError):
+        report["http_status"] = error.status_code
+    if isinstance(error, StreamFailure):
+        code, message = error.code, error.message
+    elif isinstance(error, APITimeoutError):
+        observation = "ZERO reached its request timeout."
+    elif isinstance(error, APIConnectionError):
+        observation = "Connection error."
+    elif isinstance(error, (NoReply, CutShort)):
+        observation = str(error)
+    elif isinstance(error, APIError):
+        # The SDK unwraps `error` in HTTP and stream errors. Only use named
+        # fields, never the SDK's exception text or a raw HTTP response.
+        body = error.body
+        if isinstance(body, dict):
+            code, message = body.get("code"), body.get("message")
+        elif isinstance(body, str):
+            if isinstance(error, APIStatusError):
+                # An explicit JSON error string can be used. A raw body cannot.
+                try:
+                    payload = error.response.json()
+                except ValueError:
+                    payload = None
+                if isinstance(payload, dict):
+                    message = payload.get("error")
+            else:
+                message = body
+    if type(code) is int:
+        code = str(code)
+    for field, text in (("provider_code", code), ("provider_message", message),
+                        ("observation", observation)):
+        if cleaned := safe_error_text(text, key, redact):
+            report[field] = cleaned
+    if not report:
+        report["observation"] = "The model request ended with an error."
+    return report
+
+
+def failure_text(report, *, provider_details=True):
+    """A short string for callers that read the older text fields."""
+    status = report.get("http_status")
+    parts = [f"HTTP {status}"] if status is not None else []
+    if provider_details:
+        parts.extend(report[field] for field in ("provider_code", "provider_message")
+                     if field in report)
+    if report.get("observation"):
+        parts.append(report["observation"])
+    return " · ".join(parts) or "The provider reported a stream error."
+
+
+def request_error_text(error, client):
+    """Safe diagnostic text for a caller that records a string."""
+    key = getattr(client, "api_key", None)
+    if isinstance(error, MODEL_ERRORS):
+        text = failure_text(request_error_details(error, key=key))
+    else:
+        text = safe_error_text(str(error), key)
+    return f"{type(error).__name__}: {text}"
 
 
 class Draft:

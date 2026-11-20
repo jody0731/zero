@@ -93,7 +93,11 @@
       reply = await post(payload);
     }
     wake();
-    if (!reply.ok) throw new Error(reply.error);
+    if (!reply.ok) {
+      const error = new Error(reply.error);
+      error.modelFailure = reply.model_failure;
+      throw error;
+    }
     return reply;
   }
 
@@ -619,12 +623,15 @@
       case "ask": return askEntry(record);
       case "answer": return answerEntry(record);
       case "turn_end": return turnEnd(record);
-      case "note": return noteEntry(record);
+      case "retry": return modelFailureEntry(record);
+      case "note": return record.model_failure
+        ? modelFailureEntry(record) : noteEntry(record);
       case "compaction":
         return el("div", "divider", `Compacted ${tokens(record.tokens_before)}`
           + ` → ${tokens(record.tokens_after)}`);
       case "compaction_failed":
-        return el("div", "divider", "Compaction failed");
+        return record.model_failure ? modelFailureView(record.model_failure)
+          : el("div", "divider", "Compaction failed");
       case "nothing_to_compact": return null;
       case "rewind": return el("div", "divider", "Rewound");
       case "switch": return el("div", "divider", switchText(record));
@@ -814,6 +821,9 @@
     const text = [record.outcome, seconds(record.seconds),
       record.error || record.detail || ""].filter(Boolean).join(" · ");
     const turn = turnFor(record);
+    if (record.model_failure) {
+      turn.replies.append(modelFailureView(record.model_failure));
+    }
     if (!turn.texts.length && record.reply && record.answer) {
       const reply = el("div", "public-reply");
       drawPublicReply(reply, record.reply, record.answer, record.seq);
@@ -821,8 +831,46 @@
       turn.texts.push(record.answer);
       turn.copy.hidden = false;
     }
-    finishProgress(turn, text || "Completed");
+    finishProgress(turn, record.model_failure
+      ? `Stopped · ${seconds(record.seconds)}` : text || "Completed");
     if (failed) turn.summary.classList.add("failed");
+    return null;
+  }
+
+  function modelFailureView(failure) {
+    const node = el("div", "model-failure");
+    const title = failure.server_title || failure.server;
+    node.append(el("strong", null, `Model request failed · ${title}`));
+    if (failure.next_action === "retry") {
+      node.append(el("div", "sub", "Retrying model request…"));
+    } else if (failure.next_action === "fallback") {
+      node.append(el("div", "sub", `Using fallback · ${failure.fallback}`));
+    }
+    const operations = {
+      generate_reply: "Generate reply", test_model: "Test model",
+      compact_context: "Compact context",
+    };
+    const lines = [
+      operations[failure.operation] || failure.operation,
+      failure.http_status == null ? null : `HTTP ${failure.http_status}`,
+      failure.provider_code, failure.provider_message, failure.observation,
+    ];
+    node.append(failureDetails(lines.filter(Boolean)));
+    return node;
+  }
+
+  function failureDetails(lines) {
+    const details = el("details", "model-failure-details");
+    details.append(el("summary", null, "Details"));
+    for (const line of lines) details.append(el("div", null, line));
+    return details;
+  }
+
+  function modelFailureEntry(record) {
+    if (record.model_failure) {
+      const turn = turnFor(record);
+      turn.replies.append(modelFailureView(record.model_failure));
+    }
     return null;
   }
 
@@ -2404,9 +2452,12 @@
       event.preventDefault();
       if (save.disabled) return;
       save.disabled = true;
-      status.textContent = "";
+      status.replaceChildren();
       try { await submit(); }
-      catch (error) { status.textContent = error.message; }
+      catch (error) {
+        if (error.modelFailure) status.append(modelFailureView(error.modelFailure));
+        else status.textContent = error.message;
+      }
       finally { save.disabled = false; }
     });
     return form;
@@ -2422,10 +2473,11 @@
       if (!acceptModelDirectory(name, version, reply.directory)) return;
       const saved = `Saved key for ${server.title}.`;
       const directory = reply.directory;
-      const notice = directory?.error
-        ? ` ${directory.error} Choose View models to retry.`
-        : directory && !directory.models.length ? " No models listed." : "";
-      await refresh(saved + notice);
+      const message = directory?.error
+        ? `Key saved. Couldn’t load ${server.title}’s model list. `
+          + "Choose View models to retry."
+        : saved + (directory && !directory.models.length ? " No models listed." : "");
+      await refresh(message, directory?.error);
     }, close ?? (() => editor.replaceChildren())));
     key.focus();
   }
@@ -2527,17 +2579,18 @@
     (server.name ? model : name).focus();
   }
 
-  async function modelServers(body, notice = "") {
+  async function modelServers(body, notice = "", directoryError = "") {
     const version = ++state.modelPanelVersion;
     const reply = await look("model/server/list");
     if (version !== state.modelPanelVersion || state.settingsView !== "Models"
         || !$("settings-dialog").open) return;
-    const refresh = (status) => modelServers(body, status);
-    draw(notice);
+    const refresh = (status, error) => modelServers(body, status, error);
+    draw(notice, false, directoryError);
 
-    function draw(message, addKey = false) {
-      const status = el("p", "sub model-status", message);
+    function draw(message, addKey = false, directoryError = "") {
+      const status = el("div", "sub model-status", message);
       status.setAttribute("role", "status");
+      if (directoryError) status.append(failureDetails([directoryError]));
       body.replaceChildren(status);
 
       const table = el("table", "model-server-list");

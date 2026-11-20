@@ -79,7 +79,9 @@ class SessionState:
             if kind == "retry":
                 self.retry = record
                 return
-            if kind in ("assistant", "turn_end", "ask"):
+            if kind in ("assistant", "turn_end", "ask") or (
+                kind == "note" and record.get("kind") == "fallback"
+            ):
                 self.retry = None
             # A note that the turn resumed after a restart means it runs again
             if kind in ("user", "tool") or (

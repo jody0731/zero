@@ -25,7 +25,10 @@ import openai
 from openai import OpenAI
 
 import paths
-from core.llm import complete
+from core.llm import (
+    MODEL_ERRORS, complete, failure_text, request_error_details, request_failure,
+    safe_error_text,
+)
 from model import servers
 from model.apis import APIS, DEFAULT, chat_completions
 from settings import sections
@@ -44,16 +47,16 @@ CONTEXT_WINDOW_FIELDS = ("max_model_len", "context_length", "max_context_length"
 class ConnectError(Exception):
     """Why a server can't be listed, tested or saved; said to the face."""
 
-
-def scrub(text, key):
-    """The text with the key cut out, should a server echo it."""
-    if key and key != servers.NO_KEY:
-        text = text.replace(key, "…")
-    return text
+    def __init__(self, message, *, model_failure=None):
+        super().__init__(message)
+        self.model_failure = model_failure
 
 
 def error_text(error, key):
-    return scrub(f"{type(error).__name__}: {error}", key)[:300]
+    key = None if key == servers.NO_KEY else key
+    if isinstance(error, MODEL_ERRORS):
+        return failure_text(request_error_details(error, key=key))
+    return safe_error_text(f"{type(error).__name__}: {error}", key)
 
 
 def listing(url, key):
@@ -67,7 +70,8 @@ def listing(url, key):
     except openai.NotFoundError:
         raise
     except Exception as e:
-        raise ConnectError(f"{url} didn't list its models: {error_text(e, key)}") from e
+        detail = error_text(e, key)
+        raise ConnectError(f"Model list request failed · {detail}") from None
     found = []
     for item in items:
         data = item.model_dump()
@@ -100,14 +104,21 @@ def probe(url, key):
         ) from e
 
 
-def test_call(url, key, model, api):
+def test_call(url, key, model, api, *, server=None, title=None):
     """As few output tokens as the server's API allows, from the model, in
     that API (apis/); ConnectError if they don't come."""
-    client = OpenAI(base_url=url, api_key=key, timeout=TEST_SECONDS,
-                    max_retries=0)
     try:
-        complete(api, client, model, [{"role": "user", "content": "Say OK."}],
-                 silence=TEST_SECONDS, max_output_tokens=api.MIN_OUTPUT_TOKENS)
+        with OpenAI(base_url=url, api_key=key, timeout=TEST_SECONDS,
+                    max_retries=0) as client:
+            complete(api, client, model, [{"role": "user", "content": "Say OK."}],
+                     silence=TEST_SECONDS, max_output_tokens=api.MIN_OUTPUT_TOKENS)
+    except MODEL_ERRORS as error:
+        report = request_failure(error, "test_model", server or "model server",
+                                 title=title, key=key)
+        raise ConnectError(
+            f"the test call failed: {failure_text(report)}",
+            model_failure={**report, "next_action": "stop"},
+        ) from None
     except Exception as e:
         raise ConnectError(
             f"the test call to {model} at {url} failed: {error_text(e, key)}"
@@ -312,7 +323,7 @@ def test_request(request):
     model = model.strip().removeprefix(f"{name}/")
     if not model:
         raise ConnectError("Enter the model's name.")
-    test_call(url, key, model, server.api)
+    test_call(url, key, model, server.api, server=name, title=server.title)
     return full_name(name, model)
 
 
@@ -356,7 +367,8 @@ def connect(request):
     if known_window is None and not loads_window:
         raise ConnectError(missing_window)
     api = APIS[(entry or {}).get("api", DEFAULT)]
-    test_call(url, key, model, api)
+    test_call(url, key, model, api, server=name,
+              title=title or (known.title if known else None))
     if loads_window:
         try:
             fresh = listing(url, key)

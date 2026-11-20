@@ -204,6 +204,9 @@ details.call pre { background: var(--panel); padding: 8px 10px;
   background: var(--line); }
 .turn-end { color: var(--text-3); margin: 4px 0 16px; font-size: 10px; }
 .turn-end.failed { color: var(--ink); text-decoration: line-through; }
+.model-failure { margin: 4px 0; overflow-wrap: anywhere; }
+.model-failure-details { color: var(--text-2); }
+.model-failure-details summary { cursor: pointer; }
 .draft { opacity: 0.8; }
 
 .follow { position: sticky; bottom: 10px; align-self: center; margin-top: -40px;

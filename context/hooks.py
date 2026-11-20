@@ -23,7 +23,7 @@ from context.compaction import (
 )
 from core import history, tools
 from core.hooks import Hook, Retry
-from core.llm import MODEL_ERRORS
+from core.llm import MODEL_ERRORS, failure_text
 
 # Error phrases and codes for a request that exceeds the server's context.
 TOO_LONG = re.compile(
@@ -217,6 +217,17 @@ class Context(Hook):
                              counter(session), limits=self.limits,
                              reason=reason, occasion=occasion)
         except (CompactionFailed, *MODEL_ERRORS) as error:
+            self._compaction_failed(session, reason, error)
+
+    def _compaction_failed(self, session, reason, error):
+        if isinstance(error, MODEL_ERRORS):
+            report = session.model_request_failure(error, "compact_context")
+            session.write(
+                "compaction_failed", reason=reason,
+                error=f"{type(error).__name__}: {failure_text(report)}",
+                model_failure={**report, "next_action": "stop"},
+            )
+        else:
             session.write("compaction_failed", reason=reason,
                           error=f"{type(error).__name__}: {error}")
 
@@ -263,8 +274,7 @@ class Context(Hook):
                     session.write("nothing_to_compact", reason=reason)
                 return None
             self._failed = True
-            session.write("compaction_failed", reason=reason,
-                          error=f"{type(error).__name__}: {error}")
+            self._compaction_failed(session, reason, error)
             return None
 
     def tool_result(self, result, call):

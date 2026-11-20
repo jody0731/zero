@@ -14,7 +14,7 @@ import json
 import time
 
 from core.asking import NO, YES
-from core.llm import complete
+from core.llm import complete, request_error_text
 
 PROMPT = """
 An assistant asked the user for permission before running a command on the
@@ -161,7 +161,8 @@ class Consent:
         except Exception as e:
             # An API error, a bad verdict, anything: not a yes. The reply goes to
             # the agent as a message instead
-            verdict = {"yes": False, "error": f"{type(e).__name__}: {e}"}
+            detail = request_error_text(e, getattr(self.asked, "client", None))
+            verdict = {"yes": False, "error": detail}
         verdict["seconds"] = round(time.monotonic() - t0, 1)
         verdict["model"] = self.model
         if tokens:

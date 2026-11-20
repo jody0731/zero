@@ -136,13 +136,13 @@ class ModelService(Service):
         try:
             return {"ok": True, "model": connect.test_request(request)}
         except (connect.ConnectError, servers.ModelServerError) as error:
-            return {"ok": False, "error": str(error)}
+            return connect_failure(error)
 
     def connect_message(self, request):
         try:
             model = connect.connect(request)
-        except (connect.ConnectError, servers.ModelServerError, OSError) as e:
-            return {"ok": False, "error": str(e)}
+        except (connect.ConnectError, servers.ModelServerError, OSError) as error:
+            return connect_failure(error)
         with self.directory_lock:
             self.directories.pop(request["name"], None)
         config = self.writable()
@@ -238,6 +238,13 @@ class ModelService(Service):
         return empty_directory(server)
 
 
+def connect_failure(error):
+    reply = {"ok": False, "error": str(error)}
+    if report := getattr(error, "model_failure", None):
+        reply["model_failure"] = report
+    return reply
+
+
 def directory_route(server, key):
     return server.url, sha256(key.encode()).digest()
 
@@ -252,8 +259,9 @@ def server_row(server, key):
     try:
         found = connect.listing(server.url, key)
         row["models"] = [connect.full_name(server.name, model["id"]) for model in found]
-    except NotFoundError:
-        row["error"] = "This server has no model directory at its configured API URL."
+    except NotFoundError as error:
+        row["error"] = ("This server has no model directory at its configured API URL. "
+                        + connect.error_text(error, key))
     except Exception as error:
         row["error"] = (str(error) if isinstance(error, connect.ConnectError)
                         else connect.error_text(error, key))

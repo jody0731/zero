@@ -243,6 +243,25 @@ ROWS = {
     }),
 }
 
+MODEL_FAILURE = {
+    "type": "object",
+    "description": "What happened on a model request, with provider details redacted",
+    "required": ["operation", "server", "server_title", "next_action"],
+    "additionalProperties": False,
+    "properties": {
+        "operation": one_of("generate_reply", "test_model", "compact_context"),
+        "server": STRING,
+        "server_title": STRING,
+        "http_status": INTEGER,
+        "provider_code": STRING,
+        "provider_message": STRING,
+        "observation": STRING,
+        "next_action": one_of("retry", "fallback", "stop"),
+        "fallback": STRING,
+    },
+}
+MODEL_FAILURE_REF = {"$ref": "#/$defs/model_failure"}
+
 # A log record's own fields, which every record has; a record holds more,
 # which an app may skip, and an older log's records have only what they had
 # then (a field below that is missing says nothing)
@@ -255,6 +274,7 @@ RECORD_FIELDS = {
     "sender_name": STRING,
     "audience": {**STRING, "description": "model: internal context, not "
                  "shown in a person's conversation"},
+    "model_failure": MODEL_FAILURE_REF,
     "time": {**STRING, "description": "when it was written (ISO 8601, with "
              "its offset)"},
 }
@@ -333,6 +353,9 @@ RECORDS = {
     },
     "note": {
         "kind": STRING, "text": STRING,
+    },
+    "retry": {
+        "step": INTEGER, "retry": INTEGER, "error": STRING, "delay": NUMBER,
     },
     "switch": {
         "from": OBJECT, "to": {**OBJECT, "description": "what changed, by "

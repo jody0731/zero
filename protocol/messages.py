@@ -767,7 +767,9 @@ MESSAGES = {
     ),
     "model/list": message(
         "Every server the server can reach, with its models by the names a "
-        "session takes, or why it lists none.",
+        "session takes, or why it lists none. Pass server for one directory, "
+        "or cached to reuse directories already read for this connection.",
+        {"server": STRING, "cached": BOOLEAN},
         reply={"servers": open_rows("server, title, models, and error where "
                                     "it listed none")},
     ),
@@ -816,10 +818,13 @@ MESSAGES = {
         changes=True,
     ),
     "model/server/key/set": message(
-        "Save or remove only the selected server's key. A null key removes "
-        "the saved value. No provider request is made.",
+        "Save a key and read that server's model directory. A null key "
+        "removes the saved value. A directory error accompanies a successful "
+        "key save and can be retried with model/list.",
         {"name": STRING, "key": maybe(STRING)}, required=("name", "key"),
-        reply={"has_saved_key": BOOLEAN}, changes=True,
+        reply={"has_saved_key": BOOLEAN,
+               "directory": {**OBJECT, "description": "a model/list server row"}},
+        changes=True,
     ),
     "model/server/test": message(
         "Send a short test call to a model on a configured server. The "

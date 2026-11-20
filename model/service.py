@@ -1,32 +1,33 @@
-"""The model's service in the server (server/services.py): `model/list`, which asks
-every server ZERO can reach for its models, so any face lists them from the
-server (the full screen's /model menu today); `model/features`, what a model
-honours of its API's features (features.py), measured when none are kept or
-when asked; and connecting one (connect.py), under `model/server/`: `list`
-(every server and whether its key is there), `probe` (one server's models,
-for a face's pick list), `connect` (a test call, then saved) and
-`disconnect`. Each is whole in one request: the server keeps nothing between a
-face's steps, so a plain command sends the same. Only `model/list` and
-`model/server/list` look; the rest are the user's own face's alone, since
-they send a key, change the user's files or call a model.
+"""Model directories, saved connections and explicit tests for the apps.
 
-A server is reachable when it needs no key or its key is there (servers.py);
-the others aren't asked. Each is asked through /v1/models in parallel, each
-for a few seconds at most. A model is listed by the name a session takes.
+Picker reads can reuse directories for the current URL and credential. A key
+save refreshes just that server's directory. The directory read is separate
+from connecting, testing and measuring models.
 """
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
+from hashlib import sha256
+from threading import Lock
+from time import monotonic
 
-from openai import OpenAI
+from openai import NotFoundError
 
 from server.services import Service
 from model import connect, features, servers
 
-# Seconds a server has to list its models; one that doesn't answer says so
-LIST_SECONDS = 3
 # Seconds a model may stay silent while its features are measured: a local
 # server may first load it (a backstop, as model_silence_seconds)
 FEATURE_SECONDS = 300
+# A picker asks again on demand once its last directory read has aged.
+DIRECTORY_FRESH_SECONDS = 60
+
+
+@dataclass
+class ModelDirectory:
+    route: tuple[str, bytes]
+    reply: Future = field(default_factory=Future)
+    read_at: float = 0.0
 
 
 class ModelService(Service):
@@ -37,6 +38,8 @@ class ModelService(Service):
         # config.toml (settings.Config), where the default goes; the server's
         # once attached. None, or a server that reads none: no default is set
         self.config = config
+        self.directories = {}
+        self.directory_lock = Lock()
 
     def attach(self, runtime):
         super().attach(runtime)
@@ -103,13 +106,31 @@ class ModelService(Service):
     def set_key_message(self, request):
         if "key" not in request:
             return {"ok": False, "error": "Supply a key or choose to remove it."}
+        name, value = request.get("name"), request["key"]
         try:
-            connect.set_key(request.get("name"), request["key"])
+            with self.directory_lock:
+                server = connect.set_key(name, value)
+                row = empty_directory(server)
+                try:
+                    key = servers.api_key(server)
+                except servers.ModelServerError as error:
+                    self.directories.pop(name, None)
+                    if value is not None:
+                        row["error"] = str(error)
+                    pending = None
+                else:
+                    if value is None:
+                        row = self.after_key_removal(server, key)
+                        pending = None
+                    else:
+                        pending = self.directory_request(server, key, cached=False)
         except (connect.ConnectError, servers.ModelServerError) as error:
             return {"ok": False, "error": str(error)}
         except OSError:
             return {"ok": False, "error": "ZERO could not write the saved key."}
-        return {"ok": True, "has_saved_key": request["key"] is not None}
+        if pending is not None:
+            row = self.directory_result(pending)
+        return {"ok": True, "has_saved_key": value is not None, "directory": row}
 
     def test_message(self, request):
         try:
@@ -122,6 +143,8 @@ class ModelService(Service):
             model = connect.connect(request)
         except (connect.ConnectError, servers.ModelServerError, OSError) as e:
             return {"ok": False, "error": str(e)}
+        with self.directory_lock:
+            self.directories.pop(request["name"], None)
         config = self.writable()
         made_default = False
         if config is not None and (request.get("default") is True
@@ -139,7 +162,9 @@ class ModelService(Service):
         try:
             unset = (config is not None and config()["model"] is not None
                      and connect.server_of(config()["model"]) == name)
-            connect.disconnect(name)
+            with self.directory_lock:
+                connect.disconnect(name)
+                self.directories.pop(name, None)
         except (connect.ConnectError, servers.ModelServerError, OSError) as e:
             return {"ok": False, "error": str(e)}
         if unset:
@@ -147,34 +172,89 @@ class ModelService(Service):
         return {"ok": True, "removed": name, "default_unset": unset}
 
     def models_message(self, request):
-        try:
-            table = servers.table()
-        except servers.ModelServerError as e:
-            return {"ok": False, "error": str(e)}
+        name = request.get("server")
         asked = []
-        for name in table:
-            server = servers.find(name)
+        with self.directory_lock:
             try:
-                key = servers.api_key(server)
-            except servers.ModelServerError:
-                continue
-            asked.append((server, key))
+                table = servers.table()
+            except servers.ModelServerError as error:
+                return {"ok": False, "error": str(error)}
+            if name is not None and (not isinstance(name, str) or name not in table):
+                return {"ok": False, "error": "Choose a configured model server."}
+            for server_name in (table if name is None else (name,)):
+                server = servers.ModelServer(server_name, table[server_name])
+                try:
+                    key = servers.api_key(server)
+                except servers.ModelServerError as error:
+                    self.directories.pop(server_name, None)
+                    if name is not None:
+                        return {"ok": True, "servers": [
+                            {**empty_directory(server), "error": str(error)},
+                        ]}
+                    continue
+                asked.append(self.directory_request(
+                    server, key, cached=request.get("cached") is True,
+                ))
         with ThreadPoolExecutor(max_workers=max(1, len(asked))) as pool:
-            rows = list(pool.map(lambda pair: server_row(*pair), asked))
+            rows = list(pool.map(self.directory_result, asked))
         return {"ok": True, "servers": rows}
+
+    def directory_request(self, server, key, *, cached):
+        """Reserve one lookup under the lock. Concurrent reads can share it."""
+        route = directory_route(server, key)
+        previous = self.directories.get(server.name)
+        if previous and previous.route == route:
+            fresh = cached and monotonic() - previous.read_at < DIRECTORY_FRESH_SECONDS
+            if fresh or not previous.reply.done():
+                return server, key, previous, False
+        directory = ModelDirectory(route)
+        self.directories[server.name] = directory
+        return server, key, directory, True
+
+    def directory_result(self, pending):
+        server, key, directory, send = pending
+        if send:
+            row = server_row(server, key)
+            directory.read_at = monotonic()
+            directory.reply.set_result(row)
+        while True:
+            row = directory.reply.result()
+            with self.directory_lock:
+                current = self.directories.get(server.name)
+            if current is None:
+                return empty_directory(server)
+            if current is directory:
+                return row
+            # Rotating or removing a key can finish before an old lookup.
+            directory = current
+
+    def after_key_removal(self, server, key):
+        """Keep a directory already read through a still-effective credential."""
+        previous = self.directories.get(server.name)
+        if previous and previous.route == directory_route(server, key):
+            return (previous.reply.result() if previous.reply.done()
+                    else empty_directory(server))
+        self.directories.pop(server.name, None)
+        return empty_directory(server)
+
+
+def directory_route(server, key):
+    return server.url, sha256(key.encode()).digest()
+
+
+def empty_directory(server):
+    return {"server": server.name, "title": server.title, "models": []}
 
 
 def server_row(server, key):
     """One server's row: its models by ZERO's names, or why there are none."""
-    row = {"server": server.name, "title": server.title, "models": []}
-    client = OpenAI(base_url=server.url, api_key=key,
-                    timeout=LIST_SECONDS, max_retries=0)
+    row = empty_directory(server)
     try:
-        found = [item.id for item in client.models.list().data]
-    except Exception as e:
-        # Whatever the server or the network said: the row says it, the
-        # other servers still list
-        row["error"] = f"{type(e).__name__}: {e}"[:300]
-        return row
-    row["models"] = [connect.full_name(server.name, model) for model in found]
+        found = connect.listing(server.url, key)
+        row["models"] = [connect.full_name(server.name, model["id"]) for model in found]
+    except NotFoundError:
+        row["error"] = "This server has no model directory at its configured API URL."
+    except Exception as error:
+        row["error"] = (str(error) if isinstance(error, connect.ConnectError)
+                        else connect.error_text(error, key))
     return row

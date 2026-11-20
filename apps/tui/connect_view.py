@@ -42,7 +42,6 @@ REPLACE_KEY = "Replace saved key"
 REMOVE_KEY = "Remove saved key"
 VIEW_MODELS = "View models"
 TEST_MODEL = "Test model"
-CHOOSE_DEFAULT = "Choose default"
 URL_LABEL = "API URL, for example http://localhost:8080/v1"
 NO_MODEL_YET = ("ZERO needs a model to talk to. Pick a server and paste its API "
                 "key, or point ZERO at a server of your own.")
@@ -372,8 +371,6 @@ class ServersView(Screen):
             return ("A server of your own: its URL, a key if it takes one, and "
                     "a model it serves.")
         said = [row["url"]]
-        if row["name"] == self.default_server:
-            said.append(f"New sessions use {self.default}.")
         if self.not_ready_reason and self.default:
             said.append(self.not_ready_reason)
         return "\n".join(said)
@@ -393,7 +390,7 @@ class ServersView(Screen):
             actions.append(REPLACE_KEY if saved else ADD_KEY)
         if saved:
             actions.append(REMOVE_KEY)
-        actions.extend((VIEW_MODELS, TEST_MODEL, CHOOSE_DEFAULT, CONNECT))
+        actions.extend((VIEW_MODELS, TEST_MODEL, CONNECT))
         if row["user_added"]:
             actions.append("Remove server")
         self.app.push_screen(ChoiceView(row["title"], actions),
@@ -413,19 +410,14 @@ class ServersView(Screen):
             )
         elif action == VIEW_MODELS:
             self.zero.request(
-                lambda: self.zero.connection.probe(name=row["name"]),
-                then=lambda reply: self.show_models(row, reply[1]),
+                lambda: self.zero.connection.models(server=row["name"]),
+                then=lambda reply: self.show_models(row, reply["servers"]),
                 failed=self.show_error,
             )
         elif action == TEST_MODEL:
             self.pick_model(
                 row, "Test model. The provider may charge for the test.",
                 lambda model: self.test_model(row, model),
-            )
-        elif action == CHOOSE_DEFAULT:
-            self.pick_model(
-                row, "Choose the default for new sessions",
-                lambda model: self.choose_default(row, model),
             )
         elif action == CONNECT:
             self.app.push_screen(
@@ -446,7 +438,14 @@ class ServersView(Screen):
     def save_key(self, row, key):
         def saved(reply):
             action = "Saved key for" if reply["has_saved_key"] else "Removed key for"
-            self.notify(f"{action} {row['title']}.")
+            message = f"{action} {row['title']}."
+            directory = reply.get("directory")
+            if reply["has_saved_key"] and directory is not None:
+                if directory.get("error"):
+                    message += f" {directory['error']} Choose View models to retry."
+                elif not directory["models"]:
+                    message += " No models listed."
+            self.notify(message)
             self.fetch()
 
         self.zero.request(
@@ -454,10 +453,14 @@ class ServersView(Screen):
             then=saved, failed=self.show_error,
         )
 
-    def show_models(self, row, models):
-        lines = [model["id"] for model in models]
+    def show_models(self, row, directories):
+        directory = next((item for item in directories
+                          if item["server"] == row["name"]), {})
+        prefix = row.get("model_prefix", "")
+        lines = [model.removeprefix(prefix) for model in directory.get("models", ())]
+        text = directory.get("error") or "\n".join(lines) or "No models listed."
         self.app.push_screen(TextView(f"Models from {row['title']}",
-                                      "\n".join(lines) or "No models listed."))
+                                      text))
 
     def pick_model(self, row, label, done):
         def chosen(model):
@@ -477,13 +480,6 @@ class ServersView(Screen):
             then=lambda reply: self.notify(f"{reply['model']} answered the test."),
             failed=self.show_error,
         )
-
-    def choose_default(self, row, model):
-        if not (row["models"].get(model) or row["context_window"]):
-            self.notify("Connect this model to set its context window.",
-                        severity="warning")
-            return
-        self.make_default(row.get("model_prefix", f"{row['name']}/") + model)
 
     def take_back(self, row):
         self.zero.request(lambda: self.zero.connection.disconnect(row["name"]),
@@ -514,6 +510,3 @@ class ServersView(Screen):
         if self.first:
             self.app.pop_screen()
             self.zero.connected(model)
-
-    def make_default(self, model):
-        self.zero.set_setting("model", model, then=self.fetch)

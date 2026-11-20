@@ -369,7 +369,6 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 .setting-error { display: block; margin-top: 6px; }
 .setting-error[hidden] { display: none; }
 #settings-body > section { border: 1px solid var(--line); padding: 12px; }
-.model-default { margin: 8px 0 12px; }
 .model-server-list {
   width: 100%; border-collapse: collapse; table-layout: auto;
   margin-bottom: 12px;

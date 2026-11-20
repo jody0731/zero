@@ -426,9 +426,7 @@ class SettingsView(Scrolled, Screen):
         other = "another model…"
 
         def offer(served):
-            named = controller.model_choices(
-                self.zero.defaults.get("model"), self.zero.lists.sessions, served,
-            )
+            named = controller.model_choices(now, (), served)
             choices = [*([none] if unset else []), *named, other]
             current = now or (none if unset else None)
             self.app.push_screen(ChoiceView(setting.label, choices, current),

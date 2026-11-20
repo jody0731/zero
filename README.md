@@ -134,10 +134,15 @@ selected in its right panel.
 The terminal app, `zero tui`, has its own first-run connection flow and
 **/settings → Models and keys…**. Both apps use the same saved connections.
 
-To save just a key, open the server's **Add API key** action in Models.
-The masked field saves the credential on this computer. **Manage** opens
-actions for a configured server, including viewing models and running an
-optional test. The provider may charge for a test.
+To add models from a server that needs a key, use **Add API key** in Models.
+Save stores the credential and reads that server's model directory. Its IDs
+appear in General and in the session's model picker. Using a picker refreshes
+directories whose last read was at least a minute ago. Use **Manage → View
+models** to refresh that server now or retry a failed directory read.
+
+Choose the default in **General**. If ZERO needs a model's context window,
+use **Manage → Connect a model**. A provider may charge for an explicit
+connection test or **Test model** action.
 
 Under **Settings → General**, leave **Web search service** empty for Automatic.
 Automatic prefers the session's model server when it can search, then

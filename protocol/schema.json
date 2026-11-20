@@ -3001,7 +3001,7 @@
     },
     "model.list": {
       "type": "object",
-      "description": "Every server the server can reach, with its models by the names a session takes, or why it lists none.",
+      "description": "Every server the server can reach, with its models by the names a session takes, or why it lists none. Pass server for one directory, or cached to reuse directories already read for this connection.",
       "properties": {
         "message": {
           "const": "model/list"
@@ -3018,6 +3018,12 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "server": {
+          "type": "string"
+        },
+        "cached": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -3374,7 +3380,7 @@
     },
     "model.server.key.set": {
       "type": "object",
-      "description": "Save or remove only the selected server's key. A null key removes the saved value. No provider request is made.",
+      "description": "Save a key and read that server's model directory. A null key removes the saved value. A directory error accompanies a successful key save and can be retried with model/list.",
       "properties": {
         "message": {
           "const": "model/server/key/set"
@@ -3429,6 +3435,10 @@
         },
         "has_saved_key": {
           "type": "boolean"
+        },
+        "directory": {
+          "type": "object",
+          "description": "a model/list server row"
         },
         "replayed": {
           "type": "boolean",

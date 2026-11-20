@@ -281,10 +281,12 @@ class Connection:
     def hello(self):
         return self.call(build("server/hello"))
 
-    def models(self):
-        """Every server the server can reach, with its models by the names a
-        session takes, or why it lists none: the server's reply as it is."""
-        return self.call(build("model/list"))
+    def models(self, *, server=None, cached=False):
+        """Available directories, or one server's, using session-ready names."""
+        fields = {"server": server} if server is not None else {}
+        if cached:
+            fields["cached"] = True
+        return self.call(build("model/list", **fields))
 
     def features(self, model, test=False, *, cached_only=False):
         """Read model features. A measurement can make several model calls."""
@@ -324,7 +326,7 @@ class Connection:
         return self.call(build("model/server/disconnect", name=name))
 
     def set_model_server_key(self, name, key):
-        """Save or remove the credential without contacting the provider."""
+        """Save and list the server's models, or remove its saved key."""
         return self.call(build("model/server/key/set", name=name, key=key))
 
     def test_model(self, name, model):

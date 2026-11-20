@@ -958,7 +958,7 @@ class ZeroApp(SafeClicks, App):
         """The models every server lists, asked of the server; none when it
         can't say, since they are only suggestions."""
         try:
-            return controller.served_models(self.connection.models())
+            return controller.served_models(self.connection.models(cached=True))
         except Exception:
             return []
 

@@ -60,10 +60,10 @@ def listing(url, key):
     """The server's models: [{"id", "context_window"}], context_window None where the
     server doesn't say. ConnectError when it can't be asked. NotFound
     passes, for the caller to judge."""
-    client = OpenAI(base_url=url, api_key=key, timeout=LIST_SECONDS,
-                    max_retries=0)
     try:
-        items = client.models.list().data
+        with OpenAI(base_url=url, api_key=key, timeout=LIST_SECONDS,
+                    max_retries=0) as client:
+            items = client.models.list().data
     except openai.NotFoundError:
         raise
     except Exception as e:
@@ -217,7 +217,9 @@ def save_key(name, key, path=None):
 
 def set_key(name, key):
     """Change just the saved credential for a configured server."""
-    if not isinstance(name, str) or not NAME.fullmatch(name) or not servers.find(name):
+    server = (servers.find(name) if isinstance(name, str) and NAME.fullmatch(name)
+              else None)
+    if server is None:
         raise ConnectError("Choose a configured model server.")
     if key is not None:
         if not isinstance(key, str) or not key.strip():
@@ -226,6 +228,7 @@ def set_key(name, key):
         if any(character.isspace() or not character.isprintable() for character in key):
             raise ConnectError("An API key is one line without spaces.")
     save_key(name, key)
+    return server
 
 
 def save_server(name, lines, path=None):

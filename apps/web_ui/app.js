@@ -30,10 +30,11 @@
     calls: new Map(), lastSeq: 0, lastTime: null, draft: null,
     hiddenTimer: null, seenSent: 0, turn: null, archived: false,
     stoppingJobs: new Set(), detailsVersion: 0,
-    settings: [], models: [], commandIndex: 0, launch: {},
+    settings: [], commandIndex: 0, launch: {},
     expandedJobs: new Map(), expandedFamilies: new Map(),
     settingsDraft: new Map(), settingsErrors: new Map(), settingsSaving: false,
     settingsView: "General", modelLookup: null, modelServer: null,
+    modelDirectories: new Map(), modelVersions: new Map(), modelPanelVersion: 0,
     rewindPoints: new Set(), composerDrafts: new Map(), submissions: new Map(),
     jobs: new Map(), settingsDirty: false, features: new Map(), turnStarted: null,
   };
@@ -1453,7 +1454,7 @@
       const choices = setting.kind === "mode"
         ? (state.hello.modes || []).map((mode) => mode.name)
         : setting.kind === "model"
-          ? [...new Set([value, ...state.models].filter(Boolean))]
+          ? modelChoices(value)
           : setting.choices;
       if (setting.unset_means) {
         const unset = el("option", null, setting.unset_means);
@@ -1482,34 +1483,65 @@
     if (setting.kind === "model") {
       input.dataset.modelPicker = "true";
       input.addEventListener("focus", () => refreshModels());
+      input.addEventListener("pointerdown", () => refreshModels());
     }
     return input;
   }
 
-  async function refreshModels() {
-    if (!state.modelLookup) state.modelLookup = look("model/list");
-    try {
-      const reply = await state.modelLookup;
-      const found = reply.servers.flatMap((server) => server.models || []);
-      if (found.length) state.models = [...new Set(found)].sort();
-      for (const select of document.querySelectorAll("[data-model-picker]")) {
-        const current = select.value;
-        const unset = select.querySelector('option[value=""]')?.textContent;
-        select.replaceChildren();
-        if (unset) {
-          const option = el("option", null, unset);
-          option.value = "";
-          select.append(option);
-        }
-        for (const model of new Set([current, ...state.models].filter(Boolean))) {
-          const option = el("option", null, model);
-          option.value = model;
-          select.append(option);
-        }
-        select.value = current;
+  function modelChoices(current) {
+    const models = [...state.modelDirectories.values()].flatMap((row) => row.models);
+    return [...new Set([current, ...models.sort()].filter(Boolean))];
+  }
+
+  function updateModelPickers() {
+    for (const select of document.querySelectorAll("[data-model-picker]")) {
+      const current = select.value;
+      const unset = select.querySelector('option[value=""]');
+      select.replaceChildren(...(unset ? [unset] : []));
+      for (const model of modelChoices(current)) {
+        const option = el("option", null, model);
+        option.value = model;
+        select.append(option);
       }
+      select.value = current;
+    }
+  }
+
+  function nextModelVersion(name) {
+    const version = (state.modelVersions.get(name) || 0) + 1;
+    state.modelVersions.set(name, version);
+    return version;
+  }
+
+  function acceptModelDirectory(name, version, row) {
+    if (state.modelVersions.get(name) !== version) return false;
+    nextModelVersion(name);
+    if (row) state.modelDirectories.set(name, row);
+    else state.modelDirectories.delete(name);
+    updateModelPickers();
+    return true;
+  }
+
+  async function refreshModels() {
+    if (state.modelLookup) return;
+    const versions = new Map(state.modelVersions);
+    const pending = look("model/list", { cached: true });
+    state.modelLookup = pending;
+    try {
+      const reply = await pending;
+      const listed = new Map(reply.servers.map((row) => [row.server, row]));
+      const names = new Set([...state.modelDirectories.keys(), ...listed.keys()]);
+      for (const name of names) {
+        // A key change or explicit directory refresh may have answered first.
+        if (versions.get(name) !== state.modelVersions.get(name)) continue;
+        if (listed.has(name)) state.modelDirectories.set(name, listed.get(name));
+        else state.modelDirectories.delete(name);
+      }
+      updateModelPickers();
     } catch (_) {
-      state.modelLookup = null;
+      // Keep the last directory if the local server couldn't be reached.
+    } finally {
+      if (state.modelLookup === pending) state.modelLookup = null;
     }
   }
 
@@ -2383,30 +2415,52 @@
   function modelKeys(server, editor, refresh, close) {
     const [field, key] = modelInput("API key", "password");
     editor.replaceChildren(modelForm([field], "Save", async () => {
-      const value = key.value;
-      await change("model/server/key/set", { name: server.name, key: value });
+      const name = server.name;
+      const version = nextModelVersion(name);
+      const reply = await change("model/server/key/set", { name, key: key.value });
       key.value = "";
-      await refresh(`Saved key for ${server.title}.`);
+      if (!acceptModelDirectory(name, version, reply.directory)) return;
+      const saved = `Saved key for ${server.title}.`;
+      const directory = reply.directory;
+      const notice = directory?.error
+        ? ` ${directory.error} Choose View models to retry.`
+        : directory && !directory.models.length ? " No models listed." : "";
+      await refresh(saved + notice);
     }, close ?? (() => editor.replaceChildren())));
     key.focus();
   }
 
   function removeModelKey(server, editor, refresh) {
     editor.replaceChildren(modelForm([], "Remove saved key", async () => {
-      await change("model/server/key/set", { name: server.name, key: null });
+      const name = server.name;
+      const version = nextModelVersion(name);
+      const reply = await change("model/server/key/set", { name, key: null });
+      if (!acceptModelDirectory(name, version, reply.directory)) return;
       await refresh(`Removed saved key for ${server.title}.`);
     }, () => editor.replaceChildren(), `Remove the saved key for ${server.title}?`));
   }
 
-  async function showModelNames(server, editor) {
+  async function showModelNames(server, editor, status) {
     const waiting = el("p", "sub", "Requesting the model list…");
+    status.textContent = "";
     editor.replaceChildren(waiting);
+    const name = server.name;
+    const version = nextModelVersion(name);
     try {
-      const reply = await look("model/server/probe", { name: server.name });
+      const reply = await look("model/list", { server: name });
+      const row = reply.servers.find((item) => item.server === name);
+      if (!acceptModelDirectory(name, version, row)) return;
       if (!waiting.isConnected) return;
+      if (row?.error) {
+        editor.replaceChildren(el("p", "error", row.error));
+        return;
+      }
       const list = el("ul", "model-names");
-      for (const model of reply.models) list.append(el("li", null, model.id));
-      editor.replaceChildren(reply.models.length
+      const models = row?.models || [];
+      for (const model of models) {
+        list.append(el("li", null, model.slice(server.model_prefix?.length || 0)));
+      }
+      editor.replaceChildren(models.length
         ? list : el("p", "sub", "No models listed."));
     } catch (error) {
       if (waiting.isConnected) {
@@ -2419,7 +2473,9 @@
     const [field, model] = modelInput("Model name");
     const known = el("datalist");
     known.id = "known-models";
-    for (const name of Object.keys(server.models || {})) {
+    const listed = state.modelDirectories.get(server.name)?.models || [];
+    const ids = listed.map((model) => model.slice(server.model_prefix?.length || 0));
+    for (const name of new Set([...ids, ...Object.keys(server.models || {})])) {
       const option = el("option");
       option.value = name;
       known.append(option);
@@ -2438,25 +2494,6 @@
       status.textContent = `${reply.model} answered the test.`;
       editor.replaceChildren();
     }, () => editor.replaceChildren(), "The provider may charge for the test."));
-    model.focus();
-  }
-
-  function defaultModel(server, editor, refresh) {
-    const [field, model] = modelNameInput(server);
-    editor.replaceChildren(modelForm([field], "Set as default", async () => {
-      const name = model.value.trim();
-      if (!name) throw new Error("Enter the model name.");
-      if (!(server.models?.[name] || server.context_window)) {
-        throw new Error("Connect this model to set its context window.");
-      }
-      const value = (server.model_prefix ?? `${server.name}/`) + name;
-      await change("setting/set", { name: "model", value });
-      const setting = state.settings.find((row) => row.name === "model");
-      if (setting) setting.value = value;
-      state.settingsDraft.delete("model");
-      state.settingsErrors.delete("model");
-      await refresh(`New sessions use ${value}.`);
-    }, () => editor.replaceChildren()));
     model.focus();
   }
 
@@ -2481,7 +2518,6 @@
       const reply = await change("model/server/connect", values);
       key.value = "";
       state.modelServer = values.name;
-      state.modelLookup = null;
       if (reply.default) {
         const setting = state.settings.find((row) => row.name === "model");
         if (setting) setting.value = reply.model;
@@ -2492,17 +2528,17 @@
   }
 
   async function modelServers(body, notice = "") {
+    const version = ++state.modelPanelVersion;
     const reply = await look("model/server/list");
-    if (state.settingsView !== "Models" || !$("settings-dialog").open) return;
+    if (version !== state.modelPanelVersion || state.settingsView !== "Models"
+        || !$("settings-dialog").open) return;
     const refresh = (status) => modelServers(body, status);
     draw(notice);
 
     function draw(message, addKey = false) {
       const status = el("p", "sub model-status", message);
       status.setAttribute("role", "status");
-      const defaultText = reply.default ? `New sessions use ${reply.default}.`
-        : "Choose a default model for new sessions.";
-      body.replaceChildren(el("p", "sub model-default", defaultText), status);
+      body.replaceChildren(status);
 
       const table = el("table", "model-server-list");
       const heading = table.createTHead().insertRow();
@@ -2553,19 +2589,19 @@
           if (saved) actions.append(modelButton("Remove saved key",
             () => removeModelKey(selected, editor, refresh)));
           actions.append(
-            modelButton("View models", () => showModelNames(selected, editor)),
+            modelButton("View models", () => showModelNames(selected, editor, status)),
             modelButton("Test model", () => modelTest(selected, editor, status)),
-            modelButton("Choose default",
-              () => defaultModel(selected, editor, refresh)),
             modelButton("Connect a model", () => connectModel(
               selected, editor, refresh, () => editor.replaceChildren())),
           );
           if (selected.user_added) {
             actions.append(modelButton("Remove server", () => {
               editor.replaceChildren(modelForm([], "Remove server", async () => {
-                await change("model/server/disconnect", { name: selected.name });
+                const name = selected.name;
+                const version = nextModelVersion(name);
+                await change("model/server/disconnect", { name });
+                if (!acceptModelDirectory(name, version)) return;
                 state.modelServer = null;
-                state.modelLookup = null;
                 await refresh(`Removed ${selected.title}.`);
               }, () => editor.replaceChildren(), `Remove ${selected.title}?`));
             }));
@@ -2632,9 +2668,11 @@
       const settings = await look("setting/list").catch(() => ({ settings: [] }));
       state.settings = settings.settings;
       const listed = await look("model/server/list").catch(() => ({ servers: [] }));
-      state.models = listed.servers.flatMap((server) =>
-        Object.keys(server.models || {}).map((model) =>
-          (server.model_prefix ?? `${server.name}/`) + model));
+      for (const server of listed.servers) {
+        const prefix = server.model_prefix ?? `${server.name}/`;
+        const models = Object.keys(server.models || {}).map((model) => prefix + model);
+        state.modelDirectories.set(server.name, { models });
+      }
     } catch (error) {
       $("server-state").textContent = error.message;
       return;

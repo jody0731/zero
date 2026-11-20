@@ -3,11 +3,22 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.8.1
+
+- Saving or replacing a model-server key loads that server's model directory.
+  Both model pickers show the returned IDs, including models absent from the
+  catalog. The key save keeps the current model and the default in place.
+- View models refreshes the same directory. Pickers refresh on demand when
+  the last read is at least a minute old. If the directory fails to load
+  after saving the key, use View models to retry.
+- The Models tab shows the server table. General is where you choose the
+  default model for new sessions.
+
 ## 0.7.8
 
 - Save, replace or remove a model-server key in the browser or terminal
-  Models settings. Key changes make zero provider requests. Viewing models,
-  testing a model and choosing the default are separate actions.
+  Models settings. The masked editor is available before choosing or
+  testing a model.
 - Automatic web search uses the session's search-capable model server first,
   then another configured search key, then free keyless search. You can
   choose a service in Settings. One lookup sends the query and result count

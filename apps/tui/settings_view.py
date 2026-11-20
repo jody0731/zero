@@ -16,7 +16,7 @@ from textual.widgets import Static
 import paths
 import settings
 from apps.tui import config, controller, keybindings
-from apps.tui.connect_view import ServersView
+from apps.tui.connect_view import ServersView, with_model_window
 from apps.tui.dialogs import KeyCaptureView, ChoiceView, PromptView
 from apps.tui.widgets import ERRORS, Plain
 from client import session_list
@@ -436,10 +436,16 @@ class SettingsView(Scrolled, Screen):
             if value == other:
                 self.app.push_screen(
                     PromptView(f"{setting.label}: its name", now or ""),
-                    lambda text: text and text.strip() and done(text.strip()),
+                    lambda text: text and text.strip() and choose(text.strip()),
                 )
             elif value is not None:
-                done(None if unset and value == none else value)
+                if unset and value == none:
+                    done(None)
+                else:
+                    choose(value)
+
+        def choose(model):
+            with_model_window(self.zero, model, lambda: done(model))
 
         # The servers' models are asked on the requests thread
         self.zero.request(self.zero.served_models, then=offer)

@@ -103,6 +103,12 @@
       "$ref": "#/$defs/model.list"
     },
     {
+      "$ref": "#/$defs/model.window"
+    },
+    {
+      "$ref": "#/$defs/model.window.set"
+    },
+    {
       "$ref": "#/$defs/model.features"
     },
     {
@@ -3104,7 +3110,150 @@
             "type": "object",
             "additionalProperties": true
           },
-          "description": "server, title, models, and error where it listed none"
+          "description": "server, title, models, any resolved model_limits by model name, and an error if the read failed"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.window": {
+      "type": "object",
+      "description": "The selected model's effective context window, null if it is unknown. A connection can name its server and proposed API URL.",
+      "properties": {
+        "message": {
+          "const": "model/window"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "model": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "model"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "model.window.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "url": {
+          "type": "string"
+        },
+        "context_window": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_input_tokens": {
+          "type": "integer"
+        },
+        "max_output_tokens": {
+          "type": "integer"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.window.set": {
+      "type": "object",
+      "description": "Remember a context window for one model on its current endpoint.",
+      "properties": {
+        "message": {
+          "const": "model/window/set"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "model": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "context_window": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "model",
+        "url",
+        "context_window"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "model.window.set.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
         },
         "unknown_fields": {
           "type": "array",
@@ -3338,7 +3487,7 @@
             "type": "object",
             "additionalProperties": true
           },
-          "description": "id, context_window, optional context_reported_on_load"
+          "description": "id, context_window, any maximum input and output, and whether it reports its window on load"
         },
         "unknown_fields": {
           "type": "array",

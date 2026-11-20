@@ -309,6 +309,16 @@ def model_features_file():
     return home() / "state" / "model_features.json"
 
 
+def model_catalog_file():
+    """The last public token catalog lookup, reused offline."""
+    return home() / "state" / "model_catalog.json"
+
+
+def model_windows_file():
+    """The last token limits an endpoint reported for its models."""
+    return home() / "state" / "model_windows.json"
+
+
 def config_file():
     return home() / "config.toml"
 

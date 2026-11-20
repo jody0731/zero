@@ -62,6 +62,7 @@ class Step:
         self.number = number
         self.started = time.monotonic()
         self.reply = None
+        self.max_output_tokens = None
         self.retries = 0
         self.calls = []
         self.cut_off = self.malformed = self.empty = False

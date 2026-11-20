@@ -313,6 +313,17 @@ class Connection:
         reply = self.call(build("model/server/probe", **fields))
         return reply["url"], reply["models"]
 
+    def model_window(self, model, *, name=None, url=None):
+        """Resolve the model's window on its configured or proposed endpoint."""
+        fields = {key: value for key, value in (("name", name), ("url", url))
+                  if value is not None}
+        return self.call(build("model/window", model=model, **fields))
+
+    def set_model_window(self, model, url, context_window):
+        """Remember a context window at the URL that was selected."""
+        return self.call(build("model/window/set", model=model, url=url,
+                               context_window=context_window))
+
     def connect(self, name, model, url=None, key=None, context_window=None,
                 title=None, default=None):
         """A server's model tested, then saved (and the default if none is

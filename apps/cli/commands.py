@@ -62,6 +62,8 @@ NO_COMMAND = {
     "session/deliveries": "a browser checks its outstanding submissions on reconnect",
     "session/submit": "session send uses this when addressing an existing session",
     "workspace/list": "folders for a screen's workspace picker",
+    "model/window": "the model picker checks the selected endpoint's window",
+    "model/window/set": "a model picker saves the window the user enters",
     "model/server/key/set": "masked credential settings shared by the apps",
     "model/server/test": "a separate model test confirmed in the settings apps",
     "session/mark_seen": "a person's read mark, which the full screen sends for what "

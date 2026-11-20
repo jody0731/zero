@@ -510,7 +510,10 @@ class Session:
             if stop is not None:
                 return stop
             try:
-                step.reply = self.call_model(step)
+                reply = self.call_model(step)
+                if isinstance(reply, Stop):
+                    return reply
+                step.reply = reply
             except InvalidHistory as error:
                 return Stop("failed", str(error))
             except MODEL_ERRORS as e:
@@ -603,9 +606,15 @@ class Session:
         if boundary is not None:
             messages = boundary.redact(messages)
             schemas = boundary.redact(schemas)
+        stop = self.hooks.decide("before_model_request", step, messages, schemas)
+        if stop is not None:
+            return stop
+        output = {}
+        if step.max_output_tokens is not None:
+            output["max_output_tokens"] = step.max_output_tokens
         return self.model.call(
             messages, schemas, check=check, on_delta=on_delta,
-            reply_schema=public_reply.SCHEMA,
+            reply_schema=public_reply.SCHEMA, **output,
         )
 
     def run_call(self, call, approved=None):

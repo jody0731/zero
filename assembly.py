@@ -396,7 +396,8 @@ def make_session(
     runs_as = raised(mode) if unattended else mode
     if not isinstance(limits, LiveSettings):
         limits = LiveSettings(fixed=limits)
-    server, _ = resolve(model)
+    resolved = resolve(model, check_endpoint=client is None)
+    server, _ = resolved
     if log is None and folder is None:
         raise ValueError("a session needs its log, or a folder to start one in")
     session_log = log if log is not None else fresh_log(folder, model)
@@ -477,10 +478,13 @@ def make_session(
         # Its view of a long session takes half its model's window at most:
         # the rest is its prompt's, the proposed call's and its answer's
         def make_judge(name, client, fallback=None):
-            judge_server, _ = resolve(name)
+            judge_server, _ = resolve(name, check_endpoint=client is None)
+            input_tokens = min(judge_server.context_window,
+                               judge_server.max_input_tokens
+                               or judge_server.context_window)
             return Judge(
                 name, client, limits=limits, effort=judge_thinking_effort,
-                view_bytes=judge_server.context_window // 2 * room.BYTES_PER_TOKEN,
+                view_bytes=input_tokens // 2 * room.BYTES_PER_TOKEN,
                 fallback=fallback,
                 keywords=lambda: definitions(
                     instruction_text(instructions.user)
@@ -543,7 +547,8 @@ def make_session(
         # The model's silence as the limits stand at each call
         return limits["model_silence_seconds"]
 
-    llm = Model(model, client, timeout=silence, effort=thinking_effort)
+    llm = Model(model, client, timeout=silence, effort=thinking_effort,
+                resolved=resolved)
     # Fallback models made at a failure, by name
     spares = {}
 

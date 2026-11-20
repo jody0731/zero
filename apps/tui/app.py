@@ -35,7 +35,9 @@ from textual.widgets import Static, TextArea
 import paths
 import settings
 from apps.tui import clipboard, config, controller, keybindings
-from apps.tui.connect_view import ServersView, connected_servers, pick_default
+from apps.tui.connect_view import (
+    ServersView, connected_servers, pick_default, with_model_window,
+)
 from apps.tui.controller import SessionInput
 from apps.tui.dialogs import KeyCaptureView, ChoiceView, PromptView, TextView
 from apps.tui.requests import Requests
@@ -683,7 +685,7 @@ class ZeroApp(SafeClicks, App):
                     )
             elif name == "/model":
                 if rest:
-                    self.switch(model=rest)
+                    with_model_window(self, rest, lambda: self.switch(model=rest))
                 else:
                     # The model and its thinking, as in /settings
                     self.push_screen(SettingsView(self, place="model"))

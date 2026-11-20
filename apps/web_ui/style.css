@@ -394,6 +394,7 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 .model-server-form { display: grid; gap: 10px; max-width: 480px; }
 .model-server-form p { margin: 0; }
 .model-server-form label { display: grid; gap: 4px; }
+.model-server-form label[hidden] { display: none; }
 .model-server-form input {
   width: 100%; min-width: 0; padding: 7px 8px;
   border: 1px solid var(--line); background: var(--panel);

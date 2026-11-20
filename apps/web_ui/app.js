@@ -36,7 +36,8 @@
     settingsView: "General", modelLookup: null, modelServer: null,
     modelDirectories: new Map(), modelVersions: new Map(), modelPanelVersion: 0,
     rewindPoints: new Set(), composerDrafts: new Map(), submissions: new Map(),
-    jobs: new Map(), settingsDirty: false, features: new Map(), turnStarted: null,
+    jobs: new Map(), settingsDirty: false, settingsStatus: "",
+    features: new Map(), turnStarted: null,
   };
 
   try {
@@ -380,6 +381,7 @@
       : "#view=new");
     state.turn = null;
     state.settingsDirty = false;
+    state.settingsStatus = "";
     state.turnStarted = null;
     state.records = [];
     state.calls = new Map();
@@ -1541,6 +1543,29 @@
     return [...new Set([current, ...models.sort()].filter(Boolean))];
   }
 
+  async function ensureModelWindow(model) {
+    if (!model) return;
+    const found = await look("model/window", { model });
+    if (found.context_window !== null) return;
+    await new Promise((resolve, reject) => {
+      const dialog = actionDialog("Context window");
+      const [field, input] = modelInput("Context window in tokens", "number");
+      input.min = "1";
+      dialog.append(el("p", null, "Enter the window configured for " + model + "."));
+      dialog.append(modelForm([field], "Save", async () => {
+        await change("model/window/set", {
+          model, url: found.url, context_window: Number(input.value),
+        });
+        resolve();
+        dialog.close();
+      }, () => dialog.close()));
+      dialog.addEventListener("close", () => {
+        reject(new Error("The model needs its context window before it can be used."));
+      });
+      input.focus();
+    });
+  }
+
   function updateModelPickers() {
     for (const select of document.querySelectorAll("[data-model-picker]")) {
       const current = select.value;
@@ -1717,18 +1742,26 @@
     const form = el("div", "session-settings");
     const runs = state.runsWith || {};
     const inputs = {};
-    const status = el("div", "sub save-status");
+    const status = el("div", "sub save-status", state.settingsStatus);
     status.setAttribute("aria-live", "polite");
-    const apply = async (name, value, control) => {
-      if (row === state.newSession) {
-        row[name] = value;
-        return;
+    const sayStatus = (message) => {
+      if (row.id === state.open || row === state.newSession) {
+        state.settingsStatus = message;
       }
+      status.textContent = message;
+    };
+    const apply = async (name, value, control) => {
       const previous = name === "thinking_effort" ? runs[name] : row[name];
       control.disabled = true;
       state.settingsDirty = true;
-      status.textContent = "Updating…";
+      sayStatus("Updating…");
       try {
+        if (name === "model") await ensureModelWindow(value);
+        if (row === state.newSession) {
+          row[name] = value;
+          sayStatus("Updated");
+          return;
+        }
         const reply = await change("session/set", {
           session: row.id, [name]: value,
         });
@@ -1737,10 +1770,10 @@
           Object.assign(rowOf(row.id) || row, reply.set);
         }
         Object.assign(runs, reply.set);
-        status.textContent = reply.next_turn ? "Applies next turn" : "Updated";
+        sayStatus(reply.next_turn ? "Applies next turn" : "Updated");
       } catch (error) {
         if (control.tagName === "SELECT") control.value = previous || "";
-        status.textContent = error.message;
+        sayStatus(error.message);
         throw error;
       } finally {
         state.settingsDirty = false;
@@ -2171,6 +2204,7 @@
         case "/jobs": showPanel("details"); break;
         case "/mode": case "/model": case "/cd":
           if (!value) { showPanel("details"); break; }
+          if (name === "/model") await ensureModelWindow(value);
           if (state.newSession) {
             state.newSession[name === "/cd" ? "workspace" : name.slice(1)] = value;
             $("details").draftRow = null;
@@ -2393,6 +2427,7 @@
             }
             value = Number(raw);
           }
+          if (setting.kind === "model") await ensureModelWindow(value);
           await change("setting/set", { name, value });
           setting.value = value;
           state.settingsDraft.delete(name);
@@ -2555,6 +2590,7 @@
     const [modelField, model] = modelNameInput(server);
     const [contextField, tokens] = modelInput("Context window in tokens",
       "number", false);
+    contextField.hidden = true;
     tokens.min = "1";
     const [keyField, key] = modelInput("API key", "password", false);
     const fields = [modelField, contextField];
@@ -2566,6 +2602,32 @@
       };
       if (!server.name) values.url = url.value.trim();
       if (key.value) values.key = key.value;
+      if (contextField.hidden) {
+        let loadsWindow = false;
+        try {
+          const fields = values.url ? { url: values.url } : { name: values.name };
+          if (values.key) fields.key = values.key;
+          const directory = await look("model/server/probe", fields);
+          if (values.url) values.url = directory.url;
+          const id = values.model.startsWith(values.name + "/")
+            ? values.model.slice(values.name.length + 1) : values.model;
+          loadsWindow = directory.models.some(
+            (entry) => entry.id === id && entry.context_reported_on_load,
+          );
+        } catch (_) {
+          // A directory is optional for a test connection.
+        }
+        if (values.url) url.value = values.url;
+        const address = { name: values.name, model: values.model };
+        if (values.url) address.url = values.url;
+        const found = await look("model/window", address);
+        if (found.context_window === null && !loadsWindow) {
+          contextField.hidden = false;
+          tokens.required = true;
+          tokens.focus();
+          return;
+        }
+      }
       if (tokens.value) values.context_window = Number(tokens.value);
       const reply = await change("model/server/connect", values);
       key.value = "";
@@ -2576,6 +2638,13 @@
       }
       await refresh(`Connected ${reply.model}.`);
     }, close, "Connecting makes a short test the provider may charge for."));
+    for (const field of [name, url, model]) {
+      field.addEventListener("input", () => {
+        contextField.hidden = true;
+        tokens.required = false;
+        tokens.value = "";
+      });
+    }
     (server.name ? model : name).focus();
   }
 

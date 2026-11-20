@@ -793,8 +793,22 @@ MESSAGES = {
         "session takes, or why it lists none. Pass server for one directory, "
         "or cached to reuse directories already read for this connection.",
         {"server": STRING, "cached": BOOLEAN},
-        reply={"servers": open_rows("server, title, models, and error where "
-                                    "it listed none")},
+        reply={"servers": open_rows("server, title, models, any resolved model_limits "
+                                    "by model name, and an error if the read failed")},
+    ),
+    "model/window": message(
+        "The selected model's effective context window, null if it is unknown. "
+        "A connection can name its server and proposed API URL.",
+        {"model": STRING, "name": STRING, "url": STRING},
+        required=("model",),
+        reply={"url": STRING, "context_window": maybe(INTEGER),
+               "max_input_tokens": INTEGER, "max_output_tokens": INTEGER},
+    ),
+    "model/window/set": message(
+        "Remember a context window for one model on its current endpoint.",
+        {"model": STRING, "url": STRING, "context_window": {**INTEGER, "minimum": 1}},
+        required=("model", "url", "context_window"),
+        changes=True,
     ),
     "model/features": message(
         "What a model honours of its API's features (thinking_off, "
@@ -825,7 +839,8 @@ MESSAGES = {
         "or none; a name alone, its own url and stored key.",
         {"name": STRING, "url": STRING, "key": STRING},
         reply={"url": STRING, "models": open_rows(
-            "id, context_window, optional context_reported_on_load",
+            "id, context_window, any maximum input and output, and whether it "
+            "reports its window on load",
         )},
     ),
     "model/server/connect": message(

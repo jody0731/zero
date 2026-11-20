@@ -93,7 +93,9 @@ def pick_default(zero):
             zero.note(f"ZERO: new sessions use {model}; /settings changes it.")
             zero.focus_input()
 
-        zero.set_setting("model", model, then=taken)
+        with_model_window(
+            zero, model, lambda: zero.set_setting("model", model, then=taken),
+        )
 
     def run():
         named = listed()
@@ -109,7 +111,38 @@ def pick_default(zero):
 def parse_context_window(text):
     """A context window typed as 32768, 32,768 or 32_768; None if it isn't one."""
     digits = re.sub(r"[,_ ]", "", text or "")
-    return int(digits) if digits.isdigit() and int(digits) > 0 else None
+    if not digits.isascii() or not digits.isdecimal() or len(digits) > 16:
+        return None
+    tokens = int(digits)
+    return tokens if 0 < tokens < 2**53 else None
+
+
+def with_model_window(zero, model, done):
+    """Continue a model selection when its endpoint's window is known."""
+    def resolved(window):
+        if window["context_window"] is not None:
+            done()
+            return
+
+        def remember(text):
+            if text is None:
+                return
+            tokens = parse_context_window(text)
+            if tokens is None:
+                zero.notify("Enter a context window in whole tokens.",
+                            severity="warning")
+                resolved(window)
+                return
+            zero.request(
+                lambda: zero.connection.set_model_window(model, window["url"], tokens),
+                then=lambda _: done(),
+            )
+
+        zero.push_screen(
+            PromptView(f"{model}'s configured context window in tokens"), remember,
+        )
+
+    zero.request(lambda: zero.connection.model_window(model), then=resolved)
 
 
 class Connecting:
@@ -251,17 +284,18 @@ class Connecting:
         self.name = text.strip().lower()
         self.ask_context_window()
 
-    def known_context_window(self):
-        if self.listed.get(self.model):
-            return self.listed[self.model]
-        if self.row:
-            return (self.row["models"].get(self.model)
-                    or self.row["context_window"])
-        return None
-
     def ask_context_window(self):
-        if self.known_context_window() or self.model in self.context_reported_on_load:
-            # The server takes it from the server's list or its table
+        self.run_in_background(
+            lambda: self.connection.model_window(self.model, name=self.name,
+                                                 url=self.url),
+            self.window_resolved,
+        )
+
+    def window_resolved(self, resolved, error):
+        if error is not None:
+            self.view.notify(str(error), severity="warning")
+            return
+        if resolved["context_window"] or self.model in self.context_reported_on_load:
             self.connect(None)
             return
         self.app.push_screen(
@@ -276,7 +310,7 @@ class Connecting:
         if context_window is None:
             self.view.notify("A context window is a number of tokens, as 32768.",
                              severity="warning")
-            self.ask_context_window()
+            self.window_resolved({"context_window": None}, None)
             return
         self.connect(context_window)
 

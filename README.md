@@ -142,9 +142,16 @@ models** to refresh that server now or retry a failed directory read.
 If the key was saved and the directory failed, **Details** shows the error
 from that read.
 
-Choose the default in **General**. If ZERO needs a model's context window,
-use **Manage → Connect a model**. A provider may charge for an explicit
-connection test or **Test model** action.
+Choose the default in **General**. When you select a model, ZERO uses its
+endpoint's reported limits or the published limits for that model and
+provider. Published limits are available offline from the bundled catalog.
+If the selected model has no known window, enter the number of tokens
+configured on its endpoint. ZERO remembers the answer for that model and
+API URL. A provider may charge for **Test model** or **Test and connect**.
+
+Use **Compact at (tokens)** for an earlier compaction point. If an older
+conversation exceeds what the selected model can read to compact it, switch
+to a model with more room and compact the conversation there.
 
 When a model request fails, both apps show the model server and any retry
 or fallback in progress. Open **Details** to see the operation, the
@@ -174,10 +181,16 @@ api_key = "..."
 # ~/.zero/models.toml: a server of your own, under a name of your choosing
 [myserver]
 url = "http://localhost:8080/v1"
-context_window = 65536
+
+[myserver.context_windows]
+"http://localhost:8080/v1" = { "my-model" = 65536 }
 ```
 
-Its models are then `myserver/<model>`. A server that speaks the Responses API takes `api = "responses"`. The catalog ZERO ships, with every field explained, is [model/catalog.toml](model/catalog.toml); a line in models.toml under the same name changes any of it. `zero model features myserver/<model>` says what the model honours of its API (`--test` measures again).
+Its models are then `myserver/<model>`. A server that speaks the Responses API
+takes `api = "responses"`. Set a model's window when the endpoint omits it or
+when you want a lower cap for that model. Existing server-wide
+`context_window` entries still read. `zero model features myserver/<model>`
+shows what the model honours of its API. `--test` measures again.
 
 </details>
 

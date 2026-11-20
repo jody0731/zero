@@ -158,11 +158,11 @@ class NothingToCompact(CompactionFailed):
     """Nothing older than the newest step: a compaction can't make room."""
 
 
-def leaves_room_for_steps(records, at, after, limits):
+def leaves_room_for_steps(records, at, after, limits, **model_limits):
     """Whether a context of `after` tokens leaves room below the line `at`,
     past the headroom, for CLEARED_ENOUGH_STEPS steps at the pace `records`
     show (room.tokens_a_step); with no pace counted yet, any room."""
-    left = at - room.headroom(at, INSTRUCTION_TOKENS, limits) - after
+    left = room.input_room(at, INSTRUCTION_TOKENS, limits, **model_limits) - after
     return left >= CLEARED_ENOUGH_STEPS * (room.tokens_a_step(records) or 0)
 
 
@@ -176,6 +176,9 @@ def cut_points(body):
     pending = set()
     for i, record in enumerate(body):
         kind = record["type"]
+        if kind == "note" and room.changes_model(record):
+            # Routing notes belong to the step the incoming model will finish.
+            continue
         if not pending and kind in ("user", "note"):
             points.append(i)
         elif kind == "assistant":
@@ -269,6 +272,15 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     start = kept_from(body, 0 if asked_for else int(at * TAIL_SHARE), tokens)
     if start is None:
         raise NothingToCompact("nothing older than the newest step to hand off")
+    schemas = session.tool_schemas()
+    if room.has_input_bound(session.model):
+        newest = body[cut_points(body)[-1]:]
+        messages = [session.messages[0], *(
+            m for record in newest if (m := history.message(record)) is not None
+        )]
+        size = room.measure((), messages, schemas, tokens)
+        room.bound_output(session.model, size.tokens, operation="The newest step")
+    caps = room.model_limits(session.model)
     instructions = {whose: words.strip() for whose, words in
                     (instructions or {}).items() if (words or "").strip()}
     fields = {"reason": reason, "tokens_before": before.tokens, "line": at}
@@ -279,7 +291,7 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     kept = previous["kept_from"] if previous else body[0]["seq"]
     view = [m for r in body if (m := history.message(r)) is not None]
     after = tokens(session.messages[0]["content"])
-    after += tokens(json.dumps(session.tool_schemas(), ensure_ascii=False))
+    after += tokens(json.dumps(schemas, ensure_ascii=False))
     if previous and previous.get("summary"):
         after += tokens(previous["summary"])
     for record, found in zip([r for r in body if history.message(r)], view):
@@ -292,7 +304,7 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     # is off from the server's count, which the handoff trusts
     cleared_some = len(lines) > len(cleared)
     if (reason == "line" and cleared_some
-            and leaves_room_for_steps(records, at, after, limits)):
+            and leaves_room_for_steps(records, at, after, limits, **caps)):
         summary = previous.get("summary") if previous else None
         if summary:
             # The handoff stays, with the time it was written
@@ -312,8 +324,23 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
         reason, saved=SAVED.format(lines=saved) if saved else "",
         asked=asked(instructions), keeps_answer=is_answer(body[start]))
     messages = session.messages[:upto] + [{"role": "user", "content": ask}]
+    cap = room.handoff_room(at, limits, caps["output_limit"])
+    try:
+        cap = handoff_output(session, messages, schemas, tokens, cap)
+    except room.ModelLimitExceeded:
+        if not saved:
+            raise
+        # The original tool results remain in the log and the saved files.
+        messages = session.messages[:offset]
+        for record in body[:start]:
+            message = history.message(record)
+            if message is not None:
+                line = lines.get(str(record["seq"]))
+                messages.append({**message, "content": line} if line else message)
+        messages.append({"role": "user", "content": ask})
+        cap = handoff_output(session, messages, schemas, tokens, cap)
     t0 = time.monotonic()
-    reply = handoff_call(session, messages, room.handoff_room(at, limits), check)
+    reply = handoff_call(session, messages, cap, check)
     summary = (reply.content or "").strip()
     if not summary:
         raise CompactionFailed("the handoff call came back empty")
@@ -333,7 +360,7 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
         if found is not None:
             tail.append(found)
     after = tokens(session.messages[0]["content"]) + tokens(summary)
-    after += tokens(json.dumps(session.tool_schemas(), ensure_ascii=False))
+    after += tokens(json.dumps(schemas, ensure_ascii=False))
     after += sum(room.message_tokens(m, tokens) for m in tail)
     return session.compacted(
         **fields, summary=summary, kept_from=first, cleared=still,
@@ -365,11 +392,12 @@ def fresh(session, handoff, at, tokens=room.tokens, check=None, *, limits,
     fields = {"reason": reason, "tokens_before": before.tokens, "line": at,
               "fresh": True, "occasion": occasion}
     if not (handoff or "").strip():
-        ask = ROUND
+        messages = session.messages + [{"role": "user", "content": ROUND}]
+        caps = room.model_limits(session.model)
+        cap = room.handoff_room(at, limits, caps["output_limit"])
+        cap = handoff_output(session, messages, session.tool_schemas(), tokens, cap)
         t0 = time.monotonic()
-        reply = handoff_call(session, session.messages + [
-            {"role": "user", "content": ask}], room.handoff_room(at, limits),
-            check)
+        reply = handoff_call(session, messages, cap, check)
         handoff = (reply.content or "").strip()
         if not handoff:
             raise CompactionFailed("the round's handoff call came back empty")
@@ -387,6 +415,15 @@ def fresh(session, handoff, at, tokens=room.tokens, check=None, *, limits,
         **fields, summary=handoff.strip(), kept_from=records[-1]["seq"] + 1,
         cleared={}, tokens_after=after,
     )
+
+
+def handoff_output(session, messages, schemas, tokens, cap):
+    """The cap on the handoff's reply after checking its complete input."""
+    if not room.has_input_bound(session.model):
+        return cap
+    size = room.measure((), messages, schemas, tokens)
+    return room.bound_output(session.model, size.tokens, cap,
+                             operation="The compaction handoff")
 
 
 def handoff_call(session, messages, cap, check=None):

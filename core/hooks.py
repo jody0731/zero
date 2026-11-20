@@ -29,7 +29,8 @@ WATCH = {"turn_start", "after_model", "after_tool", "turn_end", "compaction_aske
 # rewound: what the note of a rewind adds of the part it leaves behind (the
 # files written there, the jobs started there that still run)
 COLLECT = {"system_prompt", "switched", "resumed", "interrupted", "rewound"}
-DECIDE = {"before_model", "model_error", "before_tool", "approve", "step_end"}
+DECIDE = {"before_model", "before_model_request", "model_error", "before_tool",
+          "approve", "step_end"}
 # tool_result: a call's result before it is logged; notice: a notice's text
 # (a job's end) before it is logged (the context component saves one past
 # its share to a file)
@@ -177,7 +178,7 @@ def fail_closed(name, crash):
     """What a crashed decider counts as: the safe answer for that hook."""
     if name in ("before_tool", "approve"):
         return Deny(f"Not run: a bug in the harness ({crash}).")
-    if name in ("before_model", "step_end"):
+    if name in ("before_model", "before_model_request", "step_end"):
         return Stop("hook_error", crash)
     # model_error: no Retry, so the turn gives up
     return None

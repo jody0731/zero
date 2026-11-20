@@ -36,6 +36,12 @@ PACE_STEPS = 20
 LEAST_STEP_BYTES = 1_000
 
 
+def changes_model(record):
+    return ((record["type"] == "system" and record.get("why") == "model")
+            or (record["type"] == "note"
+                and record.get("kind") in ("fallback", "main_again")))
+
+
 def tokens(text, bytes_a_token=BYTES_PER_TOKEN):
     """`text`'s tokens with no count from the server: its bytes over
     `bytes_a_token`, rounded up; at one a byte, never fewer than the
@@ -70,7 +76,7 @@ def measure(records, messages, schemas, tokens=tokens):
     for index, record in enumerate(records):
         if record["type"] == "system" and record.get("why") == "code":
             rewritten = last is not None
-        elif record["type"] in history.SYSTEM_RECORDS:
+        elif record["type"] in history.SYSTEM_RECORDS or changes_model(record):
             last = None
         elif record["type"] == "assistant" and record.get("prompt_tokens"):
             last, rewritten = index, False
@@ -97,7 +103,7 @@ def fixed_tokens(records, messages, schemas, tokens=tokens):
     found = tokens(messages[0]["content"]) + tokens(
         json.dumps(schemas, ensure_ascii=False))
     for record in records:
-        if record["type"] == "system" and record.get("why") == "model":
+        if changes_model(record):
             # Another model's tokenizer: its own calls from here on
             found = tokens(messages[0]["content"]) + tokens(
                 json.dumps(schemas, ensure_ascii=False))
@@ -114,7 +120,7 @@ def tokens_a_step(records):
     two calls have counted."""
     grown, last = [], None
     for record in records:
-        if record["type"] in history.SYSTEM_RECORDS:
+        if record["type"] in history.SYSTEM_RECORDS or changes_model(record):
             last = None
         elif record["type"] == "assistant" and record.get("prompt_tokens"):
             if last is not None and record["prompt_tokens"] >= last:
@@ -140,7 +146,7 @@ def bytes_a_token(records):
     found, later, between = [], None, 0
     for record in reversed(records):
         kind = record["type"]
-        if kind == "session" or (kind == "system" and record.get("why") == "model"):
+        if kind == "session" or changes_model(record):
             break
         if kind in history.SYSTEM_RECORDS:
             later, between = None, 0
@@ -165,29 +171,37 @@ def line(limits, window):
     return min(chosen, window)
 
 
-def reply_room(at, limits):
+def reply_room(at, limits, max_output_tokens=None):
     """The next reply's room under the line `at`: reply_room_tokens, at most
     an eighth of the line, so a small window keeps room for the talk."""
-    return min(limits["reply_room_tokens"], at // 8)
+    return min(limits["reply_room_tokens"], at // 8,
+               max_output_tokens if max_output_tokens is not None else at)
 
 
-def handoff_room(at, limits):
+def handoff_room(at, limits, max_output_tokens=None):
     """A compaction handoff's room under the line `at`, its ceiling too:
     handoff_room_tokens, at most an eighth of the line."""
-    return min(limits["handoff_room_tokens"], at // 8)
+    return min(limits["handoff_room_tokens"], at // 8,
+               max_output_tokens if max_output_tokens is not None else at)
 
 
-def headroom(at, instructions, limits):
+def headroom(at, instructions, limits, max_output_tokens=None):
     """What must fit beside the context under the line `at`: the next reply,
     a compaction's `instructions` and its handoff. No margin: what the
     server didn't count is counted high."""
-    return reply_room(at, limits) + handoff_room(at, limits) + instructions
+    return (reply_room(at, limits, max_output_tokens)
+            + handoff_room(at, limits, max_output_tokens) + instructions)
 
 
-def room_left(at, size, instructions, limits):
+def input_room(at, instructions, limits, *, input_limit=None, output_limit=None):
+    chosen = at - headroom(at, instructions, limits, output_limit)
+    return min(chosen, input_limit - instructions) if input_limit else chosen
+
+
+def room_left(at, size, instructions, limits, **model_limits):
     """The tokens left before the context must be compacted; below zero, it
     must be now."""
-    return at - headroom(at, instructions, limits) - size.tokens
+    return input_room(at, instructions, limits, **model_limits) - size.tokens
 
 
 def share(room, limits):
@@ -196,9 +210,50 @@ def share(room, limits):
     return max(room, 0) * limits["result_share_percent"] // 100
 
 
-def fresh_room(at, fixed, instructions, limits):
+def fresh_room(at, fixed, instructions, limits, **model_limits):
     """The most one result can be: what a fresh context has, after its
     system message and tools (`fixed` tokens) and a handoff, below the line
     and the headroom."""
-    return (at - headroom(at, instructions, limits) - fixed
-            - handoff_room(at, limits))
+    return (input_room(at, instructions, limits, **model_limits) - fixed
+            - handoff_room(at, limits, model_limits.get("output_limit")))
+
+
+def model_limits(model):
+    """Caps to reserve space under, taken from the model used for this call."""
+    server = getattr(model, "server", None)
+    return {"input_limit": getattr(server, "max_input_tokens", None),
+            "output_limit": getattr(server, "max_output_tokens", None)}
+
+
+class ModelLimitExceeded(Exception):
+    """An inference request could not fit the model's verified limits."""
+
+
+def has_input_bound(model):
+    server = getattr(model, "server", None)
+    return (getattr(server, "request_context_window", None) is not None
+            or getattr(server, "max_input_tokens", None) is not None)
+
+
+def bound_output(model, input_tokens, output_tokens=None, *, operation):
+    """Output room left for this request under the endpoint's verified limits."""
+    server = getattr(model, "server", None)
+    total = getattr(server, "request_context_window", None)
+    maximum_input = getattr(server, "max_input_tokens", None)
+    maximum_output = getattr(server, "max_output_tokens", None)
+    minimum = getattr(getattr(model, "api", None), "MIN_OUTPUT_TOKENS", 1)
+    caps = (output_tokens, maximum_output, total - input_tokens if total else None)
+    cap = min((cap for cap in caps if cap is not None), default=None)
+    blocking = None
+    if maximum_input and input_tokens > maximum_input:
+        blocking = f"{maximum_input:,}-token input limit"
+    elif total and input_tokens + minimum > total:
+        blocking = f"{total:,}-token total context window"
+    elif cap is not None and cap < minimum:
+        blocking = f"{cap:,}-token output limit"
+    if blocking:
+        raise ModelLimitExceeded(
+            f"{operation} exceeds {model.name}'s {blocking}. "
+            "Switch to a model with more room and compact the session there."
+        )
+    return cap

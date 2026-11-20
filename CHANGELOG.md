@@ -3,6 +3,16 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.8.3
+
+- Model selection fills in known context windows in the browser and terminal.
+  An unknown window is saved for the selected model and API URL.
+- ZERO uses the endpoint's reported capacity and published model limits on new,
+  resumed and switched sessions, including fallback models.
+- Compaction checks input, output and total limits separately. If a handoff
+  or the newest step exceeds the active model's capacity, the session keeps
+  its history and explains which limit blocked it.
+
 ## 0.7.8.2
 
 - Model request failures identify the model server in the browser and terminal.

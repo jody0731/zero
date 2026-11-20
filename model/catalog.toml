@@ -4,15 +4,12 @@
 # key_env (the variable its key may come from; a key is then needed),
 # api (the API its server speaks, model/apis/: "responses", or
 # "chat_completions" when left out),
-# context_window (its models' context window), price (USD per 1M tokens at
-# peak: cache hit, cache miss, output), refuses_overlong_requests (true where
-# the server refuses a request longer than its context, as an error ZERO
-# knows, rather than cutting it; left out, not known). Under [x.models], a model's own
-# context_window and price. A model with no price here takes the one a
-# release filled in from models.dev's list (prices.toml), so a price is
-# written here only where that list's differs from the server's own. The
-# facts are from the servers' docs and models.dev; DeepSeek's and Ollama's
-# are tried.
+# price (USD per 1M tokens at peak: cache hit, miss, output),
+# refuses_overlong_requests (whether the server rejects overlong requests).
+# [server.models] contains individual model settings and exact limits from
+# provider documentation. The generated limits.toml and prices.toml carry
+# the remaining published limits and prices.
+# models_dev_provider is the provider ID used for that public catalog.
 #
 # search_api names the separate lookup contract, with search_model where that
 # API runs an isolated model request. The user can choose a search service
@@ -21,12 +18,12 @@
 # max_reasoning_effort overrides the wire value that the UI calls "max".
 
 [deepseek]
+models_dev_provider = "deepseek"
 title = "DeepSeek"
 url = "https://api.deepseek.com"
 key_env = "DEEPSEEK_API_KEY"
 api = "responses"
 search_api = "deepseek_search"
-context_window = 1_000_000
 # Tried: 1.78M tokens came back 400, "maximum context length is 1048576"
 refuses_overlong_requests = true
 
@@ -39,10 +36,9 @@ refuses_overlong_requests = true
 title = "Ollama (on this computer)"
 url = "http://localhost:11434/v1"
 bare_model_names = true
-# No window: it is the server's own setting (OLLAMA_CONTEXT_LENGTH), so the
-# user's to give in models.toml
 
 [openai]
+models_dev_provider = "openai"
 title = "OpenAI"
 url = "https://api.openai.com/v1"
 key_env = "OPENAI_API_KEY"
@@ -52,49 +48,41 @@ search_model = "gpt-5.4-mini"
 refuses_overlong_requests = true
 
 [openai.models]
-"gpt-5.6" = { context_window = 1_050_000 }
-"gpt-5.6-luna" = { context_window = 1_050_000 }
-"gpt-5.4-mini" = { context_window = 400_000, max_reasoning_effort = "xhigh" }
+"gpt-5.4-mini" = { max_reasoning_effort = "xhigh" }
+
+# https://developers.openai.com/api/docs/models/gpt-6.2-sol
+[openai.models."gpt-6.2-sol"]
+context_window = 1_050_000
+max_input_tokens = 922_000
+max_output_tokens = 128_000
 
 [google]
+models_dev_provider = "google"
 title = "Google Gemini"
 url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 key_env = "GEMINI_API_KEY"
 
-[google.models]
-"gemini-3.8-flash" = { context_window = 1_048_576 }
-"gemini-3.1-pro-preview" = { context_window = 1_048_576 }
-
 [qwen]
+models_dev_provider = "alibaba-cn"
 title = "Qwen (Alibaba Cloud, China)"
 url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 key_env = "DASHSCOPE_API_KEY"
 
-[qwen.models]
-"qwen3.7-max" = { context_window = 1_000_000 }
-"qwen3.7-flash" = { context_window = 1_000_000 }
-"qwen3-coder-plus" = { context_window = 1_048_576 }
-
 [kimi]
+models_dev_provider = "moonshotai-cn"
 title = "Kimi (Moonshot AI, China)"
 url = "https://api.moonshot.cn/v1"
 key_env = "MOONSHOT_API_KEY"
 search_api = "moonshot_search"
 
-[kimi.models]
-"kimi-k3.1-pro" = { context_window = 1_048_576 }
-"kimi-k2.7-code" = { context_window = 262_144 }
-
 [glm]
+models_dev_provider = "zhipuai"
 title = "GLM (Zhipu AI, China)"
 url = "https://open.bigmodel.cn/api/paas/v4"
 key_env = "ZHIPU_API_KEY"
 
-[glm.models]
-"glm-5.3" = { context_window = 1_000_000 }
-"glm-5.3-flashx" = { context_window = 1_000_000 }
-
 [openrouter]
+models_dev_provider = "openrouter"
 title = "OpenRouter (many servers, one key)"
 url = "https://openrouter.ai/api/v1"
 key_env = "OPENROUTER_API_KEY"

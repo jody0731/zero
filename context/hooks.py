@@ -22,7 +22,7 @@ from context.compaction import (
     INSTRUCTION_TOKENS, CompactionFailed, NothingToCompact,
 )
 from core import history, tools
-from core.hooks import Hook, Retry
+from core.hooks import Hook, Retry, Stop
 from core.llm import MODEL_ERRORS, failure_text
 
 # Error phrases and codes for a request that exceeds the server's context.
@@ -139,6 +139,7 @@ class Context(Hook):
         # A turn whose automatic compaction failed doesn't try again, so a
         # server that can't write a handoff isn't asked at every step
         self._failed = False
+        self._blocked = None
         self._refused = set()
 
     def _line(self, session):
@@ -170,25 +171,61 @@ class Context(Hook):
                    if (m := history.message(r)) is not None)
         kept = max(int(at * compaction.TAIL_SHARE), step)
         return room.fresh_room(at, self._fixed(session), INSTRUCTION_TOKENS,
-                               self.limits) - kept
+                               self.limits, **room.model_limits(session.model)) - kept
 
     def turn_start(self, turn):
         self._failed = False
+        self._blocked = None
         self._refused = set()
 
     def before_model(self, step):
         """A compaction first when the context and its headroom pass the line,
         or when ZERO or the user asked for one."""
         session = step.turn.session
+        try:
+            self._check_model_window(session)
+        except room.ModelLimitExceeded as error:
+            return Stop("failed", str(error))
         reason, instructions = self._asked(session)
-        if reason is None and not self._failed and counted(session):
-            left = room.room_left(self._line(session), self._size(session),
-                                  INSTRUCTION_TOKENS, self.limits)
-            if left < 0:
-                reason = "line"
-        if reason is None:
+        if reason is None and not self._failed:
+            has_limits = room.has_input_bound(session.model)
+            is_counted = counted(session)
+            if has_limits or is_counted:
+                size = self._size(session)
+                left = room.room_left(self._line(session), size,
+                                      INSTRUCTION_TOKENS, self.limits,
+                                      **room.model_limits(session.model))
+                if left < 0 and is_counted:
+                    reason = "line"
+                elif has_limits:
+                    try:
+                        room.bound_output(session.model, size.tokens,
+                                          operation="The context")
+                    except room.ModelLimitExceeded:
+                        reason = "line"
+        if reason is not None:
+            self._compact(session, reason, step.turn.control, instructions)
+        if self._blocked:
+            return Stop("failed", self._blocked)
+        return None
+
+    def before_model_request(self, step, messages, schemas):
+        """Check the prepared input and reserve only as much output as fits."""
+        session = step.turn.session
+        server = getattr(session.model, "server", None)
+        if not room.has_input_bound(session.model):
+            step.max_output_tokens = getattr(server, "max_output_tokens", None)
             return None
-        self._compact(session, reason, step.turn.control, instructions)
+        # Use the provider's last count for the conversation it already saw.
+        # Corrections or changes made during preparation need a fresh estimate.
+        records = session.log.branch() if messages == session.messages else ()
+        size = room.measure(records, messages, schemas, counter(session))
+        try:
+            step.max_output_tokens = room.bound_output(
+                session.model, size.tokens, operation="The prepared reply input",
+            )
+        except room.ModelLimitExceeded as error:
+            return Stop("failed", str(error))
         return None
 
     def model_error(self, failure):
@@ -208,6 +245,11 @@ class Context(Hook):
         words on what its handoff keeps: `instructions`), or one that keeps
         nothing but `handoff` (`fresh`: a round's end, rounds/, on its
         `occasion`); one that fails is written down as `compaction_failed`."""
+        try:
+            self._check_model_window(session)
+        except room.ModelLimitExceeded as error:
+            self._compaction_failed(session, reason, error)
+            return
         if not fresh:
             words = {reason: instructions} if instructions else None
             self._compact(session, reason, instructions=words)
@@ -216,8 +258,19 @@ class Context(Hook):
             compaction.fresh(session, handoff, self._line(session),
                              counter(session), limits=self.limits,
                              reason=reason, occasion=occasion)
-        except (CompactionFailed, *MODEL_ERRORS) as error:
+        except (CompactionFailed, room.ModelLimitExceeded, *MODEL_ERRORS) as error:
             self._compaction_failed(session, reason, error)
+
+    def _check_model_window(self, session):
+        server = getattr(session.model, "server", None)
+        refresh = getattr(server, "refresh_limits", None)
+        if refresh is not None:
+            refresh()
+            if server.context_window is None:
+                raise room.ModelLimitExceeded(
+                    f"ZERO no longer has a context window for {session.model.name}. "
+                    "Choose the model again to set its window."
+                )
 
     def _compaction_failed(self, session, reason, error):
         if isinstance(error, MODEL_ERRORS):
@@ -268,12 +321,14 @@ class Context(Hook):
                                       self.folder(), check, counter(session),
                                       limits=self.limits,
                                       instructions=instructions)
-        except (CompactionFailed, *MODEL_ERRORS) as error:
+        except (CompactionFailed, room.ModelLimitExceeded, *MODEL_ERRORS) as error:
             if isinstance(error, NothingToCompact) and reason != "refused":
                 if reason in history.ASKERS:
                     session.write("nothing_to_compact", reason=reason)
                 return None
             self._failed = True
+            if isinstance(error, room.ModelLimitExceeded):
+                self._blocked = str(error)
             self._compaction_failed(session, reason, error)
             return None
 
@@ -287,7 +342,7 @@ class Context(Hook):
         cost = count(result)
         if call.notes.get("sized"):
             most = room.fresh_room(at, self._fixed(session), INSTRUCTION_TOKENS,
-                                   self.limits)
+                                   self.limits, **room.model_limits(session.model))
             if cost > most:
                 reader = tools.part_reader(session.tool_context)
                 parts = PARTS.format(start=reader[1], count=reader[2]) if (
@@ -311,7 +366,7 @@ class Context(Hook):
         past it, saved whole and ZERO told so, the file's path set on
         `call` (the tool call's record) where one is given."""
         left = room.room_left(at, self._size(session), INSTRUCTION_TOKENS,
-                              self.limits)
+                              self.limits, **room.model_limits(session.model))
         after = self._room_after(session, at)
         allowed = room.share(max(left, after), self.limits)
         if cost <= allowed:

@@ -5,8 +5,9 @@ file: the ones it ships with) and the user's models.toml (paths.py: the
 servers they added, and any line of a shipped one they changed, by naming
 the same server). A model name picks its server by its prefix
 ("myserver/some-model"); a name without a known prefix goes to the catalog's
-server for bare model names. A model's context window is its own
-line, else its server's; a model with neither can't start. A server's line `api`
+server for bare model names. A model's limits come from its endpoint and
+the published catalog. Saved windows can narrow those limits or supply a
+missing window. A server's line `api`
 names the API its server speaks (apis/), the Chat Completions API when it
 names none. A model's price is its own line, else its server's, else the
 one a release filled in from models.dev's list (prices.toml beside this
@@ -29,8 +30,9 @@ from openai import OpenAI
 
 import paths
 from core.llm import complete
-from model import features
+from model import directory, features, limit_catalog
 from model.apis import APIS, DEFAULT, SEARCH_APIS
+from model.limits import TokenLimits, endpoint, model_id, smaller, token_count
 from settings import stamp
 
 CATALOG = Path(__file__).with_name("catalog.toml")
@@ -44,9 +46,13 @@ SERVER_FIELDS = {
     "context_window": int, "context_stop": int, "price": list, "models": dict,
     "refuses_overlong_requests": bool,
     "search_api": str, "search_model": str, "bare_model_names": bool,
-    "max_reasoning_effort": str,
+    "max_reasoning_effort": str, "context_windows": dict,
+    "max_input_tokens": int, "max_output_tokens": int,
+    "models_dev_provider": str,
 }
-MODEL_FIELDS = ("context_window", "context_stop", "price", "max_reasoning_effort")
+MODEL_FIELDS = ("context_window", "max_input_tokens", "max_output_tokens",
+                "context_stop", "price", "max_reasoning_effort")
+LIMIT_FIELDS = ("context_window", "max_input_tokens", "max_output_tokens")
 # Lines named otherwise before 0.6.2.8, read under their names now
 RENAMED = {"name": "title", "context": "context_window"}
 # Lines a server had before 0.6.2.7: what a model honours is measured now;
@@ -81,15 +87,17 @@ class ModelServer:
     """A server as one of its models sees it: the server's lines with the
     model's own over them."""
 
-    def __init__(self, name, entry, model=None):
+    def __init__(self, name, entry, model=None, *, refresh=True):
         line = entry.get("models", {}).get(model, {}) if model else {}
         merged = {**entry, **line}
         self.name = name
         # What the screens show
         self.title = entry.get("title", name)
         self.url = entry["url"]
-        # Tokens the model takes; None for a server looked up without a model
-        self.context_window = merged.get("context_window")
+        self._entry = entry
+        self._model = model
+        self._reported = directory.reported(self.url, model) if model else TokenLimits()
+        self.set_limits(self._reported, refresh=refresh)
         # The API its server speaks (apis/)
         self.api = APIS[entry.get("api", DEFAULT)]
         self.max_reasoning_effort = merged.get("max_reasoning_effort")
@@ -106,6 +114,27 @@ class ModelServer:
         if not price and model:
             price = filled_prices().get(name, {}).get(model)
         self.price = tuple(price) if price else None
+
+    def set_limits(self, reported, *, refresh=False):
+        entry, model = self._entry, self._model
+        self._reported = reported
+        self.verified_limits, limits = (
+            model_limits(self.name, entry, model, refresh=refresh, reported=reported)
+            if model is not None else (TokenLimits(), TokenLimits.read(entry))
+        )
+        self.context_window = limits.context_window
+        self.max_input_tokens = limits.max_input_tokens
+        self.max_output_tokens = limits.max_output_tokens
+        # Legacy windows alone were compaction targets. Verified or scoped
+        # windows bind requests, including any smaller saved cap.
+        bounded = self.verified_limits.context_window or saved_window(entry, model)
+        self.request_context_window = limits.context_window if bounded else None
+
+    def refresh_limits(self):
+        """Apply a new endpoint observation to an already open session."""
+        reported = directory.reported(self.url, self._model)
+        if reported != self._reported:
+            self.set_limits(reported)
 
 
 def filled_prices():
@@ -207,6 +236,12 @@ def check(name, entry):
         return f"[{name}] api is one of {', '.join(APIS)}"
     if "search_api" in entry and entry["search_api"] not in SEARCH_APIS:
         return f"[{name}] search_api is one of {', '.join(SEARCH_APIS)}"
+    for url, windows in entry.get("context_windows", {}).items():
+        if not isinstance(windows, dict) or any(
+            not model_id(model) or not token_count(window)
+            for model, window in windows.items()
+        ):
+            return f"[{name}.context_windows] {url!r} needs model IDs and token counts"
     for model, line in entry.get("models", {}).items():
         if not isinstance(line, dict):
             return f"[{name}.models] {model!r} takes a table of its lines"
@@ -222,23 +257,29 @@ def check(name, entry):
 def merge(shipped, mine, where):
     """The user's tables over the catalog's, a line at a time; a model's
     lines likewise. A server of their own needs its url."""
-    table = {name: dict(entry) for name, entry in shipped.items()}
+    table = {
+        name: {**entry, "models": {
+            model: {key: value for key, value in line.items()
+                    if key not in LIMIT_FIELDS}
+            for model, line in entry.get("models", {}).items()
+        }}
+        for name, entry in shipped.items()
+    }
     for name, entry in mine.items():
         if name not in table:
             if "url" not in entry:
                 raise ModelServerError(f"{where}: [{name}] needs its url")
             table[name] = dict(entry)
             continue
-        models = {**table[name].get("models", {})}
+        previous = table[name]
+        if endpoint(entry.get("url", previous["url"])) != endpoint(previous["url"]):
+            # Published limits and search describe the endpoint they shipped with.
+            route_fields = ("search_api", "search_model", *LIMIT_FIELDS)
+            previous = {key: value for key, value in previous.items()
+                        if key not in route_fields}
+        models = {**previous.get("models", {})}
         for model, line in entry.get("models", {}).items():
             models[model] = {**models.get(model, {}), **line}
-        previous = table[name]
-        if entry.get("url", previous["url"]).rstrip("/") != (
-            previous["url"].rstrip("/")
-        ):
-            # A catalog capability describes the endpoint it shipped with.
-            previous = {field: value for field, value in previous.items()
-                        if field not in ("search_api", "search_model")}
         table[name] = {**previous, **entry, "models": models}
     return table
 
@@ -292,11 +333,60 @@ def model_address(model, entries):
     return bare, model
 
 
-def resolve(model):
+def canonical_endpoint(name, url):
+    shipped = catalog().get(name)
+    return shipped is not None and endpoint(shipped["url"]) == endpoint(url)
+
+
+def saved_window(entry, model):
+    return entry.get("context_windows", {}).get(endpoint(entry["url"]), {}).get(model)
+
+
+def model_limits(name, entry, model, *, refresh=True, reported=None):
+    """Verified provider limits and the effective limits after user caps."""
+    url = entry["url"]
+    verified = reported if reported is not None else directory.reported(url, model)
+    if canonical_endpoint(name, url):
+        published = limit_catalog.lookup(
+            name, model, refresh=refresh and verified.context_window is None,
+        ) if name in limit_catalog.providers() else TokenLimits()
+        shipped = TokenLimits.read(catalog()[name].get("models", {}).get(model))
+        verified = verified.capped_by(published).capped_by(shipped)
+    line = entry.get("models", {}).get(model, {})
+    manual = saved_window(entry, model)
+    # The old per-model setting took precedence over the server-wide setting.
+    # A new endpoint-specific entry supersedes either, preserving both on disk.
+    saved = manual or token_count(line.get("context_window")) or token_count(
+        entry.get("context_window"),
+    )
+    configured = TokenLimits(
+        saved,
+        token_count(line.get("max_input_tokens", entry.get("max_input_tokens"))),
+        token_count(line.get("max_output_tokens", entry.get("max_output_tokens"))),
+    )
+    return verified, verified.capped_by(configured)
+
+
+def read_directory(name, entry):
+    """Refresh deployed limits when a custom endpoint is used directly."""
+    if canonical_endpoint(name, entry["url"]) and name in limit_catalog.providers():
+        return
+    server = ModelServer(name, entry)
+    try:
+        directory.listing(server.url, api_key(server), cached=True)
+    except Exception:
+        # Startup still uses verified and configured limits it already has.
+        pass
+
+
+def resolve(model, *, check_endpoint=False, refresh=True):
     """(server, the server's own model name) for a model name."""
     entries = table()
     name, served_name = model_address(model, entries)
-    server = ModelServer(name, entries[name], served_name)
+    entry = entries[name]
+    if check_endpoint:
+        read_directory(name, entry)
+    server = ModelServer(name, entry, served_name, refresh=refresh)
     if server.context_window is None:
         raise ModelServerError(
             f"no context window for {model}: set context_window under [{name}] (or "
@@ -346,10 +436,10 @@ def api_key(server, keys_file=None):
     )
 
 
-def make_client(model, timeout):
+def make_client(model, timeout, *, server=None):
     """The SDK's client. Its timeout counts per read, a backstop for a
     connection that never opens; complete's clock is the one that counts."""
-    server, _ = resolve(model)
+    server = server or resolve(model, check_endpoint=True)[0]
     # The SDK's own retries are off: hooks decide what to retry
     return OpenAI(
         base_url=server.url,
@@ -364,17 +454,21 @@ class Model:
     it may stay silent (complete's `silence`), or a function giving them at
     each call (a session's limits as they stand)."""
 
-    def __init__(self, name, client=None, *, timeout, effort=None):
+    def __init__(self, name, client=None, *, timeout, effort=None, resolved=None):
         self.name = name
         self.timeout = timeout
-        self.server, self.served_name = resolve(name)
+        self.server, self.served_name = (
+            resolved or resolve(name, check_endpoint=client is None)
+        )
         self.api = self.server.api
         # What its calls cost: USD per 1M tokens (hit, miss, output)
         self.price = self.server.price
         # The SDK's client and the per-read timeout it was made with, made
         # again when the silence changes, so neither cuts the other short
         self._client_seconds = self.silence()
-        self.client = client or make_client(name, self._client_seconds)
+        self.client = client or make_client(
+            name, self._client_seconds, server=self.server,
+        )
         # The agent's thinking effort; the judge and the consent check call
         # complete themselves
         self.effort = effort
@@ -428,7 +522,7 @@ class Model:
         """The SDK's client for a call that may stay silent `seconds`: a
         stand-in as it is; a real one made again when the seconds changed."""
         if not self._scripted and seconds != self._client_seconds:
-            self.client = make_client(self.name, seconds)
+            self.client = make_client(self.name, seconds, server=self.server)
             self._client_seconds = seconds
         return self.client
 
@@ -454,7 +548,7 @@ class Model:
             effort=features.thinking_effort_sent(
                 self.name, self.api, self.effort, self.server.max_reasoning_effort,
             ),
-            max_output_tokens=max_output_tokens,
+            max_output_tokens=smaller(max_output_tokens, self.server.max_output_tokens),
             **self.progress(), **output,
         )
 

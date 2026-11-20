@@ -15,6 +15,7 @@ from openai import NotFoundError
 
 from server.services import Service
 from model import connect, features, servers
+from model.limits import endpoint
 
 # Seconds a model may stay silent while its features are measured: a local
 # server may first load it (a backstop, as model_silence_seconds)
@@ -32,7 +33,7 @@ class ModelDirectory:
 
 class ModelService(Service):
     name = "models"
-    looking_messages = ("model/list", "model/server/list")
+    looking_messages = ("model/list", "model/server/list", "model/window")
 
     def __init__(self, config=None):
         # config.toml (settings.Config), where the default goes; the server's
@@ -48,6 +49,8 @@ class ModelService(Service):
 
     def messages(self):
         return {"model/list": self.models_message,
+                "model/window": self.window_message,
+                "model/window/set": self.set_window_message,
                 "model/features": self.features_message,
                 "model/server/list": self.servers_message,
                 "model/server/probe": self.probe_message,
@@ -103,6 +106,19 @@ class ModelService(Service):
         except (connect.ConnectError, servers.ModelServerError) as e:
             return {"ok": False, "error": str(e)}
 
+    def window_message(self, request):
+        try:
+            return {"ok": True, **connect.window_request(request)}
+        except (connect.ConnectError, servers.ModelServerError) as error:
+            return {"ok": False, "error": str(error)}
+
+    def set_window_message(self, request):
+        try:
+            connect.set_window_request(request)
+        except (connect.ConnectError, servers.ModelServerError, OSError) as error:
+            return {"ok": False, "error": str(error)}
+        return {"ok": True}
+
     def set_key_message(self, request):
         if "key" not in request:
             return {"ok": False, "error": "Supply a key or choose to remove it."}
@@ -130,6 +146,8 @@ class ModelService(Service):
             return {"ok": False, "error": "ZERO could not write the saved key."}
         if pending is not None:
             row = self.directory_result(pending)
+        elif row["models"]:
+            row = resolved_directory(server, row)
         return {"ok": True, "has_saved_key": value is not None, "directory": row}
 
     def test_message(self, request):
@@ -224,7 +242,7 @@ class ModelService(Service):
             if current is None:
                 return empty_directory(server)
             if current is directory:
-                return row
+                return resolved_directory(server, row)
             # Rotating or removing a key can finish before an old lookup.
             directory = current
 
@@ -266,3 +284,24 @@ def server_row(server, key):
         row["error"] = (str(error) if isinstance(error, connect.ConnectError)
                         else connect.error_text(error, key))
     return row
+
+
+def resolved_directory(server, row):
+    """Join available limits to the endpoint's roster without any catalog waits."""
+    if not row["models"]:
+        return row
+    try:
+        entry = servers.table().get(server.name)
+    except servers.ModelServerError:
+        return row
+    if entry is None or endpoint(entry["url"]) != endpoint(server.url):
+        return row
+    prefix = connect.full_name(server.name, "")
+    found = {}
+    for model in row["models"]:
+        _, limits = servers.model_limits(
+            server.name, entry, model.removeprefix(prefix), refresh=False,
+        )
+        if fields := limits.as_dict():
+            found[model] = fields
+    return {**row, "model_limits": found} if found else row

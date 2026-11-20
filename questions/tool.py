@@ -35,15 +35,11 @@ PROPOSED_CALL = {
 
 
 @tool(
-    "Ask a question and wait for its answer. The question pauses this turn "
-    "until the user answers; the user may be away. The judge does not answer "
-    "questions. In a helper session the question goes to its parent as a "
-    "message instead; that parent answers it or asks the user. Optional "
-    "choices can be selected with a key; a free-text answer is also available. "
-    "For a tool requiring the user's approval of an exact change, proposed_call "
-    "contains that tool and its complete arguments. The app appends the exact "
-    "proposal and supplies approval choices. Approval covers that change once; "
-    "another agent's answer does not approve it.",
+    "Ask the user a question and pause this turn for their answer. Ordinary "
+    "questions in a helper session go to its parent, which can answer or ask "
+    "the user. The user can select a choice or reply in their own words. "
+    "With proposed_call, the app shows the exact change and approval choices. "
+    "That approval comes from the user and covers the exact change once.",
     optional=("options", "proposed_call"),
     asks_user=True,
     needs_permission=lambda args: False,
@@ -51,8 +47,8 @@ PROPOSED_CALL = {
     summary=lambda args: args["question"],
     question=("string", "The question to answer"),
     options=({"type": "array", "items": {"type": "string"}, "maxItems": 9},
-             "Optional answers, in display order"),
-    proposed_call=(PROPOSED_CALL, "The exact change requiring user approval"),
+             "Choices in display order"),
+    proposed_call=(PROPOSED_CALL, "The tool and full arguments for user approval"),
 )
 def ask_user(question, options=None, proposed_call=None):
     return "The question waits for an answer."

@@ -569,8 +569,9 @@ class Session:
         # The stream's reader may still be sending these after a stop, while
         # the loop goes on writing
         messages = copy.deepcopy(self.messages)
-        # A turn resumed from an older log keeps its original system message.
-        if public_reply.INSTRUCTIONS not in messages[0]["content"]:
+        # A resumed turn keeps its saved wording. Logs from before public
+        # replies still need the contract when we ask the model for one.
+        if not public_reply.has_instructions(messages[0]["content"]):
             messages[0]["content"] += "\n\n" + public_reply.INSTRUCTIONS
         if step.turn.reply_format_errors:
             if step.turn.unformatted_reply:

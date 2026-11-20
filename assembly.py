@@ -187,7 +187,7 @@ HERE = Path(__file__).resolve().parent
 SYSTEM_MESSAGE_SOURCES = (
     "prompt/instructions.py", "prompt/hooks.py", "prompt/keywords.py",
     "core/public_reply.py", "permissions/modes.py",
-    "sandbox/sandbox.py", "memory/hooks.py", "skills/hooks.py",
+    "sandbox/sandbox.py", "memory/hooks.py", "skills/hooks.py", "vault/hooks.py",
 )
 
 

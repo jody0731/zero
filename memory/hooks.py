@@ -44,9 +44,9 @@ class ZeroFilesGuard(Hook):
 
     def system_prompt(self, session):
         lines = [
-            "\n\nYour own files, read when this system message was written, "
-            "each one's text above under its path, comments left out (the "
-            "memory tool changes them; the file tools don't):"
+            "\n\nInstruction files as of this system message. Their text is "
+            "above under each path, with comments omitted. The memory tool "
+            "applies approved edits to these files."
         ]
         if self.own.get("soul"):
             lines.append(f"- SOUL.md, your character: {self.own['soul']}")
@@ -61,11 +61,8 @@ class ZeroFilesGuard(Hook):
             lines.append(f"- the project's ZERO.md: {project}{missing}")
             if missing and (Path(project).parent / ".git").exists():
                 lines.append(
-                    "The user welcomes an offer of a short project ZERO.md "
-                    "drawn from this repository's docs: about eight lines "
-                    "pointing to details. The offer shows the exact text and "
-                    "its purpose; an approved memory change makes it live "
-                    "in this session."
+                    "A short project ZERO.md can be offered from the repository "
+                    "docs, about eight lines pointing to details."
                 )
         if self.others:
             lines.append(

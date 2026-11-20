@@ -16,10 +16,9 @@ from core.control import Stopped
 from core.tools import tool
 
 DESCRIPTION = (
-    "Hold this turn until a notice or a message from the user comes, or "
-    "`minutes` pass, whichever is first. No call to your model is made while "
-    "it holds; the step after it reads the conversation again. What came is "
-    "read at that step."
+    "Hold this turn until a notice or user message arrives or the time runs "
+    "out. There are no model calls while the turn is held. An arriving "
+    "message is read at the next step."
 )
 NOT_HERE = (
     "Nothing reaches a running turn in this session, so there is nothing to "

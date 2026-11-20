@@ -3,6 +3,16 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.7.4.13
+
+- Shortened the core and tool instructions. A waiting turn keeps its saved
+  instructions when it resumes.
+- The wording tells ZERO to ask when its next step needs a decision or
+  credentials. If credentials are needed and unavailable, ZERO is instructed
+  to open private input and continue after the user responds.
+- Two guarded backup trials finished after masked Save. Whether ZERO asks
+  promptly without test intervention remains unverified.
+
 ## 0.7.7.4.12
 
 - Restoring a session from its log lets you answer a waiting question and

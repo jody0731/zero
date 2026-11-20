@@ -5,9 +5,19 @@ from vault.store import VaultError
 from vault.tool import NAME
 
 
+CAPABILITY = (
+    "When the next step requires credentials, ask the user through the vault "
+    "if the user hasn’t already supplied them and the vault has no matching entry."
+)
+
+
 class VaultInput(Hook):
     def __init__(self, vault):
         self.vault = vault
+
+    def system_prompt(self, session):
+        if session.tool_context.get("vault") is not None:
+            return f"\n{CAPABILITY}\n\n"
 
     def approve(self, call):
         if call.name != NAME or call.args["action"] not in ("add", "update"):

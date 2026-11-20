@@ -78,12 +78,11 @@ DESCRIPTION = (
     "`done_check` is a command the server runs where this session's commands "
     "run when you report done, and exit code 0 is done. The turn that calls "
     "it is round 1; the server starts each next one, until the work is done, "
-    "stuck or stopped by the user. In default mode the hand-off asks the "
-    "user once before rounds start. While rounds go on, what would ask the "
-    "user in default mode goes to the judge instead, which reads the user's "
-    "words. The estimate (rounds, minutes of your own working time, "
-    "weighted tokens) is yours: nothing stops at "
-    "the estimate, and one note comes if the work passes it."
+    "stuck or stopped by the user. Default mode asks the user to approve the "
+    "hand-off. During rounds the judge handles default-mode permission "
+    "requests using the user's words. The estimate (rounds, minutes of your "
+    "own working time, weighted tokens) does not stop work. A notice comes "
+    "if the work passes it."
 )
 
 

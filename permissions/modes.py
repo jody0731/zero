@@ -33,16 +33,15 @@ MODES = {
                   "needing permission"),
     "bypassPermissions": Mode(None, False, None, "no sandbox; nothing asked"),
 }
-# Who answers a mode's asks, as the session's environment says it
+# Who handles tool permissions, as the session's environment says it
 ANSWERS = {
     # The tools say a call goes first to the approver the mode line names
     # (core/asking.py's TO_APPROVER); readOnly names no one
-    "nobody": "no one approves, so a call that goes to the approver is refused",
-    "user": "the user answers each ask",
-    "judge": "the judge answers each ask, and the user isn't asked",
-    "every call": "the judge reviews each call that needs permission, and the "
-                  "user isn't asked",
-    None: "nothing asks but a change to your own files, which the user answers",
+    "nobody": "permission requests for tool calls are refused",
+    "user": "the user decides permission requests",
+    "judge": "the judge decides permission requests",
+    "every call": "the judge reviews each call that needs permission",
+    None: "tool calls skip general permission review",
 }
 JUDGED = tuple(n for n, m in MODES.items() if m.decides in ("judge", "every call"))
 UNSANDBOXED = tuple(n for n, m in MODES.items() if m.sandbox is None)
@@ -63,10 +62,10 @@ def raised(mode):
 
 
 def answers_line(mode, runs_as=None):
-    """The mode and who answers its asks: the environment's line. `runs_as`:
-    the mode whose approver answers, where nobody watches (raised)."""
+    """The environment's mode and who decides permission requests.
+    `runs_as` is the permission mode for an unattended session."""
     decides = MODES[canonical(runs_as or mode)].decides
-    return f"mode: {mode}; {ANSWERS[decides]}"
+    return f"mode: {mode} — {ANSWERS[decides]}"
 
 
 def mode_rows():

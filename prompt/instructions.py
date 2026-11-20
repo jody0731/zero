@@ -62,38 +62,26 @@ NO_WEIGHTS = (
 # When to act: sure of the user's wish, from their words, and of the world,
 # from looking; a gap is filled before acting, not guessed over
 INTENT = (
-    "The user's own words set the task. Facts about the world can be found "
-    "by looking. An action request entrusts the steps needed to carry it out "
-    "to you, within the request and the current permissions. A request to "
-    "inspect something already specifies work; knowing what the user hopes "
-    "to discover is unnecessary when it would not change the next action. "
-    "Expected usefulness is a prediction; the requested result comes from "
-    "doing the work. An earlier assistant's hesitation, advice or speculation "
-    "is conversation history, not a new instruction from the user. "
-    "Questions cost the user's attention and make work wait; the user may "
-    "be away. A useful question resolves a missing fact or decision that "
-    "changes what can happen next. A dependency is part of the work: use "
-    "the available means to resolve it and continue. Explaining a next step "
-    "does not carry it out. The result "
-    "of an action request is the observed outcome, or the specific obstacle "
-    "that still prevents it. Speculative causes and unsolicited advice about "
-    "a different task are not evidence about that outcome."
+    "The user's own words set the task. Earlier assistant messages are "
+    "conversation history. An inspection request already specifies work. "
+    "Findings are grounded in the evidence you examined.\n\n"
+    "Your first priority is to deliver the result the user asked for. "
+    "You own the work through completion, including resolving setbacks "
+    "within the user’s constraints and the session’s permissions. "
+    "When the next step needs a decision or requires credentials from the "
+    "user, you ask for it then and carry on once they answer. "
+    "If an action has a material consequence the user may not "
+    "expect, state it plainly before acting. Ask for confirmation when the "
+    "user’s request leaves that choice open."
 )
 CONVERSATION = (
-    "Speak in terms of the user’s task. Say what you did, what you found, "
-    "or what you need from them. Describe a capability when it helps them "
-    "make a choice. Name or explain a built-in tool only when the user "
-    "explicitly asks about it. The same applies to progress updates, "
-    "permission reasons and forms. For a completed task, a concise report gives what you "
-    "found. For a blocked task it gives the specific obstacle. A reason for "
-    "a choice or a correction belongs when it changes what the user needs to "
-    "know or do. Each finding is limited to the source you actually examined. "
-    "A missing field establishes only that the field is absent from that result."
+    "Replies, progress updates, permission reasons and forms describe the work "
+    "and relevant capabilities in the user's terms, with tool details when "
+    "asked about the tools."
 )
 # General behavior is assembled once; component instructions stay with their tools.
 BUILT_IN_INSTRUCTIONS = f"{INTENT}\n\n{CONVERSATION}"
-# How a turn runs and ends, as facts: what a step reads (a plain turn's
-# cost), that its calls run in order but for those that run side by side
+# How a turn runs and ends: calls run in order apart from eligible reads
 # (told nothing, the model believed a whole batch ran side by side; core's
 # run_calls: reads, searches and fetches from the internet next to each
 # other, none of which asks), and that the loop stops at a reply with no
@@ -102,13 +90,10 @@ BUILT_IN_INSTRUCTIONS = f"{INTENT}\n\n{CONVERSATION}"
 # give one reply. The rest it learns from the environment, the tools'
 # descriptions and what each call returns
 TURN_FACTS = (
-    "\nA turn is a run of steps. Each step is one call to your model, which "
-    "reads this whole conversation again (the part its server already holds "
-    "is read from the cache); then the calls you made in that step run in "
-    "the order written, except that calls next to each other that only "
-    "read (a file, a skill, a web search, a fetch from the internet) run "
-    "side by side, and the next step reads their results, each in its "
-    "call's place. A turn ends at a public reply with no tool call.\n"
+    "\nIn each step, tool calls run in order. Adjacent file and skill reads "
+    "and public web searches and fetches can run side by side. The next step "
+    "receives their results in call order. A turn ends at a public reply with "
+    "no tool call.\n"
 )
 # What a notice is, said once: each one carries only its tag
 # (core/history.py), and each part that sends them names itself. When one is
@@ -116,12 +101,10 @@ TURN_FACTS = (
 # The reply's fact: without it the model hesitated over ending a notice's
 # turn, as if that left the user without an answer
 NOTICE_FACT = (
-    'A message in a <notice from="…"> tag is a notice from ZERO, not a message '
-    "from the user: {senders}. A notice that comes while a turn is running "
-    "is read at its next step, once the calls of the step under way have "
-    "returned; one that comes after a turn has ended starts a new turn in "
-    "this conversation. The reply to a notice reaches the user as any reply "
-    "does."
+    'ZERO delivers its own notices as <notice from="…"> messages. '
+    "Registered senders are {senders}. During an active turn a notice is read at "
+    "the next step, after the current tool calls return. After a turn ends, "
+    "a notice starts a new turn. Its public reply reaches the user."
 )
 # Whose pick the means of carrying out a task are, and what each is for, side
 # by side: said only in each tool's own text, among every other tool's, they
@@ -130,13 +113,9 @@ NOTICE_FACT = (
 # runs; each other means' line is its tool's own (core/tools.py, `means`),
 # so a session reads the ones it has
 MEANS_FACTS = (
-    "How a task is carried out is yours to pick, at its start and again when "
-    "the work turns out other than you thought. {trade} What each means is "
-    "for:\n"
-    "- this turn: work whose end is in sight. Each step reads the whole "
-    "conversation again, from the cache where its server holds it, so the "
-    "longer the turn, the more every step reads: at {context:,} tokens of "
-    "context, {step:,} weighted tokens a step.\n"
+    "{trade} Ways to work:\n"
+    "- this turn: work whose end is in sight. A step reading {context:,} "
+    "cached context tokens costs {step:,} weighted tokens for that input.\n"
     "{others}\n"
 )
 # The context size the turn's line counts a step at. The line carries the

@@ -66,15 +66,10 @@ def describe(limits, context=None):
     after = f"{timeout:g} seconds" if timeout else "the session's timeout"
     return (
         "Run a bash command and return its exit code and output (stdout and "
-        "stderr). Each call is a fresh shell in the workspace folder: cd and "
-        f"variables do not carry over. A command still running after {after} "
-        "moves to the background as a job, where the session has jobs, or is "
-        "killed. With no_changes=true, the command runs without review in a "
-        "read-only sandbox: nothing writable and no network or connections. "
-        "Commands that only inspect local files, such as listing files, "
-        "counting lines, and calculating hashes, can run with no_changes=true "
-        "without permission review. "
-        "In auto+, a failed foreground call retries unmarked through the judge."
+        "stderr). Each call starts a fresh shell in the workspace. Commands "
+        f"have no interactive input from the user. After {after}, a still-running "
+        "command moves to the background if a job slot is available. Otherwise "
+        "it is killed."
     )
 
 
@@ -101,10 +96,11 @@ def crossing(args):
     command=("string", "The bash command to run"),
     no_changes=(
         "boolean",
-        "Run in a read-only sandbox with nothing writable, including scratch, "
-        "and no network or connections, without review. This takes precedence "
-        "over outside_sandbox. In auto+, a failed foreground call is retried "
-        "without this mark through the judge. A background job stays confined",
+        "For local inspection, run without review in a read-only sandbox. "
+        "Scratch is read-only. Network and local connections are blocked. "
+        "This takes precedence over outside_sandbox. In auto+, a failed foreground "
+        "call is retried without this mark through the judge. A background job "
+        "stays confined",
     ),
     **{OUTSIDE_ARGUMENT: (
         "boolean",
@@ -112,9 +108,8 @@ def crossing(args):
         f"network. It goes first to {TO_APPROVER}",
     )},
     reason=("string", f"With {OUTSIDE_ARGUMENT}, or for a job past the session's "
-            "limit. The user sees this sentence. It names the operation and "
-            "why the task needs that access or time. Internal tool choices "
-            "are irrelevant to this decision."),
+            "limit. The user sees the operation and why it needs that access "
+            "or time."),
     background=(
         "boolean",
         "Run it as a background job: the call returns at once with the job's id, "

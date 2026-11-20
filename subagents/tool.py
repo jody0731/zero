@@ -162,11 +162,10 @@ def describe_start(limits, context=None):
         "their outputs stay in its own context, and only its report comes "
         "into this one. It builds a context of its own, counted in this "
         "session's use, and what it found and didn't send stays in its "
-        "session. It runs in this session's workspace, on "
-        "its files, with this session's model; nobody watches it, so in "
-        "default mode the hand-off asks the user once before work starts; "
-        "then what would ask the user goes to the judge, which reads "
-        "the user's words, and other modes run as here. It returns the "
+        "session. It shares this session's workspace and model. Default mode "
+        "asks the user to approve the hand-off, then the judge handles the "
+        "subagent's permission requests using the user's words. Other modes "
+        "run as here. It returns the "
         "subagent's id at once. Its first message holds `task`, then names "
         "this session and asks it to report back here with send_message when "
         "it has finished. The report reaches this session as a notice from "
@@ -191,7 +190,7 @@ def describe_start(limits, context=None):
         "its asks where these subagents' go. The workflow runs in the "
         "sandbox with a credential for this session alone. --model chooses "
         "its model and --mode can choose a stricter mode for a new subagent. "
-        f"A pending hand-off waits for the user before work starts. {deepest}"
+        f"{deepest}"
     )
 
 

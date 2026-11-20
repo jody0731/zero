@@ -57,22 +57,14 @@ def describe(limits, context=None):
     service = (context or {}).get("vault")
     count = len(service.labels()) if service is not None else 0
     return (
-        f"Private information store: {count} entries. Values remain outside "
-        "the conversation. Find returns labels and part names. A matching "
-        "saved entry can supply the task's input. When the required value is "
-        "missing and its source and format are known, add opens the masked form "
-        "and waits for the user. The form itself is the request. An access error "
-        "alone does not identify a field. Unclear requirements need verification "
-        "or a focused non-secret question. Add/update takes labels and input_form. "
-        "The title names the task. The purpose says what the value identifies or "
-        "enables. Each field explains exactly where to find it and what to enter, "
-        "such as the Reference number beside Date on a letter. Every part is "
-        "required. The app supplies the privacy and retention text. Saving makes "
-        "the entry available for this and later tasks. Deletion requires a "
-        "separate user request. Cancellation ends the request for the value. "
-        "In any tool argument, ⟦vault:name/part⟧ is replaced with that value "
-        "immediately before execution; ⟦vault:name⟧ works for a one-part entry. "
-        "Returned values appear as stand-ins in results and logs."
+        f"Private information store: {count} entries. Find returns labels and "
+        "part names. Add asks the user to enter missing credentials in a masked "
+        "form. Update opens the form for an existing entry. "
+        "Save keeps the entry for later use and resumes the task with a receipt. "
+        "The private input stays outside the conversation. In any tool argument, "
+        "⟦vault:name/part⟧ supplies a saved value at execution. "
+        "Use ⟦vault:name⟧ for a one-part entry. Returned values appear as "
+        "stand-ins in results and logs."
     )
 
 
@@ -102,8 +94,8 @@ INPUT_FORM = {
     "properties": {
         "title": {"type": "string", "description": "The user's task"},
         "instructions": {"type": "string", "description":
-                         "One sentence explaining what the task needs this field "
-                         "for. The app supplies all handling and retention text."},
+                         "Why the task needs the private input. The app supplies "
+                         "privacy and retention text."},
         "fields": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
             "required": ["part", "label", "instructions"],
@@ -113,10 +105,8 @@ INPUT_FORM = {
                 "label": {"type": "string", "description":
                           "Readable name of the value the user enters"},
                 "instructions": {"type": "string", "description":
-                                 "Where to find this value and exactly what "
-                                 "to copy, suited to the user's application. "
-                                 "The complete value includes any punctuation; "
-                                 "entry-name restrictions do not apply to it."},
+                                 "What to enter, with practical steps for finding "
+                                 "the value when helpful."},
             },
         }},
     },
@@ -135,7 +125,7 @@ INPUT_FORM = {
     query=("string", "For find: words describing the private information"),
     name=("string", "For delete: the exact entry name"),
     labels=(LABELS, "For add or update: metadata and part names, without values"),
-    input_form=(INPUT_FORM, "Required for add/update: the user's input form"),
+    input_form=(INPUT_FORM, "For add or update: the user's masked form"),
 )
 def vault(action, query="", name="", labels=None, input_form=None, vault=None,
           vault_find=None, notes=None):

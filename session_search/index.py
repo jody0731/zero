@@ -16,8 +16,7 @@ as ZERO saw it, and a compaction's handoff. The system message, notes and
 steps aren't searched.
 
 Words match by FTS5's unicode61 tokenizer: a word whole, case and accents
-aside. Prior art: Hermes' and OpenClaw's session search, and
-deepseek-harness's, all FTS5 with unicode61.
+aside.
 """
 
 import json

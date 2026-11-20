@@ -286,13 +286,12 @@ class Connection:
         session takes, or why it lists none: the server's reply as it is."""
         return self.call(build("model/list"))
 
-    def features(self, model, test=False):
-        """What a model honours of its API's features, as the server measured
-        it (measured now when never, or `test`): the server's reply. Measuring
-        calls the model a few times, so the wait is long."""
-        fields = {"test": True} if test else {}
-        return self.call(build("model/features", model=model, **fields),
-                         timeout=FEATURES_WAIT_SECONDS)
+    def features(self, model, test=False, *, cached_only=False):
+        """Read model features. A measurement can make several model calls."""
+        flags = {name: True for name, value in
+                 (("test", test), ("cached_only", cached_only)) if value}
+        request = build("model/features", model=model, **flags)
+        return self.call(request, timeout=FEATURES_WAIT_SECONDS)
 
     def servers(self):
         """Every model server the server knows, whether its key is there, the
@@ -323,6 +322,15 @@ class Connection:
     def disconnect(self, name):
         """The server's key and the user's lines for it taken out."""
         return self.call(build("model/server/disconnect", name=name))
+
+    def set_model_server_key(self, name, key):
+        """Save or remove the credential without contacting the provider."""
+        return self.call(build("model/server/key/set", name=name, key=key))
+
+    def test_model(self, name, model):
+        """Test a model using the existing connection. The server may charge."""
+        request = build("model/server/test", name=name, model=model)
+        return self.call(request, timeout=CONNECT_WAIT_SECONDS)
 
     def mcp_servers(self):
         """(the MCP servers listed, each with its state; what the list says

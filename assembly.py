@@ -89,7 +89,8 @@ from files import SETTINGS as FILE_SETTINGS
 from files.seen import ChangedFiles, SeenFiles
 from files.service import FilesService
 from web import SETTINGS as WEB_SETTINGS
-from web.tool import web_clients
+from web.search import available_services, select as select_search_service
+from web.tool import SearchApproval, Web
 from judge import SETTINGS as JUDGE_SETTINGS
 from judge.hooks import JudgeApproval
 from judge.verdict import Judge
@@ -132,7 +133,8 @@ from sandbox.service import SandboxService
 # The settings view's order: each service declares its own settings (SETTINGS),
 # and the view lists them as here
 SETTINGS_ORDER = (
-    "mode", "model", "fallback_model", "thinking_effort", "time_or_tokens",
+    "mode", "model", "fallback_model", "thinking_effort", "web_search_service",
+    "time_or_tokens",
     "judge_model", "judge_thinking_effort",
     # The limits, by what they bound: work started, commands, files, the
     # web, the context, session search, notes, the model, the judge, the
@@ -367,7 +369,7 @@ def make_session(
     `judge_thinking_effort`: the judge's thinking, sent with its calls only;
     None sends nothing, so the API's default holds.
     `web`: what the web tools reach the network with (web/tool.py); None
-    builds the session's own (web_clients).
+    builds the session's own.
     `box(workspace, private=)`: the sandbox every command runs in, made in
     place of sandbox/'s, whatever the mode: a mode with no sandbox of its
     own keeps it too (the judge isn't told), and no call leaves it. The evals
@@ -532,6 +534,7 @@ def make_session(
         limits, server, sandbox, mode, ask, ask_when, judge, outside,
         saved_permissions, own, results, runs_as, skills,
     )
+    hooks.append(SearchApproval(ask))
     # On a resume, the files the cut-off turn touched that changed meanwhile
     hooks.append(ChangedFiles())
     # On an interruption, the jobs the turn leaves running
@@ -574,7 +577,7 @@ def make_session(
             "sandbox": sandbox, "outside": outside, "limits": limits,
             "read_only_sandbox": read_only_sandbox,
             "retry_no_changes": runs_as == "auto+",
-            "web": web if web is not None else web_clients(limits),
+            "web": web if web is not None else Web(model_server=server.name),
             "own_files": own_files, "results": results,
             # The share of the context ZERO's own files take, as it stands,
             # for the memory tool's description
@@ -763,6 +766,26 @@ def mcp_server_notes():
             notes.append(f"MCP server {entry.name}: its command, "
                          f"{entry.command}, isn't found on this machine")
     return notes
+
+
+def search_service_status():
+    """The default session's search selection, without contacting a service."""
+    try:
+        config = settings.load()
+        model = config["model"]
+        server = model_servers.model_address(model, model_servers.table())[0] \
+            if model else None
+        available = available_services()
+        service, reason = select_search_service(
+            available, server, config["web_search_service"],
+        )
+    except (settings.SettingsError, ModelServerError):
+        return False, "Web search service could not read its configuration."
+    choices = ", ".join(available)
+    if service is None:
+        return False, f"Web search. {reason} Available services are {choices}."
+    return True, (f"Web search uses {service.label}. {reason}. "
+                  f"Available services are {choices}.")
 
 
 def home_file_notes():

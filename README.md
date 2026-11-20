@@ -35,7 +35,9 @@
 illustrative session data. Run <code>zero</code> to open it;
 <code>zero tui</code> opens the terminal app.</sub></p>
 
-- **Any model:** any server that speaks OpenAI's Chat Completions or Responses API. ZERO ships a catalog (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter, Ollama) and takes servers of your own; no model is built in. What a model honours of its API (thinking off, strict JSON) is measured, and a setting it can't honour shows unavailable.
+- **Any model.** Choose a server from the [catalog](model/catalog.toml) or
+  connect your own server that speaks the Chat Completions or Responses API.
+  Settings show which features ZERO has measured on your model.
 - **Many sessions:** each with its own workspace and history, opened, switched, renamed or archived from the browser or terminal.
 - **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
 - **One server:** it runs every session. Turns, background jobs and waiting questions go on after the browser or terminal closes, and every app reaches the server the same way.
@@ -99,7 +101,7 @@ The unpacked folder can go once it has installed.
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) and the system
   `libseccomp.so.2`: ZERO's sandbox and its filter for read-only commands.
   `zero doctor` checks both; a missing filter cannot run an unreviewed command.
-- a model: an API key for a server ZERO knows (DeepSeek, OpenAI, Gemini, Qwen, Kimi, GLM, OpenRouter), or a server of your own that speaks OpenAI's Chat Completions API, such as Ollama or llama-server
+- a model from the [catalog](model/catalog.toml) or your own compatible server
 
 </details>
 
@@ -132,17 +134,28 @@ selected in its right panel.
 The terminal app, `zero tui`, has its own first-run connection flow and
 **/settings → Models and keys…**. Both apps use the same saved connections.
 
+To save just a key, open the server's **Add API key** action in Models.
+The masked field saves the credential on this computer. **Manage** opens
+actions for a configured server, including viewing models and running an
+optional test. The provider may charge for a test.
+
+Under **Settings → General**, leave **Web search service** empty for Automatic.
+Automatic prefers the session's model server when it can search, then
+another configured search service with a key, then a free keyless service.
+Use the service name shown by `zero doctor` to choose one for all sessions.
+ZERO asks before sending a lookup to a service other than your saved choice.
+
 <details>
 <summary><b>The same, by hand</b>: ZERO's files in <code>~/.zero/</code></summary>
 
 ```toml
 # ~/.zero/config.toml: new sessions' model, server/model
-model = "deepseek/deepseek-flash"
+model = "server-name/model-id"
 ```
 
 ```toml
 # ~/.zero/keys.toml (mode 600): each server's key
-[deepseek]
+[server-name]
 api_key = "..."
 ```
 

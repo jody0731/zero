@@ -1,5 +1,4 @@
-"""The web tools: web_search through DeepSeek's Search API, and web_fetch,
-our own GET from this machine.
+"""Run web searches and fetches through the server's network connection.
 
 Both run in ZERO's server, never in the sandbox, which has no network. The search
 goes to the server's own client, which holds the key (model/); the key
@@ -24,24 +23,20 @@ import time
 from urllib.parse import urljoin, urlsplit
 
 import httpx2
-import openai
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
 
-from core.asking import TO_APPROVER
+from core.asking import DECLINED, PARK, TO_APPROVER, put_to_user
 from core.control import Stopped
-from core.tools import Grant, tool
-from model.servers import ModelServerError, api_key, find
+from core.hooks import Deny, Hook, Park
+from core.tools import Grant, Result, tool
+from model.apis.search import SearchError
+from model.servers import ModelServerError
 from web import SETTINGS
+from web.search import available_services, select
 
-# DeepSeek's Search API (https://api-docs.deepseek.com/guides/search)
-SEARCH_PATH = "/v1/tools/search"
 QUERY_CHARS = 128
-# The results the API gives when the call names no count
-API_RESULTS = 10
-# Statuses worth one more try, after RETRY_PAUSE_SECONDS seconds
-RETRIED = {408, 429, 500, 502, 503, 504}
-RETRY_PAUSE_SECONDS = 2.0
+DEFAULT_SEARCH_COUNT = 10
 # The web's limits where no session's limits say (a call made without a
 # session), as the settings declare them: a fetch's size and redirects, a
 # search's results
@@ -78,32 +73,12 @@ def resolve_host(host):
 
 
 class Web:
-    """What a session's web tools reach the network with (web_clients).
-    `search`: the DeepSeek client (its `post`), or None when there's no key;
-    `transport`: httpx2's, for tests; `resolve`: a host's addresses."""
+    """The session server's name and the web tools' network access."""
 
-    def __init__(self, search=None, transport=None, resolve=resolve_host,
-                 pause=time.sleep):
-        self.search = search
+    def __init__(self, transport=None, resolve=resolve_host, *, model_server=None):
+        self.model_server = model_server
         self.transport = transport
         self.resolve = resolve
-        self.pause = pause
-
-
-def web_clients(limits):
-    """What a session's web tools reach the network with: the fetch
-    always; the search where a DeepSeek key exists, whatever the session's
-    model, through DeepSeek's own client (its key stays in the client)."""
-    try:
-        server = find("deepseek")
-        key = api_key(server)
-    except ModelServerError:
-        return Web()
-    # The SDK's own retries are off: the search tries once more itself; each
-    # search sends web_timeout as it stands (post_search)
-    search = openai.OpenAI(base_url=server.url, api_key=key,
-                           timeout=limits["web_timeout"], max_retries=0)
-    return Web(search=search)
 
 
 class Refused(Exception):
@@ -114,117 +89,205 @@ class Refused(Exception):
 
 
 def search_ready(context):
-    net = context.get("web")
-    return net is not None and net.search is not None
+    return context.get("web") is not None
 
 
-def search_describe(limits, context=None):
-    return (
-        "Search the web through DeepSeek's Search API. Each result has its title, "
-        "URL, date, site and a summary of the page. The query takes operators: "
-        "site:example.org (OR between sites), -site:, \"exact phrase\", -term, "
-        "lang:en, after:2025 and before:2026-06-01 (a year or a date). It runs "
-        "outside the sandbox: the sandbox's commands have no network, this tool "
-        "has. Reading the internet with this tool needs no review."
+SEARCH_DESCRIPTION = (
+    "Search the web for source URLs and any available titles or snippets. "
+    "The source URLs can be read with web_fetch. "
+    "The server has network access for this tool. "
+    "Provider-written summaries are labeled. The selected service receives "
+    "the query and result count. A failed lookup reports the service and "
+    "error. A new call can name another available service. Switching away "
+    "from the user's saved service asks them about that lookup."
+)
+
+
+def describe_search_service(limits, context):
+    text = "Optional service name for this lookup. Omit to use the current choice."
+    if not context.get("web"):
+        return text
+    try:
+        services = available_services()
+    except ModelServerError:
+        return text
+    chosen, _ = select(
+        services, context["web"].model_server, limit(limits, "web_search_service"),
     )
+    if chosen:
+        text += f" The current choice is {chosen.name}."
+    if services:
+        text += f" Available services are {', '.join(services)}."
+    return text
 
 
 def search_summary(args):
-    return f'web_search "{args.get("query", "")}"'
+    text = f'web_search "{args.get("query", "")}"'
+    service = args.get("service")
+    return f"{text} via {service}" if service else text
+
+
+def search_arguments_error(query, count=None, *, limits=None):
+    most = limit(limits, "web_search_max_results")
+    if count is not None and (type(count) is not int or not 1 <= count <= most):
+        return f"Search count must be a whole number from 1 to {most}."
+    if not isinstance(query, str) or not query.strip() or len(query) > QUERY_CHARS:
+        return f"Search query must contain 1 to {QUERY_CHARS} characters."
+    return None
+
+
+def search_count(service, count, limits):
+    return min(count or DEFAULT_SEARCH_COUNT, service.api.MAX_RESULTS,
+               limit(limits, "web_search_max_results"))
+
+
+class SearchApproval(Hook):
+    """Bind the selection before sending. A switch from a pin asks the user once."""
+
+    def __init__(self, ask):
+        self._ask = ask
+
+    def approve(self, call):
+        if call.name != web_search.__name__:
+            return None
+        context = call.turn.session.tool_context
+        web, limits = context["web"], context["limits"]
+        query, count = call.args["query"], call.args.get("count")
+        if search_arguments_error(query, count, limits=limits):
+            return None
+        saved = limit(limits, "web_search_service")
+        requested = call.args.get("service")
+        try:
+            chosen, reason = select(available_services(), web.model_server,
+                                    saved, requested)
+        except ModelServerError:
+            chosen, reason = None, "The search service configuration could not be read."
+        if chosen is None:
+            call.notes["web"] = {"error": reason, "service": requested or saved}
+            return None
+        count = search_count(chosen, count, limits)
+        call.notes["web"] = {
+            "service": chosen.name, "count": count,
+            "binding": chosen.binding(query, count),
+        }
+        if saved is None or chosen.name == saved:
+            return None
+        host = urlsplit(chosen.url).netloc
+        about = (f"Send this query and a request for up to {count} results to "
+                 f"{chosen.label} at {host} for this lookup. "
+                 f"The saved search service is {saved}.")
+        call.notes["requires_user"] = True
+        call.notes["requires_choice"] = True
+        if self._ask is PARK:
+            return Park(about, about)
+        if self._ask is None:
+            return Deny("The user needs to approve this search service switch.")
+        if not put_to_user(call, self._ask, about):
+            return Deny(DECLINED)
+        return None
 
 
 @tool(
-    search_describe,
-    optional=("count",),
+    SEARCH_DESCRIPTION,
+    optional=("count", "service"),
     summary=search_summary,
-    # It changes nothing on the machine
     needs_permission=lambda args: False,
     side_by_side=True,
     ready=search_ready,
     query=("string", "What to search for, 1 to 128 characters"),
     count=("integer", lambda limits, context: (
-        f"How many results, 1 to {limit(limits, 'web_search_max_results')}; "
-        f"the API's own default is {API_RESULTS}"
+        f"How many results to request, 1 to {limit(limits, 'web_search_max_results')}. "
+        f"The default is {DEFAULT_SEARCH_COUNT}. A service may cap the count."
     )),
+    service=("string", describe_search_service),
+    fields={
+        "service": ("string", "The search service's name"),
+        "source_urls": ({"type": "array", "items": {"type": "string"}},
+                        "Source URLs returned by the service"),
+    },
 )
-def web_search(query, count=None, web=None, request=None, notes=None,
-               limits=None):
-    """`web`, `request` (the turn's words, sent as ori_question), `notes` and
-    `limits` (the most results, the request's time) come from the session,
-    never the model."""
-    most = limit(limits, "web_search_max_results")
-    whole = isinstance(count, int) and not isinstance(count, bool)
-    if count is not None and (not whole or not 1 <= count <= most):
-        return f"Not searched: count is a whole number from 1 to {most}."
-    if not isinstance(query, str) or not query.strip() or len(query) > QUERY_CHARS:
-        return f"Not searched: the query is 1 to {QUERY_CHARS} characters, not blank."
-    if web is None or web.search is None:
-        return "Not searched: there is no DeepSeek API key."
-    body = {"query": query, "need_content": False}
-    if count is not None:
-        body["count"] = count
-    question = " ".join(str(request or "").split())[:QUERY_CHARS]
-    if question:
-        body["ori_question"] = question
+def web_search(query, count=None, service=None, web=None, notes=None, limits=None,
+               stop=None):
+    """Send a lookup to the service selected for this call."""
+    error = search_arguments_error(query, count, limits=limits)
+    if error:
+        return Result(error, failed=True)
+    if web is None:
+        return Result("Search is unavailable in this session.", failed=True)
+    notes = notes if notes is not None else {}
+    route = notes.setdefault("web", {})
+    if route.get("error"):
+        return search_failed(route["service"], route["error"])
+    saved = limit(limits, "web_search_service")
     try:
-        answer = post_search(web, body, (limits or {}).get("web_timeout"))
-    except openai.APIStatusError as e:
-        why = "the DeepSeek balance has run out" if e.status_code == 402 else e.message
-        code = e.status_code
-        return f"Not searched: DeepSeek's Search API answered HTTP {code} ({why})."
-    except openai.APIError as e:
-        return f"Not searched: DeepSeek's Search API couldn't be reached ({e})."
-    results = answer.get("results") if isinstance(answer, dict) else None
-    if not isinstance(results, list):
-        return "Not searched: DeepSeek's Search API answered without results."
-    if notes is not None:
-        notes["web"] = {"search": True, "billed": bool(results)}
-    if not results:
-        return f'No results for "{query}" from DeepSeek\'s Search API.'
-    lines = [f'{len(results)} results for "{query}" from DeepSeek\'s Search API:']
-    for n, item in enumerate(results, 1):
-        lines.append("")
-        lines.append(f"{n}. {item.get('title') or item.get('url')}")
-        lines.append(f"   {item.get('url')}")
-        when = (item.get("date") or "")[:10]
-        site = site_name(item.get("site_name"))
-        where = " · ".join(part for part in (when, site) if part)
+        services = available_services()
+    except ModelServerError:
+        return search_failed(
+            route.get("service", service or saved),
+            "The search service configuration could not be read.",
+        )
+    if "binding" in route:
+        chosen = services.get(route["service"])
+        if chosen is None or route["binding"] != chosen.binding(query, route["count"]):
+            return search_failed(route["service"],
+                                 "The service or query changed before sending.")
+        count = route["count"]
+    else:
+        chosen, reason = select(services, web.model_server, saved, service)
+        if chosen is None:
+            return search_failed(service or saved, reason)
+        if saved is not None and chosen.name != saved:
+            return search_failed(chosen.name, "This switch needs the user's approval.")
+        count = search_count(chosen, count, limits)
+
+    seconds = limit(limits, "web_timeout")
+    route.update(search=True, service=chosen.name, billed=None)
+
+    def check():
+        if stop is not None and stop.is_set():
+            raise Stopped()
+
+    try:
+        check()
+        answer = run_in_thread(
+            lambda: chosen.api.search(chosen, query, count, seconds, web.transport,
+                                      check),
+            stop, seconds, 0,
+        )
+    except (SearchError, Refused) as error:
+        return search_failed(chosen.name, str(error))
+    route["billed"] = answer.billed
+    return render_search(chosen, answer)
+
+
+def search_failed(service, reason):
+    message = f"Search with {service} failed. {reason}" if service else reason
+    fields = {"service": service, "source_urls": []} if service else {}
+    return Result(message, fields=fields, failed=True)
+
+
+def render_search(service, answer):
+    def redact(text):
+        return text.replace(service.key, "[redacted]") if service.key else text
+
+    sources = [source for source in answer.sources if redact(source.url) == source.url]
+    fields = {"service": service.name, "source_urls": [item.url for item in sources]}
+    if not sources:
+        return Result(f"No results from {service.label}.", fields=fields)
+    lines = [f"{len(sources)} results from {service.label}."]
+    if answer.summary:
+        lines.extend(("", f"Summary written by {service.title}", "", answer.summary))
+    for index, source in enumerate(sources, 1):
+        lines.extend(("", f"{index}. {source.title or source.url}", f"   {source.url}"))
+        where = " · ".join(value for value in (source.date, source.site) if value)
         if where:
             lines.append(f"   {where}")
-        text = item.get("summary") or item.get("snippet")
-        if text:
-            lines.append(f"   {' '.join(str(text).split())}")
-    return "\n".join(lines)
-
-
-def site_name(name):
-    """A site's name; DeepSeek sends some as hex, read back here."""
-    if not isinstance(name, str) or len(name) < 8:
-        return name
-    if not re.fullmatch(r"(?:[0-9a-fA-F]{2})+", name):
-        return name
-    try:
-        text = bytes.fromhex(name).decode("utf-8")
-    except ValueError:
-        return name
-    return text if text.isprintable() else name
-
-
-def post_search(web, body, seconds=None):
-    """One search, and one more try after a busy or failing answer; each
-    request may take `seconds` (None: the client's own timeout)."""
-    options = {"timeout": seconds} if seconds is not None else {}
-    try:
-        return web.search.post(SEARCH_PATH, body=body, cast_to=object,
-                               options=options)
-    except openai.APIStatusError as e:
-        if e.status_code not in RETRIED:
-            raise
-    except (openai.APIConnectionError, openai.APITimeoutError):
-        pass
-    web.pause(RETRY_PAUSE_SECONDS)
-    return web.search.post(SEARCH_PATH, body=body, cast_to=object,
-                           options=options)
+        if source.summary:
+            lines.extend(("   Provider summary",
+                          f"   {' '.join(source.summary.split())}"))
+        elif source.snippet:
+            lines.append(f"   {' '.join(source.snippet.split())}")
+    return Result(redact("\n".join(lines)), fields=fields)
 
 
 # web_fetch

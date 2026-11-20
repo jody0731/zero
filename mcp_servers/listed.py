@@ -48,8 +48,7 @@ import paths
 
 # mcp_servers.toml's format, a line at its top (paths.FILE_FORMAT_KEY)
 FILE_FORMAT = 1
-# A server's name: what its tools' names start with (DeepSeek Harness's
-# form), so the model's tool names stay in the API's characters
+# A server's name prefixes its tools and fits the model API's character set.
 NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 NAME_RULE = "1 to 32 letters, digits, - or _"
 # What an entry may hold, and the kind of each

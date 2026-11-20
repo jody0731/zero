@@ -759,6 +759,8 @@ class Session:
         if history.requires_user(ask):
             if not history.is_user_source(fields.get("source")):
                 raise ValueError("this change needs an answer from the user")
+            if ask.get("notes", {}).get("requires_choice"):
+                fields["yes"] = fields.get("choice") == "yes"
             if fields.get("choice") in ("yes", "no"):
                 fields["decision"] = ("approve" if fields["choice"] == "yes"
                                       else "decline")
@@ -876,8 +878,7 @@ class Session:
     def call_context(self, call):
         """What the call's tool gets besides its arguments: the session's
         tool context, the call's own notes (where a file tool puts what it
-        changed), the turn's words (which a web search sends along), and the
-        turn's stop and steers."""
+        changed), the turn's words, and the turn's stop and steers."""
         context = {**self.tool_context, "notes": call.notes}
         context["request"] = call.turn.question
         if call.turn.control is not None:

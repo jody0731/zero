@@ -115,6 +115,12 @@
       "$ref": "#/$defs/model.server.connect"
     },
     {
+      "$ref": "#/$defs/model.server.key.set"
+    },
+    {
+      "$ref": "#/$defs/model.server.test"
+    },
+    {
       "$ref": "#/$defs/model.server.disconnect"
     },
     {
@@ -3170,7 +3176,7 @@
             "type": "object",
             "additionalProperties": true
           },
-          "description": "name, title, url, key_state, needs_key, user_added, in_catalog, context_window, models"
+          "description": "name, title, url, key_state, needs_key, has_saved_key, model_prefix, user_added, in_catalog, context_window, models"
         },
         "default": {
           "anyOf": [
@@ -3266,7 +3272,7 @@
             "type": "object",
             "additionalProperties": true
           },
-          "description": "id, context_window"
+          "description": "id, context_window, optional context_reported_on_load"
         },
         "unknown_fields": {
           "type": "array",
@@ -3349,6 +3355,147 @@
         },
         "default": {
           "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.server.key.set": {
+      "type": "object",
+      "description": "Save or remove only the selected server's key. A null key removes the saved value. No provider request is made.",
+      "properties": {
+        "message": {
+          "const": "model/server/key/set"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "name": {
+          "type": "string"
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "name",
+        "key"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "model.server.key.set.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "has_saved_key": {
+          "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.server.test": {
+      "type": "object",
+      "description": "Send a short test call to a model on a configured server. The provider may charge for it.",
+      "properties": {
+        "message": {
+          "const": "model/server/test"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "name": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "name",
+        "model"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "model.server.test.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "model": {
+          "type": "string"
         },
         "replayed": {
           "type": "boolean",

@@ -298,8 +298,8 @@ SETTING_NOTES = {
         "the same result. Applies to every session, open ones too, from its "
         "next turn."
     ),
-    "thinking_effort": "Sent to DeepSeek; other servers get none.",
-    "judge_thinking_effort": "Sent to DeepSeek; other servers get none.",
+    "thinking_effort": "Sent in the session model's API format where supported.",
+    "judge_thinking_effort": "Sent in the judge model's API format where supported.",
 }
 # How a switch names what it changed, in a notice
 SWITCHED = {"thinking_effort": "thinking effort", "judge_model": "the judge's model",
@@ -331,13 +331,15 @@ def setting_text(setting, value, default_model=None):
 
 
 def parse_setting(setting, text):
-    """(value, None) from what was typed for a number, or (None, why not).
+    """(value, None) from what was typed, or (None, why not).
     Empty: the setting's default (unset, where it can be)."""
     import settings
 
     text = text.strip()
     if not text:
         return setting.default, None
+    if setting.kind == "string":
+        return text, settings.check(setting, text)
     try:
         value = float(text) if setting.kind == "number" else int(text)
     except ValueError:

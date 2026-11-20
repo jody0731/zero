@@ -5,7 +5,7 @@ from textual.binding import Binding
 from textual.content import Content
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Input, OptionList, Static
+from textual.widgets import Button, Input, OptionList, Static
 
 from apps.tui import keybindings
 from apps.tui.widgets import Plain
@@ -34,17 +34,20 @@ class PromptView(ModalScreen):
 
     BINDINGS = [Binding("escape", "dismiss(None)", show=False)]
 
-    def __init__(self, label, text="", secret=False):
+    def __init__(self, label, text="", secret=False, submit=None):
         super().__init__()
         self.label = label
         self.text = text
         self.secret = secret
+        self.submit = submit
 
     def compose(self):
         with Vertical():
             with VerticalScroll(id="prompt-instructions"):
                 yield Plain(self.label)
             yield Input(value=self.text, id="answer", password=self.secret)
+            if self.submit:
+                yield Button(self.submit, id="submit", variant="primary")
 
     def on_mount(self):
         self.query_one("#answer").focus()
@@ -52,6 +55,11 @@ class PromptView(ModalScreen):
     def on_input_submitted(self, event):
         event.stop()
         self.dismiss(event.value)
+
+    def on_button_pressed(self, event):
+        if event.button.id == "submit":
+            event.stop()
+            self.dismiss(self.query_one("#answer", Input).value)
 
 
 class ChoiceView(ModalScreen):

@@ -33,7 +33,7 @@
     settings: [], models: [], commandIndex: 0, launch: {},
     expandedJobs: new Map(), expandedFamilies: new Map(),
     settingsDraft: new Map(), settingsErrors: new Map(), settingsSaving: false,
-    settingsView: "General", modelLookup: null,
+    settingsView: "General", modelLookup: null, modelServer: null,
     rewindPoints: new Set(), composerDrafts: new Map(), submissions: new Map(),
     jobs: new Map(), settingsDirty: false, features: new Map(), turnStarted: null,
   };
@@ -1473,7 +1473,9 @@
         input.min = setting.minimum;
         if (setting.maximum !== null) input.max = setting.maximum;
       }
-
+      if (setting.kind === "string" && setting.unset_means) {
+        input.placeholder = setting.unset_means;
+      }
     }
     input.value = value === null || value === undefined ? "" : value;
     input.setAttribute("aria-label", setting.label);
@@ -2332,66 +2334,257 @@
     }
   }
 
-  async function modelServers(body) {
+  const modelKeyState = {
+    there: "Saved",
+    missing: "No key saved",
+    environment: "From environment",
+    "none needed": "—",
+  };
+
+  function modelButton(text, pressed) {
+    const button = el("button", null, text);
+    button.type = "button";
+    button.addEventListener("click", pressed);
+    return button;
+  }
+
+  function modelInput(label, type = "text", required = true) {
+    const field = el("label", null, label);
+    const input = el("input");
+    input.type = type;
+    input.required = required;
+    if (type === "password") input.autocomplete = "off";
+    field.append(input);
+    return [field, input];
+  }
+
+  function modelForm(fields, label, submit, close, notice) {
+    const form = el("form", "model-server-form");
+    const save = el("button", "primary", label);
+    save.type = "submit";
+    const status = el("p", "error model-status");
+    status.setAttribute("role", "alert");
+    const buttons = el("div", "model-actions");
+    buttons.append(save, modelButton("Cancel", close));
+    if (notice) form.append(el("p", "sub", notice));
+    form.append(...fields, buttons, status);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (save.disabled) return;
+      save.disabled = true;
+      status.textContent = "";
+      try { await submit(); }
+      catch (error) { status.textContent = error.message; }
+      finally { save.disabled = false; }
+    });
+    return form;
+  }
+
+  function modelKeys(server, editor, refresh, close) {
+    const [field, key] = modelInput("API key", "password");
+    editor.replaceChildren(modelForm([field], "Save", async () => {
+      const value = key.value;
+      await change("model/server/key/set", { name: server.name, key: value });
+      key.value = "";
+      await refresh(`Saved key for ${server.title}.`);
+    }, close ?? (() => editor.replaceChildren())));
+    key.focus();
+  }
+
+  function removeModelKey(server, editor, refresh) {
+    editor.replaceChildren(modelForm([], "Remove saved key", async () => {
+      await change("model/server/key/set", { name: server.name, key: null });
+      await refresh(`Removed saved key for ${server.title}.`);
+    }, () => editor.replaceChildren(), `Remove the saved key for ${server.title}?`));
+  }
+
+  async function showModelNames(server, editor) {
+    const waiting = el("p", "sub", "Requesting the model list…");
+    editor.replaceChildren(waiting);
+    try {
+      const reply = await look("model/server/probe", { name: server.name });
+      if (!waiting.isConnected) return;
+      const list = el("ul", "model-names");
+      for (const model of reply.models) list.append(el("li", null, model.id));
+      editor.replaceChildren(reply.models.length
+        ? list : el("p", "sub", "No models listed."));
+    } catch (error) {
+      if (waiting.isConnected) {
+        editor.replaceChildren(el("p", "error", error.message));
+      }
+    }
+  }
+
+  function modelNameInput(server) {
+    const [field, model] = modelInput("Model name");
+    const known = el("datalist");
+    known.id = "known-models";
+    for (const name of Object.keys(server.models || {})) {
+      const option = el("option");
+      option.value = name;
+      known.append(option);
+    }
+    model.setAttribute("list", known.id);
+    field.append(known);
+    return [field, model];
+  }
+
+  function modelTest(server, editor, status) {
+    const [field, model] = modelNameInput(server);
+    editor.replaceChildren(modelForm([field], "Run test", async () => {
+      const reply = await change("model/server/test", {
+        name: server.name, model: model.value.trim(),
+      });
+      status.textContent = `${reply.model} answered the test.`;
+      editor.replaceChildren();
+    }, () => editor.replaceChildren(), "The provider may charge for the test."));
+    model.focus();
+  }
+
+  function defaultModel(server, editor, refresh) {
+    const [field, model] = modelNameInput(server);
+    editor.replaceChildren(modelForm([field], "Set as default", async () => {
+      const name = model.value.trim();
+      if (!name) throw new Error("Enter the model name.");
+      if (!(server.models?.[name] || server.context_window)) {
+        throw new Error("Connect this model to set its context window.");
+      }
+      const value = (server.model_prefix ?? `${server.name}/`) + name;
+      await change("setting/set", { name: "model", value });
+      const setting = state.settings.find((row) => row.name === "model");
+      if (setting) setting.value = value;
+      state.settingsDraft.delete("model");
+      state.settingsErrors.delete("model");
+      await refresh(`New sessions use ${value}.`);
+    }, () => editor.replaceChildren()));
+    model.focus();
+  }
+
+  function connectModel(server, editor, refresh, close) {
+    const [nameField, name] = modelInput("Server name");
+    const [urlField, url] = modelInput("API URL", "url");
+    const [modelField, model] = modelNameInput(server);
+    const [contextField, tokens] = modelInput("Context window in tokens",
+      "number", false);
+    tokens.min = "1";
+    const [keyField, key] = modelInput("API key", "password", false);
+    const fields = [modelField, contextField];
+    if (!server.name) fields.unshift(nameField, urlField);
+    if (!server.name || server.key_state === "missing") fields.push(keyField);
+    editor.replaceChildren(modelForm(fields, "Test and connect", async () => {
+      const values = {
+        name: server.name || name.value.trim(), model: model.value.trim(),
+      };
+      if (!server.name) values.url = url.value.trim();
+      if (key.value) values.key = key.value;
+      if (tokens.value) values.context_window = Number(tokens.value);
+      const reply = await change("model/server/connect", values);
+      key.value = "";
+      state.modelServer = values.name;
+      state.modelLookup = null;
+      if (reply.default) {
+        const setting = state.settings.find((row) => row.name === "model");
+        if (setting) setting.value = reply.model;
+      }
+      await refresh(`Connected ${reply.model}.`);
+    }, close, "Connecting makes a short test the provider may charge for."));
+    (server.name ? model : name).focus();
+  }
+
+  async function modelServers(body, notice = "") {
     const reply = await look("model/server/list");
     if (state.settingsView !== "Models" || !$("settings-dialog").open) return;
-    body.replaceChildren(el("p", "sub",
-      "Connecting tests a few tokens with the model server, which may charge."));
-    for (const server of [...reply.servers,
-      { name: "", title: "Add a model server", url: "", key_state: "" }]) {
-      const section = el("section");
-      section.append(el("h3", null, server.title || server.name),
-        el("p", "sub", `${server.url} · ${server.key_state}`));
-      const form = el("form", "model-server");
-      const name = el("input");
-      name.placeholder = "Server name";
-      name.setAttribute("aria-label", "Server name");
-      const url = el("input");
-      url.type = "url";
-      url.placeholder = "API URL";
-      url.setAttribute("aria-label", "API URL");
-      if (!server.name) form.append(name, url);
-      const model = el("input");
-      model.placeholder = "Model name";
-      model.setAttribute("aria-label", "Model name");
-      const key = el("input");
-      key.type = "password";
-      key.autocomplete = "off";
-      key.placeholder = "New key (blank keeps the existing key)";
-      key.setAttribute("aria-label", "Model server key");
-      const connect = el("button", null, "Test and connect");
-      connect.type = "submit";
-      const status = el("div", "sub");
-      form.append(model, key, connect, status);
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        connect.disabled = true;
-        try {
-          const fields = { name: server.name || name.value.trim(),
-            model: model.value.trim() };
-          if (!server.name) fields.url = url.value.trim();
-          if (key.value) fields.key = key.value;
-          await change("model/server/connect", fields);
-          key.value = "";
-          state.modelLookup = null;
-          refreshModels();
-          status.textContent = "Connected";
-        } catch (error) { status.textContent = error.message; }
-        finally { connect.disabled = false; }
-      });
-      section.append(form);
-      if (server.name) {
-        const disconnect = el("button", null, "Disconnect");
-        disconnect.addEventListener("click", async () => {
-          if (!confirm(`Remove the saved connection to ${server.name}?`)) return;
-          try {
-            await change("model/server/disconnect", { name: server.name });
-            await openSettings("Models");
-          } catch (error) { status.textContent = error.message; }
-        });
-        section.append(disconnect);
+    const refresh = (status) => modelServers(body, status);
+    draw(notice);
+
+    function draw(message, addKey = false) {
+      const status = el("p", "sub model-status", message);
+      status.setAttribute("role", "status");
+      const defaultText = reply.default ? `New sessions use ${reply.default}.`
+        : "Choose a default model for new sessions.";
+      body.replaceChildren(el("p", "sub model-default", defaultText), status);
+
+      const table = el("table", "model-server-list");
+      const heading = table.createTHead().insertRow();
+      for (const name of ["Model server", "API key", "Actions"]) {
+        const cell = el("th", null, name);
+        cell.scope = "col";
+        heading.append(cell);
       }
-      body.append(section);
+      const rows = table.createTBody();
+      for (const server of reply.servers) {
+        const row = rows.insertRow();
+        row.dataset.modelServer = server.name;
+        row.insertCell().textContent = server.title || server.name;
+        row.insertCell().textContent = modelKeyState[server.key_state] || "—";
+        const missing = server.key_state === "missing";
+        const action = modelButton(missing ? "Add API key" : "Manage", () => {
+          state.modelServer = server.name;
+          draw("", missing);
+        });
+        action.setAttribute("aria-label", `${action.textContent} for ${server.title}`);
+        row.insertCell().append(action);
+      }
+      body.append(table);
+
+      const close = () => {
+        state.modelServer = null;
+        draw("");
+      };
+      const selected = reply.servers.find((row) => row.name === state.modelServer);
+      if (selected) {
+        const panel = el("section", "model-server-panel");
+        const editor = el("div", "model-server-editor");
+        panel.append(el("h3", null, selected.title),
+          el("p", "sub model-server-url", selected.url));
+        if (addKey) {
+          panel.append(editor);
+          body.append(panel);
+          modelKeys(selected, editor, refresh, close);
+        } else {
+          const actions = el("div", "model-actions");
+          const saved = selected.has_saved_key ?? selected.key_state === "there";
+          const usesKey = selected.needs_key || saved
+            || selected.key_state === "environment";
+          if (usesKey) {
+            actions.append(modelButton(saved ? "Replace saved key" : "Add API key",
+              () => modelKeys(selected, editor, refresh)));
+          }
+          if (saved) actions.append(modelButton("Remove saved key",
+            () => removeModelKey(selected, editor, refresh)));
+          actions.append(
+            modelButton("View models", () => showModelNames(selected, editor)),
+            modelButton("Test model", () => modelTest(selected, editor, status)),
+            modelButton("Choose default",
+              () => defaultModel(selected, editor, refresh)),
+            modelButton("Connect a model", () => connectModel(
+              selected, editor, refresh, () => editor.replaceChildren())),
+          );
+          if (selected.user_added) {
+            actions.append(modelButton("Remove server", () => {
+              editor.replaceChildren(modelForm([], "Remove server", async () => {
+                await change("model/server/disconnect", { name: selected.name });
+                state.modelServer = null;
+                state.modelLookup = null;
+                await refresh(`Removed ${selected.title}.`);
+              }, () => editor.replaceChildren(), `Remove ${selected.title}?`));
+            }));
+          }
+          actions.append(modelButton("Close", close));
+          panel.append(actions, editor);
+          body.append(panel);
+          actions.querySelector("button")?.focus();
+        }
+      } else if (state.modelServer === "") {
+        const editor = el("section", "model-server-panel");
+        body.append(editor);
+        connectModel({}, editor, refresh, close);
+      } else {
+        body.append(modelButton("Add model server", () => {
+          state.modelServer = "";
+          draw("");
+        }));
+      }
     }
   }
 
@@ -2440,7 +2633,8 @@
       state.settings = settings.settings;
       const listed = await look("model/server/list").catch(() => ({ servers: [] }));
       state.models = listed.servers.flatMap((server) =>
-        Object.keys(server.models || {}).map((model) => `${server.name}/${model}`));
+        Object.keys(server.models || {}).map((model) =>
+          (server.model_prefix ?? `${server.name}/`) + model));
     } catch (error) {
       $("server-state").textContent = error.message;
       return;

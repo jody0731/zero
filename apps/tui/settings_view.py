@@ -156,7 +156,7 @@ class SettingsView(Scrolled, Screen):
         # A view closed before the answer came has nothing to draw into
         if self.query("#rows"):
             self.draw()
-            self.measure()
+            self.read_features()
 
     def value(self, row):
         if isinstance(row, SessionRow):
@@ -184,13 +184,13 @@ class SettingsView(Scrolled, Screen):
     def on_mount(self):
         self.fetch()
         self.draw()
-        self.measure()
+        self.read_features()
 
     def on_screen_resume(self):
         # Back from another view, where the default may have changed
         self.fetch()
         self.draw()
-        self.measure()
+        self.read_features()
 
     def runs_on(self, row):
         """The model a row's value goes to (its setting's `runs_on`, the
@@ -203,10 +203,8 @@ class SettingsView(Scrolled, Screen):
         return (self.values.get(setting.runs_on)
                 or self.values.get("model"))
 
-    def measure(self):
-        """What the rows' models honour, asked of the server off the screen's
-        thread (a model never measured is measured then: a few calls), each
-        row drawn again when its answer comes."""
+    def read_features(self):
+        """Read stored feature measurements on the background thread."""
         wanted = {self.runs_on(row) for row in self.rows} - {None}
         wanted -= set(self.features)
         if not wanted:
@@ -217,7 +215,7 @@ class SettingsView(Scrolled, Screen):
         def run():
             for model in sorted(wanted):
                 try:
-                    reply = self.zero.connection.features(model)
+                    reply = self.zero.connection.features(model, cached_only=True)
                 except ERRORS:
                     # Nothing shown unavailable: the server couldn't say
                     continue

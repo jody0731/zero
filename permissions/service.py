@@ -63,7 +63,8 @@ class PermissionsService(Service):
                 return chosen_answer(verdict, ask), verdict
             return choice, None
         choice, verdict = picked(ask, payload), None
-        if payload.get("reply_to") == ask["ask"] and choice is None:
+        explicit = ask.get("notes", {}).get("requires_choice")
+        if payload.get("reply_to") == ask["ask"] and choice is None and not explicit:
             verdict = self.consent(sid, ask, payload["text"])
             choice = chosen_answer(verdict, ask)
         path = self.saved_permissions and self.saved_permissions()

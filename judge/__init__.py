@@ -24,7 +24,7 @@ SETTINGS = (
     Setting("judge_silence_seconds", "Limits", "Seconds the judge may stay silent", 300,
             "number"),
     # The ceiling on a verdict's reply, its thinking included: silence alone
-    # never stops a judge that keeps writing (Qwen3.6 wrote 41,840 tokens in
+    # never stops a judge that keeps writing (one model wrote 41,840 tokens in
     # 20 minutes; Ornith's thinking circled to 16,384 twice), and real
     # verdicts take 77-124 tokens, 1,047 at most (8 Nov). Tokens, not
     # seconds: a long view's reading on a slow server counts for nothing.

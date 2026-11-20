@@ -4,8 +4,8 @@ The servers come from two files: ZERO's catalog (catalog.toml beside this
 file: the ones it ships with) and the user's models.toml (paths.py: the
 servers they added, and any line of a shipped one they changed, by naming
 the same server). A model name picks its server by its prefix
-("deepseek/deepseek-flash", "myserver/some-model"); a name without a known
-prefix goes to Ollama ("qwen3.5:9b"). A model's context window is its own
+("myserver/some-model"); a name without a known prefix goes to the catalog's
+server for bare model names. A model's context window is its own
 line, else its server's; a model with neither can't start. A server's line `api`
 names the API its server speaks (apis/), the Chat Completions API when it
 names none. A model's price is its own line, else its server's, else the
@@ -30,14 +30,12 @@ from openai import OpenAI
 import paths
 from core.llm import complete
 from model import features
-from model.apis import APIS, DEFAULT
+from model.apis import APIS, DEFAULT, SEARCH_APIS
 from settings import stamp
 
 CATALOG = Path(__file__).with_name("catalog.toml")
 # Prices a release filled in: {server: {model: [cache hit, miss, output]}}
 PRICES = Path(__file__).with_name("prices.toml")
-# Where a name without a known server's prefix goes
-UNPREFIXED_SERVER = "ollama"
 # A server's lines, and the ones a model may have of its own. context_stop
 # set where the context guard stopped a turn until 0.6.3; read and left
 # alone since, as the line is compact_at_tokens (context/)
@@ -45,8 +43,10 @@ SERVER_FIELDS = {
     "title": str, "url": str, "key_env": str, "api": str,
     "context_window": int, "context_stop": int, "price": list, "models": dict,
     "refuses_overlong_requests": bool,
+    "search_api": str, "search_model": str, "bare_model_names": bool,
+    "max_reasoning_effort": str,
 }
-MODEL_FIELDS = ("context_window", "context_stop", "price")
+MODEL_FIELDS = ("context_window", "context_stop", "price", "max_reasoning_effort")
 # Lines named otherwise before 0.6.2.8, read under their names now
 RENAMED = {"name": "title", "context": "context_window"}
 # Lines a server had before 0.6.2.7: what a model honours is measured now;
@@ -58,7 +58,7 @@ MODELS_FILE_FORMAT = 1
 KEYS_FILE_FORMAT = 1
 # What a keyless server is sent for a key: the client needs one
 NO_KEY = "none"
-# Servers whose root answers no /tokenize (llama.cpp's), by url: asked once
+# Servers whose root answers no /tokenize, by URL
 NO_COUNT = set()
 # Seconds a token count may take; past it, counted by bytes this time
 COUNT_SECONDS = 10
@@ -92,11 +92,12 @@ class ModelServer:
         self.context_window = merged.get("context_window")
         # The API its server speaks (apis/)
         self.api = APIS[entry.get("api", DEFAULT)]
+        self.max_reasoning_effort = merged.get("max_reasoning_effort")
         # None: no key needed
         self.key_env = entry.get("key_env")
         # Whether it refuses a request longer than its context, where a
-        # server may cut one silently (Ollama; llama-server with context
-        # shift): the context's estimate may then learn from its counts
+        # server may cut one silently: the context's estimate may then
+        # learn from its counts
         # (context/room.py). Not known, not assumed
         self.refuses_overlong_requests = entry.get(
             "refuses_overlong_requests", False)
@@ -204,6 +205,8 @@ def check(name, entry):
             return f"[{name}] {field} has the wrong type"
     if entry.get("api", DEFAULT) not in APIS:
         return f"[{name}] api is one of {', '.join(APIS)}"
+    if "search_api" in entry and entry["search_api"] not in SEARCH_APIS:
+        return f"[{name}] search_api is one of {', '.join(SEARCH_APIS)}"
     for model, line in entry.get("models", {}).items():
         if not isinstance(line, dict):
             return f"[{name}.models] {model!r} takes a table of its lines"
@@ -229,20 +232,32 @@ def merge(shipped, mine, where):
         models = {**table[name].get("models", {})}
         for model, line in entry.get("models", {}).items():
             models[model] = {**models.get(model, {}), **line}
-        table[name] = {**table[name], **entry, "models": models}
+        previous = table[name]
+        if entry.get("url", previous["url"]).rstrip("/") != (
+            previous["url"].rstrip("/")
+        ):
+            # A catalog capability describes the endpoint it shipped with.
+            previous = {field: value for field, value in previous.items()
+                        if field not in ("search_api", "search_model")}
+        table[name] = {**previous, **entry, "models": models}
     return table
 
 
-def table():
-    """Every server ZERO can reach now, by name. Raises ModelServerError when
-    the user's models.toml can't be used."""
+def catalog():
+    """The installed catalog, read once."""
     if "shipped" not in CACHE:
         CACHE["shipped"] = load(CATALOG, CATALOG)
+    return CACHE["shipped"]
+
+
+def table():
+    """Every configured model server. Raises when models.toml can't be read."""
+    shipped = catalog()
     path = paths.models_file()
     key = (path, stamp(path))
     if CACHE.get("key") != key:
         found = []
-        CACHE["table"] = merge(CACHE["shipped"], load(path, path, found), path)
+        CACHE["table"] = merge(shipped, load(path, path, found), path)
         CACHE["key"] = key
         CACHE["notes"] = found
         for note in found:
@@ -262,15 +277,26 @@ def find(name):
     return ModelServer(name, entry) if entry else None
 
 
+def bare_server_name():
+    """The catalog server that receives model names without a known prefix."""
+    return next(name for name, entry in catalog().items()
+                if entry.get("bare_model_names"))
+
+
+def model_address(model, entries):
+    """The catalog or configured server name and the model name it receives."""
+    bare = bare_server_name()
+    prefix, _, rest = model.partition("/")
+    if rest and prefix in entries and prefix != bare:
+        return prefix, rest
+    return bare, model
+
+
 def resolve(model):
     """(server, the server's own model name) for a model name."""
-    servers = table()
-    prefix, _, rest = model.partition("/")
-    if rest and prefix in servers and prefix != UNPREFIXED_SERVER:
-        name, served_name = prefix, rest
-    else:
-        name, served_name = UNPREFIXED_SERVER, model
-    server = ModelServer(name, servers[name], served_name)
+    entries = table()
+    name, served_name = model_address(model, entries)
+    server = ModelServer(name, entries[name], served_name)
     if server.context_window is None:
         raise ModelServerError(
             f"no context window for {model}: set context_window under [{name}] (or "
@@ -286,27 +312,37 @@ def key_envs():
     return sorted({e["key_env"] for e in table().values() if "key_env" in e})
 
 
-def api_key(server, keys_file=None):
-    """The server's key: its environment variable, else the keys file;
-    a server that names no variable needs none."""
-    key = os.environ.get(server.key_env) if server.key_env else None
-    if key:
-        return key
-    keys_file = Path(keys_file or paths.keys_file())
+def read_keys(path=None):
+    """The saved key slots in ZERO's home."""
+    path = Path(path or paths.keys_file())
     try:
-        keys = tomllib.loads(keys_file.read_text())
+        return tomllib.loads(path.read_text())
     except FileNotFoundError:
-        keys = {}
-    except (OSError, tomllib.TOMLDecodeError) as e:
-        raise ModelServerError(f"can't read {keys_file}: {e}") from e
-    key = keys.get(server.name, {}).get("api_key")
+        return {}
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        raise ModelServerError(f"can't read {path}") from None
+
+
+def saved_key(name, keys):
+    slot = keys.get(name)
+    key = slot.get("api_key") if isinstance(slot, dict) else None
+    return key if isinstance(key, str) and key else None
+
+
+def environment_key(server):
+    return os.environ.get(server.key_env) if server.key_env else None
+
+
+def api_key(server, keys_file=None):
+    """The server's environment key, then its saved key, or its keyless marker."""
+    key = environment_key(server) or saved_key(server.name, read_keys(keys_file))
     if key:
         return key
     if server.key_env is None:
         return NO_KEY
     raise ModelServerError(
         f"no API key for {server.name}: set {server.key_env}, or put "
-        f"api_key under [{server.name}] in {keys_file} (mode 600)"
+        f"api_key under [{server.name}] in {keys_file or paths.keys_file()} (mode 600)"
     )
 
 
@@ -347,8 +383,8 @@ class Model:
         self._counts = {}
 
     def count_tokens(self, text):
-        """`text`'s tokens as this model's server counts them (llama.cpp's
-        /tokenize at the server's root), or None where it has no count; a
+        """`text`'s tokens as this model's server counts them (/tokenize
+        at the server's root), or None where it has no count; a
         server that doesn't answer is asked no more."""
         if self._scripted:
             count = getattr(self.client, "count_tokens", None)
@@ -415,7 +451,9 @@ class Model:
             self.api, self.client_for(seconds), self.served_name, messages,
             silence=seconds, check=check, on_delta=on_delta,
             tools=schemas,
-            effort=features.thinking_effort_sent(self.name, self.api, self.effort),
+            effort=features.thinking_effort_sent(
+                self.name, self.api, self.effort, self.server.max_reasoning_effort,
+            ),
             max_output_tokens=max_output_tokens,
             **self.progress(), **output,
         )

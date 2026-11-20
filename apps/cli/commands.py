@@ -62,6 +62,8 @@ NO_COMMAND = {
     "session/deliveries": "a browser checks its outstanding submissions on reconnect",
     "session/submit": "session send uses this when addressing an existing session",
     "workspace/list": "folders for a screen's workspace picker",
+    "model/server/key/set": "masked credential settings shared by the apps",
+    "model/server/test": "a separate model test confirmed in the settings apps",
     "session/mark_seen": "a person's read mark, which the full screen sends for what "
                     "it has shown; a caller reads a session with session read",
     "session/user_messages": "session rewind ID, with no SEQ, lists them, the "

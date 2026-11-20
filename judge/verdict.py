@@ -121,7 +121,7 @@ SCHEMA = {
             "decision": {"type": "string", "enum": list(DECISIONS)},
         },
         "required": list(FIELDS),
-        # Strict structured output (OpenAI's) refuses a schema without it
+        # Strict structured output refuses a schema without it.
         "additionalProperties": False,
     },
 }
@@ -197,6 +197,7 @@ class Judge:
         self.model = model
         server, self.served_name = resolve(model)
         self.api = server.api
+        self.max_reasoning_effort = server.max_reasoning_effort
         self.limits = limits
         # Its thinking (judge_thinking_effort); None sends nothing, so the
         # API's default holds
@@ -285,8 +286,9 @@ class Judge:
                 reply = complete(
                     self.api, self.client_for(seconds), self.served_name,
                     messages, silence=seconds, check=check, temperature=0,
-                    effort=features.thinking_effort_sent(self.model, self.api,
-                                                         self.effort),
+                    effort=features.thinking_effort_sent(
+                        self.model, self.api, self.effort, self.max_reasoning_effort,
+                    ),
                     max_output_tokens=ceiling,
                     **features.json_request(self.model, self.api, self.schema),
                     **progress(self.model, self.api),

@@ -83,8 +83,7 @@ def tool(description, /, optional=(), summary=None, ready=None,
     (bash's command, a write's path and its content); by default the raw
     arguments. One that cuts long text for an ask's screen takes `whole`,
     which the judge passes to read it uncut. `ready(context)`: whether a
-    session offers the tool, from what it hands its tools (web_search needs a
-    key); by default always.
+    session offers the tool, from what it hands its tools; by default always.
     `needs_permission(args)`: False for a call that changes nothing on the
     machine (a job's list, a read, a search, a fetch from the internet), which
     auto+ lets run unasked (permissions/approval.py, Permissions); by default

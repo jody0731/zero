@@ -24,7 +24,7 @@ from textual.widgets import Static
 
 import paths
 from apps.tui import controller
-from apps.tui.dialogs import ChoiceView, PromptView
+from apps.tui.dialogs import ChoiceView, PromptView, TextView
 from apps.tui.widgets import ERRORS, Plain
 from client import session_list
 
@@ -35,13 +35,17 @@ OTHER = "another model…"
 # The pick of new sessions' model: its title and its last choice
 PICK = "New sessions' model"
 CONNECT = "Connect a model…"
-KEY_STATE = {"there": "key saved", "none needed": "no key needed",
-             "missing": "needs a key"}
-URL_LABEL = ("Its URL (OpenAI-style servers serve under /v1, as "
-             "http://localhost:8080/v1)")
+KEY_STATE = {"there": "Key saved", "none needed": "No key required",
+             "missing": "Key missing", "environment": "Key from environment"}
+ADD_KEY = "Add API key"
+REPLACE_KEY = "Replace saved key"
+REMOVE_KEY = "Remove saved key"
+VIEW_MODELS = "View models"
+TEST_MODEL = "Test model"
+CHOOSE_DEFAULT = "Choose default"
+URL_LABEL = "API URL, for example http://localhost:8080/v1"
 NO_MODEL_YET = ("ZERO needs a model to talk to. Pick a server and paste its API "
-                "key, or point ZERO at a server of your own (llama.cpp, Ollama, LM "
-                "Studio, vLLM).")
+                "key, or point ZERO at a server of your own.")
 
 
 def name_from(url):
@@ -57,7 +61,7 @@ def name_from(url):
 def connected_servers(listed):
     """The servers of a `servers` reply a model can be picked from: a key
     saved, or one of the user's own that needs none."""
-    return [row for row in listed if row["key_state"] == "there"
+    return [row for row in listed if row["key_state"] in ("there", "environment")
             or (row["user_added"] and row["key_state"] != "missing")]
 
 
@@ -113,15 +117,13 @@ class Connecting:
     """One connect, a step at a time, each a small view; the last the server's
     connect, run off the screen's thread, since a local server may first
     load the model. `row`: a server the server listed; None for one of the
-    user's own, not yet known. `new_key`: ask for its key even where none
-    is needed."""
+    user's own, not yet known."""
 
-    def __init__(self, view, row=None, new_key=False):
+    def __init__(self, view, row=None):
         self.view = view
         self.app = view.app
         self.connection = view.zero.connection
         self.row = row
-        self.new_key = new_key
         self.name = row["name"] if row else None
         self.title = row["title"] if row else "The server"
         # Only a new server's: a known one's stays where it is
@@ -130,11 +132,12 @@ class Connecting:
         self.key = None
         self.model = None
         self.listed = {}
+        self.context_reported_on_load = set()
 
     def start(self):
         if self.row is None:
             self.app.push_screen(PromptView(URL_LABEL), self.url_given)
-        elif self.row["needs_key"] or self.new_key:
+        elif self.row["key_state"] == "missing":
             self.ask_key()
         else:
             self.list_models()
@@ -158,8 +161,8 @@ class Connecting:
         self.ask_key()
 
     def ask_key(self):
-        if self.row and self.row["key_state"] == "there":
-            empty = "keep the saved one"
+        if self.row and self.row["key_state"] in ("there", "environment"):
+            empty = "keep the current key"
         elif self.row and self.row["needs_key"]:
             empty = None
         else:
@@ -175,7 +178,7 @@ class Connecting:
         text = text.strip()
         if text:
             self.key = text
-        elif self.row and self.row["key_state"] == "there":
+        elif self.row and self.row["key_state"] in ("there", "environment"):
             self.key = None
         elif self.row and self.row["needs_key"]:
             self.view.notify(f"{self.title} needs its API key.",
@@ -207,6 +210,9 @@ class Connecting:
             if self.url:
                 self.url = url
         self.listed = {m["id"]: m["context_window"] for m in found}
+        self.context_reported_on_load = {
+            m["id"] for m in found if m.get("context_reported_on_load")
+        }
         named = list(self.row["models"]) if self.row else []
         choices = [*self.listed, *(m for m in named if m not in self.listed),
                    OTHER]
@@ -255,14 +261,12 @@ class Connecting:
         return None
 
     def ask_context_window(self):
-        if self.known_context_window():
+        if self.known_context_window() or self.model in self.context_reported_on_load:
             # The server takes it from the server's list or its table
             self.connect(None)
             return
         self.app.push_screen(
-            PromptView(f"{self.model}'s context window, in tokens (the server "
-                       "doesn't say; its own setting, as llama-server's "
-                       "--ctx-size)"),
+            PromptView(f"{self.model}'s configured context window in tokens"),
             self.context_window_given,
         )
 
@@ -319,7 +323,7 @@ class ServersView(Screen):
             yield Plain(NO_MODEL_YET, id="first")
         yield VerticalScroll(Plain(id="rows"))
         yield Plain(id="preview")
-        yield Plain("↑↓ choose · Enter connect · Esc back", classes="view-keys")
+        yield Plain("↑↓ choose · Enter open · Esc back", classes="view-keys")
 
     def on_mount(self):
         self.fetch()
@@ -383,40 +387,103 @@ class ServersView(Screen):
         if row is None or self.first:
             Connecting(self, row).start()
             return
-        actions = ["Connect a model…"]
-        if row["needs_key"] or row["user_added"]:
-            actions.append("New key…")
-        actions.append("Test")
-        if row["key_state"] == "there" or row["user_added"]:
-            actions.append("Remove")
+        saved = row.get("has_saved_key", row["key_state"] == "there")
+        actions = []
+        if saved or row["needs_key"]:
+            actions.append(REPLACE_KEY if saved else ADD_KEY)
+        if saved:
+            actions.append(REMOVE_KEY)
+        actions.extend((VIEW_MODELS, TEST_MODEL, CHOOSE_DEFAULT, CONNECT))
+        if row["user_added"]:
+            actions.append("Remove server")
         self.app.push_screen(ChoiceView(row["title"], actions),
                              lambda action: self.act(row, action))
 
     def act(self, row, action):
-        if action == "Connect a model…":
-            Connecting(self, row).start()
-        elif action == "New key…":
-            Connecting(self, row, new_key=True).start()
-        elif action == "Test":
-            self.notify(f"Asking {row['title']} for its models…")
-            Connecting(self, row).run_in_background(
-                lambda: self.zero.connection.probe(name=row["name"]),
-                lambda result, error: self.tested(row, result, error),
+        if action in (ADD_KEY, REPLACE_KEY):
+            self.app.push_screen(
+                PromptView(f"{action} for {row['title']}", secret=True, submit="Save"),
+                lambda key: key is not None and self.save_key(row, key),
             )
-        elif action == "Remove":
+        elif action == REMOVE_KEY:
+            self.app.push_screen(
+                ChoiceView(f"Remove the saved key for {row['title']}?",
+                           [REMOVE_KEY, "Cancel"]),
+                lambda answer: answer == REMOVE_KEY and self.save_key(row, None),
+            )
+        elif action == VIEW_MODELS:
+            self.zero.request(
+                lambda: self.zero.connection.probe(name=row["name"]),
+                then=lambda reply: self.show_models(row, reply[1]),
+                failed=self.show_error,
+            )
+        elif action == TEST_MODEL:
+            self.pick_model(
+                row, "Test model. The provider may charge for the test.",
+                lambda model: self.test_model(row, model),
+            )
+        elif action == CHOOSE_DEFAULT:
+            self.pick_model(
+                row, "Choose the default for new sessions",
+                lambda model: self.choose_default(row, model),
+            )
+        elif action == CONNECT:
+            self.app.push_screen(
+                ChoiceView("Connecting makes a short test the provider may charge for.",
+                           [CONNECT, "Cancel"]),
+                lambda answer: answer == CONNECT and Connecting(self, row).start(),
+            )
+        elif action == "Remove server":
             self.app.push_screen(
                 ChoiceView(f"Remove {row['title']}? Its key and your lines "
                            "for it go.", ["Remove", "Keep it"]),
                 lambda answer: answer == "Remove" and self.take_back(row),
             )
 
-    def tested(self, row, result, error):
-        if error is not None:
-            self.notify(str(error), severity="error")
+    def show_error(self, error):
+        self.notify(str(error), severity="error")
+
+    def save_key(self, row, key):
+        def saved(reply):
+            action = "Saved key for" if reply["has_saved_key"] else "Removed key for"
+            self.notify(f"{action} {row['title']}.")
+            self.fetch()
+
+        self.zero.request(
+            lambda: self.zero.connection.set_model_server_key(row["name"], key),
+            then=saved, failed=self.show_error,
+        )
+
+    def show_models(self, row, models):
+        lines = [model["id"] for model in models]
+        self.app.push_screen(TextView(f"Models from {row['title']}",
+                                      "\n".join(lines) or "No models listed."))
+
+    def pick_model(self, row, label, done):
+        def chosen(model):
+            if model == OTHER:
+                self.app.push_screen(
+                    PromptView(label + " Enter the model name."),
+                    lambda text: text and text.strip() and done(text.strip()),
+                )
+            elif model is not None:
+                done(model)
+
+        self.app.push_screen(ChoiceView(label, [*row["models"], OTHER]), chosen)
+
+    def test_model(self, row, model):
+        self.zero.request(
+            lambda: self.zero.connection.test_model(row["name"], model),
+            then=lambda reply: self.notify(f"{reply['model']} answered the test."),
+            failed=self.show_error,
+        )
+
+    def choose_default(self, row, model):
+        if not (row["models"].get(model) or row["context_window"]):
+            self.notify("Connect this model to set its context window.",
+                        severity="warning")
             return
-        _, models = result
-        self.notify(f"{row['title']} answered: {len(models)} models listed, "
-                    "so its URL and key work.")
+        self.make_default(row.get("model_prefix", f"{row['name']}/") + model)
 
     def take_back(self, row):
         self.zero.request(lambda: self.zero.connection.disconnect(row["name"]),
@@ -447,11 +514,6 @@ class ServersView(Screen):
         if self.first:
             self.app.pop_screen()
             self.zero.connected(model)
-        elif not reply["default"]:
-            self.app.push_screen(
-                ChoiceView(f"Use {model} for new sessions?", ["Yes", "No"]),
-                lambda answer: answer == "Yes" and self.make_default(model),
-            )
 
     def make_default(self, model):
         self.zero.set_setting("model", model, then=self.fetch)

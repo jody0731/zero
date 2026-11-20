@@ -13,8 +13,21 @@ reads replies by its contract, whatever the server: what a server doesn't
 honour is the server's, measured and said, never patched.
 """
 
-from model.apis import chat_completions, responses
+from model.apis import (
+    chat_completions,
+    deepseek_search,
+    moonshot_search,
+    responses,
+    tavily_search,
+)
 
 APIS = {"chat_completions": chat_completions, "responses": responses}
 # What a server's entry speaks when it names no API
 DEFAULT = "chat_completions"
+
+# The model server's search capability names the wire contract it implements.
+SEARCH_APIS = {
+    api.NAME: api
+    for api in (deepseek_search, responses.ResponsesSearch, moonshot_search)
+}
+KEYLESS_SEARCH_APIS = (tavily_search,)

@@ -26,7 +26,7 @@ import paths
 class Setting:
     """One setting: its group and label in the settings view (/settings), what
     holds without it, and what it takes. `kind`: "choice" (one of `choices`),
-    "mode", "model", "int" (a whole number, `minimum` or more) or "number" (above
+    "mode", "model", "string", "int" (a number, `minimum` or more) or "number" (above
     0); either at most `maximum`, where it has one (a share in percent, an
     API's own range). `unset_means`: what None means, where a setting can be
     left unset. `shown`:
@@ -119,7 +119,7 @@ def check(setting, value, mode=None):
     # A bool is an int in Python, and never a count of steps or minutes
     if isinstance(value, bool):
         return f"{name} has the wrong type"
-    if setting.kind in ("choice", "mode", "model"):
+    if setting.kind in ("choice", "mode", "model", "string"):
         if not isinstance(value, str) or not value.strip():
             return f"{name} has the wrong type"
         if setting.kind == "choice" and value not in setting.choices:

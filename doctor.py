@@ -81,6 +81,8 @@ def report():
                      else (UNMET, f"{need}: no; {found}"))
     lines.append(home_line())
     lines += [(NOTE, note) for note in assembly.home_file_notes()]
+    search_available, search_status = assembly.search_service_status()
+    lines.append((MET if search_available else NOTE, search_status))
     # The skills a session here would find, as the folder it runs in says
     lines += [(NOTE, note) for note in assembly.skill_notes(Path.cwd())]
     # The MCP servers listed: what ZERO can't use, a command not found

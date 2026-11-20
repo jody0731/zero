@@ -13,12 +13,19 @@
 # written here only where that list's differs from the server's own. The
 # facts are from the servers' docs and models.dev; DeepSeek's and Ollama's
 # are tried.
+#
+# search_api names the separate lookup contract, with search_model where that
+# API runs an isolated model request. The user can choose a search service
+# by its model server name. A different server URL needs its own declaration.
+# bare_model_names marks the server for model names without a server prefix.
+# max_reasoning_effort overrides the wire value that the UI calls "max".
 
 [deepseek]
 title = "DeepSeek"
 url = "https://api.deepseek.com"
 key_env = "DEEPSEEK_API_KEY"
 api = "responses"
+search_api = "deepseek_search"
 context_window = 1_000_000
 # Tried: 1.78M tokens came back 400, "maximum context length is 1048576"
 refuses_overlong_requests = true
@@ -31,6 +38,7 @@ refuses_overlong_requests = true
 [ollama]
 title = "Ollama (on this computer)"
 url = "http://localhost:11434/v1"
+bare_model_names = true
 # No window: it is the server's own setting (OLLAMA_CONTEXT_LENGTH), so the
 # user's to give in models.toml
 
@@ -38,13 +46,15 @@ url = "http://localhost:11434/v1"
 title = "OpenAI"
 url = "https://api.openai.com/v1"
 key_env = "OPENAI_API_KEY"
+search_api = "responses_search"
+search_model = "gpt-5.4-mini"
 # Its docs: context_length_exceeded
 refuses_overlong_requests = true
 
 [openai.models]
 "gpt-5.6" = { context_window = 1_050_000 }
 "gpt-5.6-luna" = { context_window = 1_050_000 }
-"gpt-5.4-mini" = { context_window = 400_000 }
+"gpt-5.4-mini" = { context_window = 400_000, max_reasoning_effort = "xhigh" }
 
 [google]
 title = "Google Gemini"
@@ -69,6 +79,7 @@ key_env = "DASHSCOPE_API_KEY"
 title = "Kimi (Moonshot AI, China)"
 url = "https://api.moonshot.cn/v1"
 key_env = "MOONSHOT_API_KEY"
+search_api = "moonshot_search"
 
 [kimi.models]
 "kimi-k3.1-pro" = { context_window = 1_048_576 }

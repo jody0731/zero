@@ -66,6 +66,7 @@ WAKE_LOOK_SECONDS = 2.0
 # client's default
 MESSAGE_SECONDS = {"model/features": FEATURES_WAIT_SECONDS,
                    "model/server/connect": CONNECT_WAIT_SECONDS,
+                   "model/server/test": CONNECT_WAIT_SECONDS,
                    "mcp/add": CONNECT_WAIT_SECONDS}
 # What every response carries: the page loads only its own files, runs no
 # inline script, is framed by no one, and sends no referrer

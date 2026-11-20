@@ -54,7 +54,7 @@ def request(model, messages, *, tools=None, effort=None, json_schema=None,
     if tools:
         fields["tools"] = tools
     if effort is not None:
-        fields["reasoning_effort"] = EFFORTS[effort]
+        fields["reasoning_effort"] = EFFORTS.get(effort, effort)
     if json_schema is not None:
         fields["response_format"] = {
             "type": "json_schema",
@@ -80,6 +80,17 @@ def open_stream(client, model, messages, **standard):
         "/chat/completions", body=body, cast_to=ChatCompletion,
         stream=True, stream_cls=Stream[ChatCompletionChunk],
     )
+
+
+def runtime_context_window(data):
+    """The effective window and whether loading can reveal it."""
+    meta = data.get("meta")
+    window = meta.get("n_ctx") if isinstance(meta, dict) else None
+    if type(window) is int and window > 0:
+        return window, True
+    # The router can list the model's trained length before it is loaded.
+    # That value can exceed the instance's configured window.
+    return None, data.get("owned_by") == "llamacpp"
 
 
 def alive(chunk):

@@ -14,10 +14,21 @@ The prepared JSON goes through the SDK's public post method; its transport
 and typed event parser remain the SDK's, without a second request-type walk.
 """
 
+import json
+
+import openai
 from openai import Stream
 from openai.types.responses import Response, ResponseStreamEvent
 
-from core.llm import CutShort
+from core.llm import CutShort, NoReply, complete
+from model.apis.search import (
+    SearchError,
+    SearchResponse,
+    Source,
+    client,
+    http_error,
+    is_http_url,
+)
 
 # Its name in a server's entry (the line `api`), and in words
 NAME = "responses"
@@ -34,6 +45,8 @@ EFFORTS = {"off": "none", "low": "low", "high": "high", "max": "max"}
 # Why a response is incomplete, in ZERO's words (core/llm.py, Draft); any
 # other reason is a reply that didn't complete
 INCOMPLETE = {"max_output_tokens": "length", "content_filter": "content_filter"}
+# The provider's hosted tool type, part of the Responses wire format.
+WEB_SEARCH_TYPE = "web_search"
 
 
 def items(messages):
@@ -94,7 +107,7 @@ def request(model, messages, *, tools=None, effort=None, json_schema=None,
     if tools:
         fields["tools"] = [tool(schema) for schema in tools]
     if effort is not None:
-        fields["reasoning"] = {"effort": EFFORTS[effort]}
+        fields["reasoning"] = {"effort": EFFORTS.get(effort, effort)}
     if json_schema is not None:
         fields["text"] = {"format": {
             "type": "json_schema", "name": json_schema["name"],
@@ -111,8 +124,12 @@ def request(model, messages, *, tools=None, effort=None, json_schema=None,
 
 def open_stream(client, model, messages, **standard):
     """Send prepared JSON; the SDK handles HTTP and parses streamed events."""
+    return stream_response(client, request(model, messages, **standard))
+
+
+def stream_response(client, body):
     return client.post(
-        "/responses", body=request(model, messages, **standard),
+        "/responses", body=body,
         cast_to=Response, stream=True, stream_cls=Stream[ResponseStreamEvent],
     )
 
@@ -171,3 +188,97 @@ def fold(draft, event):
     if kind == "error":
         raise CutShort(f"the response failed: {event.message}")
     return False
+
+
+class ResponsesSearch:
+    """One isolated Responses request with a hosted web search."""
+
+    NAME = "responses_search"
+    MAX_RESULTS = 50
+    REQUIRES_MODEL = True
+
+    def __init__(self, query, count):
+        self.query = query
+        self.count = count
+        self.response = None
+
+    @staticmethod
+    def endpoint(base_url):
+        return base_url.rstrip("/") + "/responses"
+
+    def open_stream(self, sdk, model, messages):
+        return stream_response(sdk, {
+            "model": model,
+            "input": json.dumps(
+                {"query": self.query, "count": self.count}, ensure_ascii=False,
+            ),
+            "instructions": (
+                "Search the web for the query. Return up to the requested count "
+                "of relevant sources."
+            ),
+            "tools": [{"type": WEB_SEARCH_TYPE, "search_context_size": "low"}],
+            "tool_choice": {"type": WEB_SEARCH_TYPE},
+            "max_tool_calls": 1,
+            "parallel_tool_calls": False,
+            "include": ["web_search_call.action.sources"],
+            "max_output_tokens": 512,
+            "store": False,
+            "stream": True,
+        })
+
+    def fold(self, draft, event):
+        if event.type in ("response.completed", "response.incomplete"):
+            self.response = event.response
+        if event.type.startswith("response.web_search_call."):
+            return True
+        return fold(draft, event)
+
+    @classmethod
+    def search(cls, service, query, count, seconds, transport, check):
+        lookup = cls(query, count)
+        try:
+            with client(seconds, transport) as http:
+                sdk = openai.OpenAI(
+                    api_key=service.key,
+                    base_url=service.url.removesuffix("/responses"),
+                    http_client=http, max_retries=0, timeout=seconds,
+                )
+                check()
+                reply = complete(
+                    lookup, sdk, service.model, [], silence=seconds, check=check,
+                )
+        except openai.APIStatusError as error:
+            raise http_error(error.status_code) from None
+        except (NoReply, openai.APITimeoutError):
+            raise SearchError(
+                f"The search response gave no data for {seconds:g} s."
+            ) from None
+        except openai.APIConnectionError:
+            raise SearchError("The connection to the search service failed.") \
+                from None
+        except (CutShort, openai.APIError):
+            raise SearchError("The service did not complete its search response.") \
+                from None
+        return lookup.sources(reply.content)
+
+    def sources(self, summary):
+        output = getattr(self.response, "output", ())
+        calls = [item for item in output if item.type == "web_search_call"]
+        if not any(call.status == "completed" for call in calls):
+            raise SearchError("The response did not include a completed search.")
+        found = {}
+        for item in output:
+            if item.type == "message":
+                for part in item.content:
+                    for citation in getattr(part, "annotations", ()):
+                        if citation.type == "url_citation" and is_http_url(
+                            citation.url
+                        ):
+                            found[citation.url] = Source(citation.url, citation.title)
+        for call in calls:
+            action = getattr(call, "action", None)
+            for source in getattr(action, "sources", None) or ():
+                if is_http_url(source.url):
+                    found.setdefault(source.url, Source(source.url))
+        sources = list(found.values())[:self.count]
+        return SearchResponse(sources, (summary or "") if sources else "")

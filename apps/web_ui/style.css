@@ -320,7 +320,6 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 #settings-tabs { display: flex; gap: 8px; margin: 12px 0; }
 .setting-row { border-bottom: 1px solid var(--line); padding: 12px 0; }
 .setting-row input, .setting-row select { display: block; width: 100%; }
-.model-server { display: grid; gap: 8px; }
 @media (max-width: 760px) {
   .settings-dialog { width: 100vw; max-width: none; height: 100dvh; margin: 0; }
 }
@@ -370,7 +369,39 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 .setting-error { display: block; margin-top: 6px; }
 .setting-error[hidden] { display: none; }
 #settings-body > section { border: 1px solid var(--line); padding: 12px; }
-.model-server { padding: 0; }
+.model-default { margin: 8px 0 12px; }
+.model-server-list {
+  width: 100%; border-collapse: collapse; table-layout: auto;
+  margin-bottom: 12px;
+}
+.model-server-list th, .model-server-list td {
+  text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+}
+.model-server-list th { color: var(--text-2); font-size: 12px; font-weight: 600; }
+.model-server-list th:first-child, .model-server-list td:first-child {
+  padding-left: 0; overflow-wrap: anywhere;
+}
+.model-server-list th:last-child, .model-server-list td:last-child {
+  width: 1%; padding-right: 0; white-space: nowrap;
+}
+.model-server-list td:nth-child(2) { color: var(--text-2); }
+.model-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-server-panel { margin-top: 16px; }
+.model-server-panel h3 { margin: 0; }
+.model-server-url { margin: 4px 0 12px; overflow-wrap: anywhere; }
+.model-server-form { display: grid; gap: 10px; max-width: 480px; }
+.model-server-form p { margin: 0; }
+.model-server-form label { display: grid; gap: 4px; }
+.model-server-form input {
+  width: 100%; min-width: 0; padding: 7px 8px;
+  border: 1px solid var(--line); background: var(--panel);
+}
+.model-server-editor:not(:empty) { margin-top: 12px; }
+.model-status:empty { display: none; }
+.model-names { max-height: 240px; overflow: auto; }
+@media (max-width: 450px) {
+  .model-server-list th, .model-server-list td { padding-inline: 5px; }
+}
 .folder-dialog { padding: 16px; max-height: 85dvh; }
 .folder-dialog h2 { margin: 0 0 12px; }
 .folder-navigation, .recent-folders {

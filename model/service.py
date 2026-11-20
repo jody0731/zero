@@ -11,10 +11,8 @@ face's steps, so a plain command sends the same. Only `model/list` and
 they send a key, change the user's files or call a model.
 
 A server is reachable when it needs no key or its key is there (servers.py);
-the others aren't asked. Each is asked through the OpenAI APIs'
-standard /v1/models, Ollama and llama-server alike, all at once, each for a
-few seconds at most. A model is listed by the name a session takes:
-"myserver/some-model", or a bare name for Ollama's.
+the others aren't asked. Each is asked through /v1/models in parallel, each
+for a few seconds at most. A model is listed by the name a session takes.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -50,6 +48,8 @@ class ModelService(Service):
                 "model/features": self.features_message,
                 "model/server/list": self.servers_message,
                 "model/server/probe": self.probe_message,
+                "model/server/key/set": self.set_key_message,
+                "model/server/test": self.test_message,
                 "model/server/connect": self.connect_message,
                 "model/server/disconnect": self.disconnect_message}
 
@@ -99,6 +99,23 @@ class ModelService(Service):
             return {"ok": True, **connect.probe_request(request)}
         except (connect.ConnectError, servers.ModelServerError) as e:
             return {"ok": False, "error": str(e)}
+
+    def set_key_message(self, request):
+        if "key" not in request:
+            return {"ok": False, "error": "Supply a key or choose to remove it."}
+        try:
+            connect.set_key(request.get("name"), request["key"])
+        except (connect.ConnectError, servers.ModelServerError) as error:
+            return {"ok": False, "error": str(error)}
+        except OSError:
+            return {"ok": False, "error": "ZERO could not write the saved key."}
+        return {"ok": True, "has_saved_key": request["key"] is not None}
+
+    def test_message(self, request):
+        try:
+            return {"ok": True, "model": connect.test_request(request)}
+        except (connect.ConnectError, servers.ModelServerError) as error:
+            return {"ok": False, "error": str(error)}
 
     def connect_message(self, request):
         try:
@@ -159,6 +176,5 @@ def server_row(server, key):
         # other servers still list
         row["error"] = f"{type(e).__name__}: {e}"[:300]
         return row
-    prefix = "" if server.name == servers.UNPREFIXED_SERVER else f"{server.name}/"
-    row["models"] = [prefix + name for name in found]
+    row["models"] = [connect.full_name(server.name, model) for model in found]
     return row

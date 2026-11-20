@@ -2,7 +2,7 @@
 
 A call's size is known after it: the server counts the prompt's tokens.
 What came since (the reply, the results, the user's next message) is
-counted by the server where it can (llama.cpp's /tokenize). Else, where the
+counted by the server where it can (/tokenize). Else, where the
 server refuses a request longer than its context, it is estimated at the
 bytes a token the session's own counted steps show (bytes_a_token): a guess
 low there is caught by the refusal, one compaction and the call again.

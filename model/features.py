@@ -6,14 +6,14 @@ small request whose effect shows: thinking off (no reasoning comes back),
 thinking on (reasoning comes back), strict JSON (a reply that must fit a
 schema a greeting never would), JSON mode (a JSON object comes back; a
 model asked for JSON may give one anyway, so only a refusal or prose shows
-it missing) and prompt progress (llama.cpp's progress chunks come back). A
+it missing) and progress chunks while the server reads the prompt. A
 server that refuses the field (400) doesn't honour it.
 
 The results are kept per model in ZERO's state (paths.model_features_file),
 with the API they were measured on: a server switched to another API is
 measured again. A model never measured is taken to honour all of its API's
 features, so ZERO sends the standard field: unmeasured is never patched
-around. Prompt progress is no standard field but llama.cpp's own, so it goes
+around. Prompt progress is an extension, so it goes
 only to a model measured to honour it. Measured when a face asks for a model's features and none are kept,
 and on its "Test" (model/service.py, `model/features`).
 """
@@ -70,11 +70,12 @@ def for_thinking_effort(effort):
     return THINKING_EFFORT_FEATURES.get(effort)
 
 
-def thinking_effort_sent(model, api, effort):
-    """The effort to send: the one chosen, unless the model is measured not
-    to honour it (then none: the chosen one is kept, not sent)."""
+def thinking_effort_sent(model, api, effort, max_reasoning_effort=None):
+    """The supported choice as accepted on the model's API."""
     if honoured(model, api, for_thinking_effort(effort)) is False:
         return None
+    if effort == "max" and max_reasoning_effort:
+        return max_reasoning_effort
     return effort
 
 

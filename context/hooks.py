@@ -25,9 +25,7 @@ from core import history, tools
 from core.hooks import Hook, Retry
 from core.llm import MODEL_ERRORS
 
-# What a server says when a request is longer than its context: DeepSeek's
-# and OpenAI's ("maximum context length"), llama-server's ("exceeds the
-# available context size"), OpenAI's code
+# Error phrases and codes for a request that exceeds the server's context.
 TOO_LONG = re.compile(
     r"context.{0,40}(length|size|window)|exceeds?.{0,40}context|too long|"
     r"context_length_exceeded|exceed_context_size",

@@ -788,8 +788,8 @@ MESSAGES = {
         "default model and its server, and why a session on it couldn't "
         "start (null: it can).",
         reply={"servers": open_rows("name, title, url, key_state, needs_key, "
-                                    "user_added, in_catalog, context_window, "
-                                    "models"),
+                                    "has_saved_key, model_prefix, user_added, "
+                                    "in_catalog, context_window, models"),
                "default": maybe(STRING),
                "default_server": {**maybe(STRING), "description": "the server "
                                   "the default model goes to"},
@@ -799,7 +799,9 @@ MESSAGES = {
         "A server's models, for a pick list. A typed url takes the typed key "
         "or none; a name alone, its own url and stored key.",
         {"name": STRING, "url": STRING, "key": STRING},
-        reply={"url": STRING, "models": open_rows("id, context_window")},
+        reply={"url": STRING, "models": open_rows(
+            "id, context_window, optional context_reported_on_load",
+        )},
     ),
     "model/server/connect": message(
         "A server's model tested with a call of a few tokens, then saved: "
@@ -812,6 +814,18 @@ MESSAGES = {
         required=("name", "model"),
         reply={"model": STRING, "default": BOOLEAN},
         changes=True,
+    ),
+    "model/server/key/set": message(
+        "Save or remove only the selected server's key. A null key removes "
+        "the saved value. No provider request is made.",
+        {"name": STRING, "key": maybe(STRING)}, required=("name", "key"),
+        reply={"has_saved_key": BOOLEAN}, changes=True,
+    ),
+    "model/server/test": message(
+        "Send a short test call to a model on a configured server. The "
+        "provider may charge for it.",
+        {"name": STRING, "model": STRING}, required=("name", "model"),
+        reply={"model": STRING}, changes=True,
     ),
     "model/server/disconnect": message(
         "A server's key and the user's lines for it taken out.",

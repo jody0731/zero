@@ -2,12 +2,12 @@
 tokens, and the server, its key and the user's default saved (model/service.py's
 messages).
 
-A server is asked for its models at the OpenAI APIs' standard door,
-/v1/models (with each one's context window where the server says: vLLM's
-max_model_len, LM Studio's and OpenRouter's context_length), then for as
+A server is asked for its models at /v1/models, including reported context
+windows. The connection then asks for as
 few tokens as its API allows from the chosen model, in the API its entry
 names (apis/; a server of the user's own speaks the Chat Completions API).
 A server that lists nothing (a 404 there) is proven by the call alone.
+An API that reports a window after loading is listed again after the test.
 Nothing is saved until the call answers.
 
 What is saved: the key in keys.toml under the server's name (mode 600); in
@@ -27,7 +27,7 @@ from openai import OpenAI
 import paths
 from core.llm import complete
 from model import servers
-from model.apis import APIS, DEFAULT
+from model.apis import APIS, DEFAULT, chat_completions
 from settings import sections
 
 # What a server's name may be: what a model's name starts with
@@ -58,8 +58,8 @@ def error_text(error, key):
 
 def listing(url, key):
     """The server's models: [{"id", "context_window"}], context_window None where the
-    server doesn't say. ConnectError when it can't be asked; NotFound
-    (openai's) passes, for the caller to judge."""
+    server doesn't say. ConnectError when it can't be asked. NotFound
+    passes, for the caller to judge."""
     client = OpenAI(base_url=url, api_key=key, timeout=LIST_SECONDS,
                     max_retries=0)
     try:
@@ -71,9 +71,14 @@ def listing(url, key):
     found = []
     for item in items:
         data = item.model_dump()
-        window = next((data[f] for f in CONTEXT_WINDOW_FIELDS
-                       if isinstance(data.get(f), int)), None)
-        found.append({"id": item.id, "context_window": window})
+        window, loads_window = chat_completions.runtime_context_window(data)
+        if not loads_window:
+            window = next((data[f] for f in CONTEXT_WINDOW_FIELDS
+                           if type(data.get(f)) is int and data[f] > 0), None)
+        row = {"id": item.id, "context_window": window}
+        if loads_window:
+            row["context_reported_on_load"] = True
+        found.append(row)
     return found
 
 
@@ -90,8 +95,8 @@ def probe(url, key):
             except openai.NotFoundError:
                 pass
         raise ConnectError(
-            f"{url} has no /models: OpenAI-style servers usually serve "
-            f"under /v1 ({error_text(e, key)})"
+            f"{url} has no /models. The usual API prefix is /v1 "
+            f"({error_text(e, key)})."
         ) from e
 
 
@@ -149,8 +154,8 @@ HEADER = re.compile(r'^\[\s*("(?:[^"\\]|\\.)*"|[^\]#]*?)\s*\]\s*(?:#.*)?$')
 
 
 def table_name(header):
-    """The table a header line opens (`[deepseek] # mine`, `["deepseek"]`,
-    `[deepseek.models]`), or None for no header."""
+    """The table a header line opens (`[server] # mine`, `["server"]`,
+    `[server.models]`), or None for no header."""
     match = HEADER.match((header or "").strip())
     if not match:
         return None
@@ -210,6 +215,19 @@ def save_key(name, key, path=None):
         paths.write_whole(path, text, mode=0o600)
 
 
+def set_key(name, key):
+    """Change just the saved credential for a configured server."""
+    if not isinstance(name, str) or not NAME.fullmatch(name) or not servers.find(name):
+        raise ConnectError("Choose a configured model server.")
+    if key is not None:
+        if not isinstance(key, str) or not key.strip():
+            raise ConnectError("Enter an API key to save.")
+        key = key.strip()
+        if any(character.isspace() or not character.isprintable() for character in key):
+            raise ConnectError("An API key is one line without spaces.")
+    save_key(name, key)
+
+
 def save_server(name, lines, path=None):
     """The server's table in models.toml; None takes it out."""
     path = Path(path or paths.models_file())
@@ -235,8 +253,8 @@ def catalog():
 
 
 def full_name(name, model):
-    """The name a session takes: bare for Ollama's models."""
-    return model if name == servers.UNPREFIXED_SERVER else f"{name}/{model}"
+    """The name a session takes."""
+    return model if name == servers.bare_server_name() else f"{name}/{model}"
 
 
 def reach(request):
@@ -282,6 +300,19 @@ def probe_request(request):
     return {"url": url, "models": models}
 
 
+def test_request(request):
+    """Test one model with the saved connection and leave files alone."""
+    name, server, url, key = reach({"name": request.get("name")})
+    model = request.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ConnectError("Enter the model's name.")
+    model = model.strip().removeprefix(f"{name}/")
+    if not model:
+        raise ConnectError("Enter the model's name.")
+    test_call(url, key, model, server.api)
+    return full_name(name, model)
+
+
 def context_window_of(entry, model):
     """The context window the table already gives the model, or None."""
     if not entry:
@@ -313,17 +344,29 @@ def connect(request):
         listed = []
     table = servers.table()
     entry = table.get(name)
-    reported = next((m["context_window"] for m in listed if m["id"] == model),
-                    None)
+    reported = next((row for row in listed if row["id"] == model), {})
     current = context_window_of(entry, model)
-    context_window = context_window or reported or current
-    if context_window is None:
-        raise ConnectError(
-            f"no context window for {model}: the server doesn't say, so give "
-            "it (tokens)"
-        )
+    known_window = context_window or reported.get("context_window") or current
+    loads_window = reported.get("context_reported_on_load", False)
+    missing_window = (f"no context window for {model}. Give the context window "
+                      "in tokens.")
+    if known_window is None and not loads_window:
+        raise ConnectError(missing_window)
     api = APIS[(entry or {}).get("api", DEFAULT)]
     test_call(url, key, model, api)
+    if loads_window:
+        try:
+            fresh = listing(url, key)
+        except (ConnectError, openai.NotFoundError):
+            fresh = []
+        reported_window = next(
+            (row["context_window"] for row in fresh if row["id"] == model
+             and row.get("context_reported_on_load")), None,
+        )
+        if reported_window:
+            known_window = context_window or reported_window
+    if known_window is None:
+        raise ConnectError(missing_window)
     lines = own_lines(name)
     before = dict(lines)
     shipped = catalog().get(name)
@@ -334,14 +377,14 @@ def connect(request):
                  **rest}
     elif url != shipped["url"] or "url" in lines:
         lines["url"] = url
-    if context_window != current:
-        if not lines.get("context_window") and not (
+    if known_window != current:
+        if not loads_window and not lines.get("context_window") and not (
             (shipped or {}).get("context_window")
         ):
-            lines["context_window"] = context_window
+            lines["context_window"] = known_window
         else:
             models = {**lines.get("models", {})}
-            models[model] = {**models.get(model, {}), "context_window": context_window}
+            models[model] = {**models.get(model, {}), "context_window": known_window}
             lines["models"] = models
     if request.get("key") is not None:
         typed = request["key"].strip()
@@ -368,7 +411,7 @@ def server_of(model):
         return servers.resolve(model)[0].name
     except (servers.ModelServerError, KeyError):
         prefix, _, rest = model.partition("/")
-        return prefix if rest else servers.UNPREFIXED_SERVER
+        return prefix if rest else servers.bare_server_name()
 
 
 def not_ready_reason(model):
@@ -390,17 +433,24 @@ def rows():
     table = servers.table()
     shipped = catalog()
     mine = servers.load(paths.models_file(), paths.models_file())
+    try:
+        keys = servers.read_keys()
+    except servers.ModelServerError:
+        keys = {}
     listed = []
     for name, entry in table.items():
         server = servers.ModelServer(name, entry)
-        try:
-            got = servers.api_key(server)
-            key = "none needed" if got == servers.NO_KEY else "there"
-        except servers.ModelServerError:
-            key = "missing"
+        has_saved_key = servers.saved_key(name, keys) is not None
+        key = "none needed" if server.key_env is None else "missing"
+        if has_saved_key:
+            key = "there"
+        if servers.environment_key(server):
+            key = "environment"
         listed.append({
             "name": name, "title": server.title, "url": server.url,
             "key_state": key, "needs_key": server.key_env is not None,
+            "has_saved_key": has_saved_key,
+            "model_prefix": full_name(name, ""),
             "user_added": name in mine, "in_catalog": name in shipped,
             "context_window": server.context_window,
             # Each model the table names, with the window it would take

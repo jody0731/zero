@@ -20,8 +20,7 @@ SETTINGS = (
     # Codex's, OpenCode's and OpenClaw's 30 s to start
     Setting("mcp_start_seconds", "Limits",
             "Seconds an MCP server may take to start", 30, "number"),
-    # DeepSeek Harness's, OpenClaw's and Pi's 60 s a call; an entry's
-    # call_seconds wins for its server
+    # An entry's call_seconds wins for its server.
     Setting("mcp_call_seconds", "Limits",
             "Seconds an MCP server's tool may take to answer", 60, "number"),
 )

@@ -3,6 +3,22 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.8
+
+- Save, replace or remove a model-server key in the browser or terminal
+  Models settings. Key changes make zero provider requests. Viewing models,
+  testing a model and choosing the default are separate actions.
+- Automatic web search uses the session's search-capable model server first,
+  then another configured search key, then free keyless search. You can
+  choose a service in Settings. One lookup sends the query and result count
+  to one service. Switching from your saved choice asks for approval.
+- Search results carry source URLs and identify provider-written summaries.
+  A failed lookup names the service and reports the error. `zero doctor` shows
+  which service new sessions would use.
+- Connection tests read the local server's effective context window after
+  the model loads. Session and judge thinking efforts are sent independently
+  in their models' API formats.
+
 ## 0.7.7.4.13
 
 - Shortened the core and tool instructions. A waiting turn keeps its saved

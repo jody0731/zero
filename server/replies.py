@@ -15,6 +15,7 @@ ask's answers with their words (`choice_labels`). A component's own rows
 import json
 
 from core import asking, history, public_reply, tools
+from core.llm import without_provider_state
 
 
 def ask_row(ask):
@@ -85,6 +86,8 @@ def record(record):
         name = history.sender_name(details["sender"], details.get("sender_session"))
         record = {**record, "sender_name": name}
     kind = record.get("type")
+    if kind == "assistant" and "provider_state" in record.get("message", {}):
+        record = {**record, "message": without_provider_state(record["message"])}
     if "reply" not in record:
         if kind == "turn_end" and isinstance(record.get("answer"), str):
             record = {**record, "reply": public_reply.sections(record["answer"])}

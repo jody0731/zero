@@ -5,8 +5,9 @@ ZERO keeps no state on the server (`store` false): every request carries the
 whole conversation, as typed items. ZERO's messages (the Chat Completions
 API's shape, core/llm.py) become them here: the first system message the
 request's `instructions`; a message each turn of text; an assistant turn's
-thinking a `reasoning` item of plain text, its calls `function_call` items,
-and each result a `function_call_output`, paired by `call_id`. Its stream is
+thinking an exact provider item or a legacy plain-text item, its calls
+`function_call` items, and each result a `function_call_output` paired by
+`call_id`. Its stream is
 typed events: deltas of text, reasoning and a call's arguments, each output
 item whole when it is done, then the response completed, incomplete (the
 output limit, or another reason) or failed, with its usage.
@@ -49,7 +50,46 @@ INCOMPLETE = {"max_output_tokens": "length", "content_filter": "content_filter"}
 WEB_SEARCH_TYPE = "web_search"
 
 
-def items(messages):
+def response_items(message):
+    """Completed provider items that still match the saved assistant message."""
+    stored = (message.get("provider_state") or {}).get("items") or ()
+    if not stored:
+        return []
+    calls = {call["id"]: call["function"] for call in message.get("tool_calls", ())}
+    native_calls = {item["call_id"]: {
+        "name": item["name"], "arguments": item["arguments"],
+    } for item in stored if item["type"] == "function_call"}
+    if native_calls and native_calls != calls:
+        return []
+    native_messages = [item for item in stored if item["type"] == "message"]
+    if native_messages and message.get("content"):
+        parts = [part for item in native_messages for part in item["content"]]
+        if not same_text(parts, message["content"]):
+            return []
+    found = []
+    for item in stored:
+        kind = item["type"]
+        if kind in ("reasoning", "function_call"):
+            found.append(item)
+        elif kind == "message" and message.get("content"):
+            found.append(item)
+    return found
+
+
+def same_text(parts, content):
+    if any(part.get("type") != "output_text" for part in parts):
+        return False
+    raw = "".join(part["text"] for part in parts)
+    if raw == content:
+        return True
+    try:
+        # Reformatting accepted public JSON does not change its content.
+        return json.loads(raw) == json.loads(content)
+    except ValueError:
+        return False
+
+
+def items(messages, *, encrypted_reasoning=False):
     """(instructions, input items) for ZERO's messages."""
     instructions = None
     found = []
@@ -61,16 +101,24 @@ def items(messages):
             found.append({"type": "message", "role": role,
                           "content": message["content"]})
         elif role == "assistant":
-            if message.get("reasoning_content"):
+            replayed = response_items(message)
+            found.extend(replayed)
+            kinds = {item["type"] for item in replayed}
+            if ("reasoning" not in kinds and not encrypted_reasoning
+                    and message.get("reasoning_content")):
                 found.append({
                     "type": "reasoning", "summary": [],
                     "content": [{"type": "reasoning_text",
                                  "text": message["reasoning_content"]}],
                 })
-            if message.get("content"):
+            if "message" not in kinds and message.get("content"):
                 found.append({"type": "message", "role": "assistant",
                               "content": message["content"]})
+            replayed_calls = {item["call_id"] for item in replayed
+                              if item["type"] == "function_call"}
             for call in message.get("tool_calls", ()):
+                if call["id"] in replayed_calls:
+                    continue
                 found.append({
                     "type": "function_call", "call_id": call["id"],
                     "name": call["function"]["name"],
@@ -97,10 +145,11 @@ def tool(schema):
 
 
 def request(model, messages, *, tools=None, effort=None, json_schema=None,
-            json_mode=False, temperature=None, max_output_tokens=None):
+            json_mode=False, temperature=None, max_output_tokens=None,
+            encrypted_reasoning=False):
     """The request's fields. `json_schema`: {"name", "schema"}, strict JSON;
     `json_mode`: any JSON object."""
-    instructions, found = items(messages)
+    instructions, found = items(messages, encrypted_reasoning=encrypted_reasoning)
     fields = {"model": model, "input": found, "stream": True, "store": False}
     if instructions is not None:
         fields["instructions"] = instructions
@@ -143,6 +192,20 @@ def usage(draft, response):
     draft.tokens = (used.input_tokens or 0, cached, used.output_tokens or 0)
 
 
+def remember_item(draft, index, item):
+    kind = getattr(item, "type", None)
+    if kind not in ("reasoning", "function_call", "message"):
+        return
+    data = item.model_dump(mode="json", exclude_none=True)
+    previous = draft.response_items.get(index, {})
+    if kind == "reasoning" and previous.get("encrypted_content"):
+        data.setdefault("encrypted_content", previous["encrypted_content"])
+    draft.response_items[index] = data
+    if kind == "function_call":
+        call = draft.call(index)
+        call.update(id=item.call_id, name=item.name, arguments=item.arguments or "")
+
+
 def fold(draft, event):
     """One event into the draft; True if it carried anything (the response
     made, a part begun: nothing, so the silence clock runs on). Raises
@@ -152,23 +215,30 @@ def fold(draft, event):
     if kind == "response.output_text.delta":
         draft.content += event.delta
         return bool(event.delta)
-    if kind == "response.reasoning_text.delta":
+    if kind in ("response.reasoning_text.delta",
+                "response.reasoning_summary_text.delta"):
         draft.reasoning += event.delta
         return bool(event.delta)
     if kind in ("response.output_item.added", "response.output_item.done"):
         item = event.item
+        if kind == "response.output_item.done":
+            remember_item(draft, event.output_index, item)
+            return item.type in ("reasoning", "function_call", "message")
         if getattr(item, "type", None) != "function_call":
             return False
         call = draft.call(event.output_index)
         call["id"] = item.call_id
         call["name"] = item.name
         # Whole when done; while it streams, the deltas build it
-        if kind == "response.output_item.done" or item.arguments:
+        if item.arguments:
             call["arguments"] = item.arguments or ""
         return True
     if kind == "response.function_call_arguments.delta":
         draft.call(event.output_index)["arguments"] += event.delta
         return bool(event.delta)
+    if kind in ("response.completed", "response.incomplete"):
+        for index, item in enumerate(getattr(event.response, "output", ()) or ()):
+            remember_item(draft, index, item)
     if kind == "response.completed":
         usage(draft, event.response)
         draft.finish_reason = "tool_calls" if draft.calls else "stop"

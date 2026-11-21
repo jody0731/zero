@@ -115,11 +115,11 @@ class SessionState:
         self.activity = what if command is None else (what, command)
         self.since = time.monotonic()
 
-    def line(self, text, follow_up=False, choice=None, reply_to=None):
+    def line(self, text, follow_up=False, choice=None, reply_to=None, *, check=None):
         """Send a line: a new turn when idle, a steer mid-turn (or a follow-up,
         after the turn's answer), and the reply to the open ask while one
         waits, marked with its id, and with `choice` when it was picked at
-        the box."""
+        the box. `check` validates the same options the connection will send."""
         if not text.strip():
             return None
         with self.lock:
@@ -134,6 +134,8 @@ class SessionState:
             if choice is not None and reply_to is not None:
                 options["choice"] = choice
         # Sent outside the lock: the follower's events go on meanwhile
+        if check is not None:
+            check(options)
         reply = self.connection.send(text, **options)
         with self.lock:
             self.session = reply["session"]

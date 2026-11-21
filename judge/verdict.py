@@ -45,10 +45,10 @@ from model import features
 from model.servers import make_client, resolve
 
 
-def progress(model, api):
+def progress(model, api, *, route=None):
     """The prompt progress field where the judge's model honours it: a long
     view's reading then keeps the call alive."""
-    if features.prefill_progress_sent(model, api):
+    if features.prefill_progress_sent(model, api, route=route):
         return {"prefill_progress": True}
     return {}
 
@@ -195,9 +195,8 @@ class Judge:
     def __init__(self, model, client=None, name=None, *, limits, effort=None,
                  view_bytes=None, fallback=None, keywords=None):
         self.model = model
-        server, self.served_name = resolve(model)
-        self.api = server.api
-        self.max_reasoning_effort = server.max_reasoning_effort
+        self.server, self.served_name = resolve(model)
+        self.api = self.server.api
         self.limits = limits
         # Its thinking (judge_thinking_effort); None sends nothing, so the
         # API's default holds
@@ -208,7 +207,8 @@ class Judge:
         # The SDK's per-read timeout, made again when the silence changes
         self._scripted = client is not None
         self._client_seconds = self.timeout
-        self.client = client or make_client(model, self._client_seconds)
+        self.client = client or make_client(model, self._client_seconds,
+                                            server=self.server)
         # The verdict's JSON schema, asked for as the model honours it
         self.schema = SCHEMA
         # `fallback()`: a judge on the fallback model as the settings stand,
@@ -243,7 +243,7 @@ class Judge:
     def client_for(self, seconds):
         """The SDK's client for a verdict that may stay silent `seconds`."""
         if not self._scripted and seconds != self._client_seconds:
-            self.client = make_client(self.model, seconds)
+            self.client = make_client(self.model, seconds, server=self.server)
             self._client_seconds = seconds
         return self.client
 
@@ -281,17 +281,23 @@ class Judge:
         down = True
         # Its limits as they stand when the verdict starts, kept for its tries
         seconds, ceiling = self.timeout, self.max_output_tokens
+        server = self.server
         for _ in range(self.retries + 1):
             try:
+                effort = features.request_effort(self.model, server, self.effort)
+                options = {}
+                if server.chat_thinking_field:
+                    options["thinking_field"] = server.chat_thinking_field
                 reply = complete(
                     self.api, self.client_for(seconds), self.served_name,
-                    messages, silence=seconds, check=check, temperature=0,
-                    effort=features.thinking_effort_sent(
-                        self.model, self.api, self.effort, self.max_reasoning_effort,
-                    ),
+                    messages, silence=seconds, check=check,
+                    temperature=0 if server.accepts_zero_temperature else None,
+                    effort=effort,
                     max_output_tokens=ceiling,
-                    **features.json_request(self.model, self.api, self.schema),
-                    **progress(self.model, self.api),
+                    **features.json_request(self.model, self.api, self.schema,
+                                            route=server.history_route),
+                    **progress(self.model, self.api, route=server.history_route),
+                    **options,
                 )
                 used = (reply.prompt_tokens, reply.cached_tokens,
                         reply.completion_tokens)

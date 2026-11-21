@@ -49,7 +49,7 @@ def available_services():
         if getattr(api, "REQUIRES_MODEL", False) and not model:
             continue
         server = servers.ModelServer(name, entry)
-        key = servers.environment_key(server) or servers.saved_key(name, keys)
+        key = servers.environment_key(server) or servers.saved_key(server, keys)
         if not key or key == servers.NO_KEY:
             continue
         found[name] = SearchService(name, server.title, api.endpoint(server.url),

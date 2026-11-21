@@ -3269,7 +3269,7 @@
     },
     "model.features": {
       "type": "object",
-      "description": "What a model honours of its API's features (thinking_off, thinking_on, strict_json, json_mode), as measured: each true or false, null where never measured. Measured now when none are kept or `test` is true, a few small calls to the model. With `cached_only`, read stored results only; no model calls.",
+      "description": "What a model honours of its API's features (thinking_off, thinking_on, strict_json, json_mode), as measured: each true or false, null where never measured. Measured now when none are kept or `test` is true, a few small calls to the model. With `cached_only`, read the route's declared or measured support with no model calls. Pass tools for choices on a normal tool-equipped turn.",
       "properties": {
         "message": {
           "const": "model/features"
@@ -3300,6 +3300,9 @@
           "type": "boolean"
         },
         "cached_only": {
+          "type": "boolean"
+        },
+        "tools": {
           "type": "boolean"
         }
       },
@@ -3335,6 +3338,12 @@
         },
         "features": {
           "type": "object"
+        },
+        "thinking_efforts": {
+          "type": "object"
+        },
+        "tools_error": {
+          "type": "string"
         },
         "replayed": {
           "type": "boolean",

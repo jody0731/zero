@@ -163,6 +163,11 @@ another configured search service with a key, then a free keyless service.
 Use the service name shown by `zero doctor` to choose one for all sessions.
 ZERO asks before sending a lookup to a service other than your saved choice.
 
+Use **Thinking** in the browser session panel or **/model** in the terminal.
+**Model default** leaves the effort to the selected model. Both apps mark
+choices that are unavailable on the selected route and report when support
+is unverified. A saved choice stays visible when you change models.
+
 <details>
 <summary><b>The same, by hand</b>: ZERO's files in <code>~/.zero/</code></summary>
 
@@ -175,6 +180,7 @@ model = "server-name/model-id"
 # ~/.zero/keys.toml (mode 600): each server's key
 [server-name]
 api_key = "..."
+url = "http://localhost:8080/v1"
 ```
 
 ```toml
@@ -186,9 +192,12 @@ url = "http://localhost:8080/v1"
 "http://localhost:8080/v1" = { "my-model" = 65536 }
 ```
 
-Its models are then `myserver/<model>`. A server that speaks the Responses API
-takes `api = "responses"`. Set a model's window when the endpoint omits it or
-when you want a lower cap for that model. Existing server-wide
+Its models are then `myserver/<model>`. Leave `api` blank to use Responses with
+documented Chat Completions exceptions. Set `api = "chat_completions"` for a
+Chat Completions-only server. Saved keys apply to the URL they were saved for.
+If you have an older key saved for a custom server, save it again to attach it
+to the current URL. Set a model's window when the endpoint omits it or when you
+want a lower cap for that model. Existing server-wide
 `context_window` entries still read. `zero model features myserver/<model>`
 shows what the model honours of its API. `--test` measures again.
 

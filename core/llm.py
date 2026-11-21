@@ -57,6 +57,10 @@ class NoReply(Exception):
     token or between two; a retry may get a reply."""
 
 
+class UnsupportedModelRequest(Exception):
+    """The selected model and API cannot satisfy this request as configured."""
+
+
 class StreamFailure(CutShort):
     """A provider error event that ends the stream."""
 
@@ -67,7 +71,7 @@ class StreamFailure(CutShort):
 
 
 # What a model call can raise that the loop hands to the model_error hook
-MODEL_ERRORS = (APIError, CutShort, NoReply)
+MODEL_ERRORS = (APIError, CutShort, NoReply, UnsupportedModelRequest)
 
 
 def safe_error_text(text, key=None, redact=None):
@@ -105,7 +109,7 @@ def request_error_details(error, *, key=None, redact=None):
         observation = "ZERO reached its request timeout."
     elif isinstance(error, APIConnectionError):
         observation = "Connection error."
-    elif isinstance(error, (NoReply, CutShort)):
+    elif isinstance(error, (NoReply, CutShort, UnsupportedModelRequest)):
         observation = str(error)
     elif isinstance(error, APIError):
         # The SDK unwraps `error` in HTTP and stream errors. Only use named
@@ -170,6 +174,10 @@ class Draft:
         # A tool call's index → {"id", "name", "arguments"}, the arguments as
         # far as they have come
         self.calls = {}
+        # Provider-specific continuation data, private to the producing route.
+        self.response_items = {}
+        self.thought_signatures = {}
+        self.reasoning_details = {}
         self.finish_reason = None
         # Prompt tokens, of those the cache's, and output tokens; None until
         # the API says
@@ -202,6 +210,37 @@ class Draft:
         return message
 
 
+def without_provider_state(message):
+    """A model message without private continuation data."""
+    if "provider_state" not in message:
+        return message
+    return {key: value for key, value in message.items() if key != "provider_state"}
+
+
+def provider_history(messages, route):
+    """Keep continuation data only for the endpoint, API and model that made it."""
+    found = messages
+    for index, message in enumerate(messages):
+        state = message.get("provider_state")
+        if state and state.get("route") != route:
+            if found is messages:
+                found = list(messages)
+            found[index] = {key: value for key, value in message.items()
+                            if key not in ("provider_state", "reasoning_content")}
+    return found
+
+
+def remember_provider_reply(reply, route, *, response_items=True):
+    """Store route-bound continuation on the assistant's local history."""
+    items = reply.response_items if response_items else []
+    if items or reply.thought_signatures or reply.reasoning_details or reply.reasoning:
+        reply.message["provider_state"] = {
+            "route": route, "items": items,
+            "thought_signatures": reply.thought_signatures,
+            "reasoning_details": reply.reasoning_details,
+        }
+
+
 class Reply:
     """One model reply, reduced to what the loop needs, from its stream."""
 
@@ -209,6 +248,21 @@ class Reply:
         self.message = draft.message()
         self.content = draft.content or None
         self.reasoning = draft.reasoning or None
+        self.response_items = [
+            item for _, item in sorted(draft.response_items.items())
+        ]
+        self.thought_signatures = {
+            draft.calls[index]["id"]: {
+                "name": draft.calls[index]["name"],
+                "arguments": draft.calls[index]["arguments"],
+                "extra_content": signature,
+            }
+            for index, signature in draft.thought_signatures.items()
+            if index in draft.calls
+        }
+        self.reasoning_details = [
+            item for _, item in sorted(draft.reasoning_details.items())
+        ]
         self.tool_calls = [
             SimpleNamespace(
                 id=call["id"],

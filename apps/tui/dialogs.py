@@ -6,6 +6,7 @@ from textual.content import Content
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Input, OptionList, Static
+from textual.widgets.option_list import Option
 
 from apps.tui import keybindings
 from apps.tui.widgets import Plain
@@ -67,19 +68,21 @@ class ChoiceView(ModalScreen):
 
     BINDINGS = [Binding("escape", "dismiss(None)", show=False)]
 
-    def __init__(self, label, choices, current=None, values=None):
+    def __init__(self, label, choices, current=None, values=None, disabled=()):
         """`values`: what each choice gives back, when not the choice itself."""
         super().__init__()
         self.label = label
         self.choices = choices
         self.current = current
         self.values = values
+        self.disabled = disabled
 
     def compose(self):
         with Vertical():
             yield Plain(self.label)
             yield OptionList(*(
-                Content(f"{'●' if choice == self.current else ' '} {choice}")
+                Option(Content(f"{'●' if choice == self.current else ' '} {choice}"),
+                       disabled=choice in self.disabled)
                 for choice in self.choices
             ))
 

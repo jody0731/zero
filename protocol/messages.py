@@ -815,11 +815,12 @@ MESSAGES = {
         "thinking_on, strict_json, json_mode), as measured: each true or "
         "false, null where never measured. Measured now when none are kept "
         "or `test` is true, a few small calls to the model. With "
-        "`cached_only`, read stored results only; no model calls.",
-        {"model": STRING, "test": BOOLEAN, "cached_only": BOOLEAN},
+        "`cached_only`, read the route's declared or measured support with no "
+        "model calls. Pass tools for choices on a normal tool-equipped turn.",
+        {"model": STRING, "test": BOOLEAN, "cached_only": BOOLEAN, "tools": BOOLEAN},
         required=("model",),
         reply={"model": STRING, "api": STRING, "measured_at": maybe(STRING),
-               "features": OBJECT},
+               "features": OBJECT, "thinking_efforts": OBJECT, "tools_error": STRING},
         changes=True,
     ),
     "model/server/list": message(

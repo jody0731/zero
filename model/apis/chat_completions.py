@@ -14,7 +14,7 @@ show it send `reasoning_content` (llama-server, DeepSeek) or `reasoning`
 from openai import Stream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
-from core.llm import CutShort
+from core.llm import CutShort, without_provider_state
 
 # Its name in a server's entry (the line `api`), and in words
 NAME = "chat_completions"
@@ -41,19 +41,51 @@ FINISHED = {
 }
 
 
+def with_continuation(message):
+    """Give a matching Chat endpoint back the continuation data it issued."""
+    state = message.get("provider_state")
+    if state is None:
+        return message
+    found = without_provider_state(message)
+    signatures = state.get("thought_signatures") or {}
+    if signatures and found.get("tool_calls"):
+        calls = []
+        for call in found["tool_calls"]:
+            signature = signatures.get(call["id"], {})
+            function = call["function"]
+            if (signature.get("name") == function["name"]
+                    and signature.get("arguments") == function["arguments"]):
+                call = {**call, "extra_content": signature["extra_content"]}
+            calls.append(call)
+        found["tool_calls"] = calls
+    if details := state.get("reasoning_details"):
+        found["reasoning_details"] = details
+        found.pop("reasoning_content", None)
+    return found
+
+
 def request(model, messages, *, tools=None, effort=None, json_schema=None,
             json_mode=False, temperature=None, max_output_tokens=None,
-            prefill_progress=False):
+            prefill_progress=False, thinking_field=None):
     """The request's fields. `json_schema`: {"name", "schema"}, strict JSON;
     `json_mode`: any JSON object; `prefill_progress`: llama.cpp's progress
     chunks while it reads the prompt."""
+    wire = messages
+    if any("provider_state" in message for message in messages):
+        wire = [with_continuation(message) for message in messages]
     fields = {
-        "model": model, "messages": messages, "stream": True,
+        "model": model, "messages": wire, "stream": True,
         "stream_options": {"include_usage": True},
     }
     if tools:
         fields["tools"] = tools
-    if effort is not None:
+    if effort is not None and thinking_field == "reasoning":
+        fields["reasoning"] = {"effort": EFFORTS.get(effort, effort)}
+    elif effort == "off" and thinking_field == "thinking":
+        fields["thinking"] = {"type": "disabled"}
+    elif effort == "off" and thinking_field == "enable_thinking":
+        fields["enable_thinking"] = False
+    elif effort is not None:
         fields["reasoning_effort"] = EFFORTS.get(effort, effort)
     if json_schema is not None:
         fields["response_format"] = {
@@ -99,6 +131,24 @@ def alive(chunk):
     return bool((getattr(chunk, "model_extra", None) or {}).get("prompt_progress"))
 
 
+def fold_reasoning_details(draft, details):
+    for value in details:
+        if not isinstance(value, dict):
+            continue
+        index = value.get("index")
+        if type(index) is not int:
+            index = len(draft.reasoning_details)
+        item = draft.reasoning_details.setdefault(index, {})
+        for name, data in value.items():
+            if data is None and name in item:
+                continue
+            if (name in ("text", "summary", "data", "signature")
+                    and isinstance(data, str) and isinstance(item.get(name), str)):
+                item[name] += data
+            else:
+                item[name] = data
+
+
 def fold(draft, chunk):
     """One chunk into the draft; True if it carried anything (a keep-alive
     or an empty delta doesn't, and so never resets the silence clock).
@@ -122,6 +172,10 @@ def fold(draft, chunk):
             if reasoning:
                 draft.reasoning += reasoning
                 heard = True
+            details = extra.get("reasoning_details")
+            if isinstance(details, list) and details:
+                fold_reasoning_details(draft, details)
+                heard = True
             for piece in delta.tool_calls or []:
                 call = draft.call(piece.index)
                 if piece.id:
@@ -129,6 +183,13 @@ def fold(draft, chunk):
                 if piece.function is not None:
                     call["name"] += piece.function.name or ""
                     call["arguments"] += piece.function.arguments or ""
+                extra_content = (piece.model_extra or {}).get("extra_content")
+                google = (extra_content.get("google")
+                          if isinstance(extra_content, dict) else None)
+                if isinstance(google, dict) and google.get("thought_signature"):
+                    draft.thought_signatures[piece.index] = {
+                        "google": {"thought_signature": google["thought_signature"]},
+                    }
                 heard = True
         if choice.finish_reason is not None:
             reason = FINISHED.get(choice.finish_reason)

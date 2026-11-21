@@ -74,21 +74,34 @@ class ModelService(Service):
             return {"ok": False, "error": "model/features needs a model"}
         model = model.strip()
         try:
-            server, server_model = servers.resolve(model)
+            name, entry, server_model = connect.model_route({"model": model})
+            server = servers.ModelServer(name, entry, server_model, refresh=False)
             api = server.api
-            row = features.record(model, api)
+            row = features.record(model, api, route=server.history_route)
             if request.get("cached_only"):
                 row = row or {"features": {}}
             elif row is None or request.get("test") is True:
-                client = servers.make_client(model, FEATURE_SECONDS)
-                row = features.measure(model, api, client, server_model,
-                                       FEATURE_SECONDS)
-        except (servers.ModelServerError, features.FeatureError) as e:
-            return {"ok": False, "error": str(e)}
-        return {"ok": True, "model": model, "api": api.NAME,
+                if server.context_window is None:
+                    server, server_model = servers.resolve(model)
+                with servers.make_client(
+                    model, FEATURE_SECONDS, server=server,
+                ) as client:
+                    row = features.measure(model, api, client, server_model,
+                                           FEATURE_SECONDS, server=server)
+        except (servers.ModelServerError, features.FeatureError,
+                connect.ConnectError) as error:
+            return {"ok": False, "error": str(error)}
+        with_tools = request.get("tools") is True
+        answer = {"ok": True, "model": model, "api": api.NAME,
                 "measured_at": row.get("measured_at"),
                 "features": {name: row["features"].get(name)
-                             for name in features.FEATURES}}
+                             for name in features.FEATURES},
+                "thinking_efforts": features.effort_choices(
+                    model, server, tools=with_tools,
+                )}
+        if with_tools and (reason := features.tool_error(model, server)):
+            answer["tools_error"] = reason
+        return answer
 
     def servers_message(self, request):
         try:

@@ -10,7 +10,8 @@ for a temporary reason. The streamed call itself is core's (core/llm.py).
 from settings import Setting
 
 # The agent's thinking effort, least to most
-THINKING_EFFORTS = ("off", "low", "high", "max")
+MODEL_DEFAULT_EFFORT = "model_default"
+THINKING_EFFORTS = (MODEL_DEFAULT_EFFORT, "off", "low", "high", "max")
 # The feature of the model's API each effort needs (features.py)
 THINKING_EFFORT_FEATURES = {"off": "thinking_off", "low": "thinking_on",
                             "high": "thinking_on", "max": "thinking_on"}
@@ -29,7 +30,7 @@ SETTINGS = (
             unset_means="none"),
     # The agent's own calls only; the consent check stays on the API's
     # default
-    Setting("thinking_effort", "Default", "Thinking effort", "high",
+    Setting("thinking_effort", "Default", "Thinking effort", MODEL_DEFAULT_EFFORT,
             "choice", choices=THINKING_EFFORTS, needs=THINKING_EFFORT_NEEDS,
             runs_on="model"),
     # Silence, not the whole call: before the first token and between

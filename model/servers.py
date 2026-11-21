@@ -7,9 +7,9 @@ the same server). A model name picks its server by its prefix
 ("myserver/some-model"); a name without a known prefix goes to the catalog's
 server for bare model names. A model's limits come from its endpoint and
 the published catalog. Saved windows can narrow those limits or supply a
-missing window. A server's line `api`
-names the API its server speaks (apis/), the Chat Completions API when it
-names none. A model's price is its own line, else its server's, else the
+missing window. A server's `api` pins the API it speaks (apis/). Otherwise
+ZERO prefers Responses and uses Chat Completions for documented exceptions.
+A model's price is its own line, else its server's, else the
 one a release filled in from models.dev's list (prices.toml beside this
 file): no user types a price, and a model with none anywhere has none.
 
@@ -24,13 +24,15 @@ import sys
 import tomllib
 import urllib.error
 import urllib.request
+from hashlib import sha256
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from openai import OpenAI
 
 import paths
-from core.llm import complete
-from model import directory, features, limit_catalog
+from core.llm import complete, provider_history, remember_provider_reply
+from model import THINKING_EFFORTS, directory, features, limit_catalog
 from model.apis import APIS, DEFAULT, SEARCH_APIS
 from model.limits import TokenLimits, endpoint, model_id, smaller, token_count
 from settings import stamp
@@ -49,10 +51,32 @@ SERVER_FIELDS = {
     "max_reasoning_effort": str, "context_windows": dict,
     "max_input_tokens": int, "max_output_tokens": int,
     "models_dev_provider": str,
+    "reply_api": str, "responses_url": str, "chat_thinking_field": str,
+    "responses_since_version": list,
+    "reasoning_efforts": list, "chat_reasoning_efforts": list,
+    "responses_reasoning_efforts": list,
+    "chat_tool_efforts": list, "accepts_zero_temperature": bool,
+    "replays_encrypted_reasoning": bool, "replays_response_items": bool,
+    "reports_reasoning_efforts": bool,
+    "suggested_models": list,
 }
 MODEL_FIELDS = ("context_window", "max_input_tokens", "max_output_tokens",
-                "context_stop", "price", "max_reasoning_effort")
+                "context_stop", "price", "max_reasoning_effort", "reply_api",
+                "reasoning_efforts", "chat_reasoning_efforts", "chat_tool_efforts",
+                "responses_reasoning_efforts",
+                "accepts_zero_temperature", "chat_thinking_field")
 LIMIT_FIELDS = ("context_window", "max_input_tokens", "max_output_tokens")
+REPLY_FIELDS = (
+    "reply_api", "responses_url", "responses_since_version",
+    "reasoning_efforts", "chat_reasoning_efforts",
+    "responses_reasoning_efforts",
+    "chat_tool_efforts", "max_reasoning_effort", "accepts_zero_temperature",
+    "replays_encrypted_reasoning", "replays_response_items", "chat_thinking_field",
+    "reports_reasoning_efforts",
+    "suggested_models",
+)
+ENDPOINT_FIELDS = ("key_env", "search_api", "search_model",
+                   "refuses_overlong_requests", *LIMIT_FIELDS, *REPLY_FIELDS)
 # Lines named otherwise before 0.6.2.8, read under their names now
 RENAMED = {"name": "title", "context": "context_window"}
 # Lines a server had before 0.6.2.7: what a model honours is measured now;
@@ -83,6 +107,27 @@ class ModelServerError(Exception):
     """A model can't be reached as configured (no key, say): stop at startup."""
 
 
+def reply_url(base, responses, api):
+    if api.NAME != "responses" or responses is None:
+        return base
+    source, target = urlsplit(base), urlsplit(responses)
+    if (source.scheme, source.netloc) != (target.scheme, target.netloc):
+        raise ModelServerError("responses_url must use the API URL's origin")
+    return responses
+
+
+def reply_api(name, entry, model, line):
+    configured = entry.get("api") or line.get("reply_api") or entry.get("reply_api")
+    if configured:
+        return APIS[configured]
+    minimum = entry.get("responses_since_version")
+    if model and minimum and canonical_endpoint(name, entry["url"]):
+        version = directory.server_version(entry["url"])
+        if version is not None and version < tuple(minimum):
+            return APIS["chat_completions"]
+    return APIS[DEFAULT]
+
+
 class ModelServer:
     """A server as one of its models sees it: the server's lines with the
     model's own over them."""
@@ -98,9 +143,33 @@ class ModelServer:
         self._model = model
         self._reported = directory.reported(self.url, model) if model else TokenLimits()
         self.set_limits(self._reported, refresh=refresh)
-        # The API its server speaks (apis/)
-        self.api = APIS[entry.get("api", DEFAULT)]
+        self.api = reply_api(name, entry, model, line)
+        self.reply_url = reply_url(self.url, entry.get("responses_url"), self.api)
+        route = (name, endpoint(self.reply_url), self.api.NAME, model)
+        self.history_route = sha256(json.dumps(route).encode()).hexdigest()
+        self.reasoning_efforts = merged.get("reasoning_efforts")
+        self.tool_efforts = None
+        self.chat_thinking_field = None
+        if self.api.NAME == "chat_completions":
+            self.reasoning_efforts = merged.get(
+                "chat_reasoning_efforts", self.reasoning_efforts,
+            )
+            self.tool_efforts = merged.get("chat_tool_efforts")
+            self.chat_thinking_field = merged.get("chat_thinking_field")
+        else:
+            self.reasoning_efforts = merged.get(
+                "responses_reasoning_efforts", self.reasoning_efforts,
+            )
         self.max_reasoning_effort = merged.get("max_reasoning_effort")
+        if (self.api.NAME == "chat_completions"
+                and "responses_reasoning_efforts" in line):
+            self.max_reasoning_effort = None
+        self.accepts_zero_temperature = merged.get("accepts_zero_temperature", True)
+        self.replays_encrypted_reasoning = entry.get(
+            "replays_encrypted_reasoning", False,
+        )
+        self.replays_response_items = entry.get("replays_response_items", True)
+        self.reports_reasoning_efforts = entry.get("reports_reasoning_efforts", False)
         # None: no key needed
         self.key_env = entry.get("key_env")
         # Whether it refuses a request longer than its context, where a
@@ -135,6 +204,11 @@ class ModelServer:
         reported = directory.reported(self.url, self._model)
         if reported != self._reported:
             self.set_limits(reported)
+
+    def reported_reasoning(self):
+        if self.reports_reasoning_efforts:
+            return directory.reported_reasoning(self.url, self._model)
+        return None
 
 
 def filled_prices():
@@ -232,8 +306,13 @@ def check(name, entry):
                     f"{', '.join(SERVER_FIELDS)}")
         if not isinstance(value, kind) or (kind is int and value is True):
             return f"[{name}] {field} has the wrong type"
-    if entry.get("api", DEFAULT) not in APIS:
+    if (entry.get("api") or DEFAULT) not in APIS:
         return f"[{name}] api is one of {', '.join(APIS)}"
+    if entry.get("reply_api", DEFAULT) not in APIS:
+        return f"[{name}] reply_api is one of {', '.join(APIS)}"
+    version = entry.get("responses_since_version", [0, 0, 0])
+    if len(version) != 3 or any(type(part) is not int or part < 0 for part in version):
+        return f"[{name}] responses_since_version needs major, minor and patch numbers"
     if "search_api" in entry and entry["search_api"] not in SEARCH_APIS:
         return f"[{name}] search_api is one of {', '.join(SEARCH_APIS)}"
     for url, windows in entry.get("context_windows", {}).items():
@@ -251,7 +330,39 @@ def check(name, entry):
                         f"known: {', '.join(MODEL_FIELDS)}")
             if not isinstance(value, SERVER_FIELDS[field]):
                 return f"[{name}.models] {model!r} {field} has the wrong type"
+            if field == "reply_api" and value not in APIS:
+                return (f"[{name}.models] {model!r} reply_api is one of "
+                        f"{', '.join(APIS)}")
+        problem = check_reasoning(line)
+        if problem:
+            return f"[{name}.models] {model!r} {problem}"
+    if problem := check_reasoning(entry):
+        return f"[{name}] {problem}"
     return None
+
+
+def check_reasoning(entry):
+    for field in ("reasoning_efforts", "chat_reasoning_efforts",
+                  "responses_reasoning_efforts", "chat_tool_efforts"):
+        if any(value not in THINKING_EFFORTS for value in entry.get(field, ())):
+            return f"{field} contains an unknown thinking effort"
+    if entry.get("chat_thinking_field") not in (
+        None, "reasoning", "thinking", "enable_thinking",
+    ):
+        return "chat_thinking_field is reasoning, thinking or enable_thinking"
+    return None
+
+
+def without_endpoint_settings(entry):
+    """Keep settings that can carry over to a different endpoint."""
+    return {
+        **{key: value for key, value in entry.items() if key not in ENDPOINT_FIELDS},
+        "models": {
+            model: {key: value for key, value in line.items()
+                    if key not in LIMIT_FIELDS and key not in REPLY_FIELDS}
+            for model, line in entry.get("models", {}).items()
+        },
+    }
 
 
 def merge(shipped, mine, where):
@@ -273,10 +384,7 @@ def merge(shipped, mine, where):
             continue
         previous = table[name]
         if endpoint(entry.get("url", previous["url"])) != endpoint(previous["url"]):
-            # Published limits and search describe the endpoint they shipped with.
-            route_fields = ("search_api", "search_model", *LIMIT_FIELDS)
-            previous = {key: value for key, value in previous.items()
-                        if key not in route_fields}
+            previous = without_endpoint_settings(previous)
         models = {**previous.get("models", {})}
         for model, line in entry.get("models", {}).items():
             models[model] = {**models.get(model, {}), **line}
@@ -399,7 +507,8 @@ def key_envs():
     """Every environment variable a server's key may come from: what no
     command may see. Raises ModelServerError when models.toml can't be read,
     since a variable it names can't be known."""
-    return sorted({e["key_env"] for e in table().values() if "key_env" in e})
+    return sorted({entry["key_env"] for entries in (catalog(), table())
+                   for entry in entries.values() if "key_env" in entry})
 
 
 def read_keys(path=None):
@@ -413,10 +522,23 @@ def read_keys(path=None):
         raise ModelServerError(f"can't read {path}") from None
 
 
-def saved_key(name, keys):
+def stored_key(name, keys):
     slot = keys.get(name)
     key = slot.get("api_key") if isinstance(slot, dict) else None
     return key if isinstance(key, str) and key else None
+
+
+def saved_key(server, keys):
+    """Use a saved key at its recorded URL, or a legacy key on its catalog URL."""
+    key = stored_key(server.name, keys)
+    if key is None:
+        return None
+    url = keys[server.name].get("url")
+    if isinstance(url, str) and endpoint(url) == endpoint(server.url):
+        return key
+    if url is None and canonical_endpoint(server.name, server.url):
+        return key
+    return None
 
 
 def environment_key(server):
@@ -425,9 +547,15 @@ def environment_key(server):
 
 def api_key(server, keys_file=None):
     """The server's environment key, then its saved key, or its keyless marker."""
-    key = environment_key(server) or saved_key(server.name, read_keys(keys_file))
+    key = environment_key(server)
     if key:
         return key
+    keys = read_keys(keys_file)
+    key = saved_key(server, keys)
+    if key:
+        return key
+    if stored_key(server.name, keys):
+        raise ModelServerError(f"Save an API key for {server.title}'s current URL.")
     if server.key_env is None:
         return NO_KEY
     raise ModelServerError(
@@ -442,7 +570,7 @@ def make_client(model, timeout, *, server=None):
     server = server or resolve(model, check_endpoint=True)[0]
     # The SDK's own retries are off: hooks decide what to retry
     return OpenAI(
-        base_url=server.url,
+        base_url=server.reply_url,
         api_key=api_key(server),
         timeout=timeout,
         max_retries=0,
@@ -528,33 +656,48 @@ class Model:
 
     def json_request(self, schema):
         """How to ask this model for JSON fitting `schema` (features.py)."""
-        return features.json_request(self.name, self.api, schema)
+        return features.json_request(
+            self.name, self.api, schema, route=self.server.history_route,
+        )
 
     def call(self, messages, schemas, check=None, on_delta=None,
              max_output_tokens=None, reply_schema=None):
         """One model call, streamed (complete). API errors, a silence past the
         timeout and replies that didn't complete are raised for the loop to
         handle (MODEL_ERRORS); what `check` raises ends it at once. The
-        effort is sent unless the model is measured not to honour it
-        (features.py): kept, not sent. `max_output_tokens`: a cap on the
+        effort is checked for the model, endpoint and attached tools.
+        `max_output_tokens`: a cap on the
         reply (a compaction's handoff); None sends none."""
         seconds = self.silence()
-        output = (features.json_request(self.name, self.api, reply_schema,
-                                        unmeasured=False) if reply_schema else {})
-        return complete(
-            self.api, self.client_for(seconds), self.served_name, messages,
+        output = (features.json_request(
+            self.name, self.api, reply_schema, unmeasured=False,
+            route=self.server.history_route,
+        ) if reply_schema else {})
+        effort = features.request_effort(self.name, self.server, self.effort,
+                                         tools=bool(schemas))
+        replay_encrypted = self.server.replays_encrypted_reasoning
+        ready = provider_history(messages, self.server.history_route)
+        options = {}
+        if self.api.NAME == "responses" and replay_encrypted:
+            options["encrypted_reasoning"] = True
+        if self.server.chat_thinking_field:
+            options["thinking_field"] = self.server.chat_thinking_field
+        reply = complete(
+            self.api, self.client_for(seconds), self.served_name, ready,
             silence=seconds, check=check, on_delta=on_delta,
-            tools=schemas,
-            effort=features.thinking_effort_sent(
-                self.name, self.api, self.effort, self.server.max_reasoning_effort,
-            ),
+            tools=schemas, effort=effort,
             max_output_tokens=smaller(max_output_tokens, self.server.max_output_tokens),
-            **self.progress(), **output,
+            **self.progress(), **output, **options,
         )
+        remember_provider_reply(reply, self.server.history_route,
+                                response_items=self.server.replays_response_items)
+        return reply
 
     def progress(self):
         """The prompt progress field, where this model is measured to honour
         it: a long prompt's reading then keeps the call alive."""
-        if features.prefill_progress_sent(self.name, self.api):
+        if features.prefill_progress_sent(
+            self.name, self.api, route=self.server.history_route,
+        ):
             return {"prefill_progress": True}
         return {}

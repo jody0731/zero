@@ -1,6 +1,6 @@
-"""The APIs ZERO speaks to model servers, a file each. A server's entry
-names the one it speaks with its line `api` (catalog.toml, the user's
-models.toml); the Chat Completions API when it names none.
+"""The APIs ZERO speaks to model servers, a file each. A server can pin
+its API in models.toml. Otherwise ZERO prefers Responses and uses Chat
+Completions where the endpoint or model requires it.
 
 Each API's file has `open_stream` (one streamed request, from ZERO's
 messages and the request's standard fields: tools, effort, json_schema,
@@ -22,8 +22,7 @@ from model.apis import (
 )
 
 APIS = {"chat_completions": chat_completions, "responses": responses}
-# What a server's entry speaks when it names no API
-DEFAULT = "chat_completions"
+DEFAULT = "responses"
 
 # The model server's search capability names the wire contract it implements.
 SEARCH_APIS = {

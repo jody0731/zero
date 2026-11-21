@@ -1,12 +1,15 @@
 """Authenticated model directories, with endpoint-reported token limits."""
 
 import json
+import re
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from hashlib import sha256
 from threading import Lock
 from time import monotonic
+from urllib.parse import urljoin
 
+import httpx2
 from openai import OpenAI
 
 import paths
@@ -15,6 +18,7 @@ from model.limits import TokenLimits, endpoint, model_id, token_count
 
 LIST_SECONDS = 3
 FRESH_SECONDS = 60
+VERSION_SECONDS = 0.5
 TOTAL_FIELDS = ("max_model_len", "context_length", "max_context_length")
 FILE_FORMAT = 1
 
@@ -23,11 +27,40 @@ FILE_FORMAT = 1
 class Listing:
     reply: Future = field(default_factory=Future)
     read_at: float = 0.0
+    reasoning: dict = field(default_factory=dict)
 
 
 _listings = {}
 _listing_lock = Lock()
 _saved_reports = {}
+_server_versions = {}
+_server_version_lock = Lock()
+
+
+def server_version(url):
+    """Read a compatible server's release metadata without credentials."""
+    url = urljoin(url, "/api/version")
+    with _server_version_lock:
+        checked_at, version = _server_versions.get(url, (-FRESH_SECONDS, None))
+        if monotonic() - checked_at < FRESH_SECONDS:
+            return version
+        version = read_server_version(url)
+        _server_versions[url] = (monotonic(), version)
+        return version
+
+
+def read_server_version(url):
+    try:
+        reply = httpx2.get(url, timeout=VERSION_SECONDS, trust_env=False)
+        data = reply.raise_for_status().json()
+    except (httpx2.HTTPError, ValueError):
+        return None
+    version = data.get("version") if isinstance(data, dict) else None
+    if not isinstance(version, str) or not re.fullmatch(
+        r"[0-9]{1,4}(\.[0-9]{1,4}){2}", version,
+    ):
+        return None
+    return tuple(map(int, version.split(".")))
 
 
 def route(url, key):
@@ -50,6 +83,9 @@ def rows(url, key):
                            if (count := token_count(data.get(name)))), None)
         limits = TokenLimits.read({**data, "context_window": window})
         row = {"id": item.id, "context_window": window, **limits.as_dict()}
+        reasoning = data.get("reasoning")
+        if isinstance(reasoning, dict):
+            row["reasoning"] = reasoning
         if loads_window:
             row["context_reported_on_load"] = True
         found.append(row)
@@ -87,6 +123,9 @@ def listing(url, key, *, cached=False):
                     _listings[identity] = (fingerprint, unavailable)
             entry.reply.set_exception(error)
         else:
+            entry.reasoning = {
+                row["id"]: row["reasoning"] for row in data if "reasoning" in row
+            }
             entry.read_at = monotonic()
             entry.reply.set_result(data)
     return entry.reply.result()
@@ -111,6 +150,13 @@ def reported(url, model):
         rows = _saved_reports.setdefault(path, read_reports(path))
     models = rows.get(endpoint_key(url), {})
     return TokenLimits.read(models.get(model) if isinstance(models, dict) else None)
+
+
+def reported_reasoning(url, model):
+    """Exact-model metadata from the most recent directory for this endpoint."""
+    identity = (paths.model_windows_file(), endpoint(url))
+    _, entry = _listings.get(identity, (None, None))
+    return entry.reasoning.get(model) if entry is not None else None
 
 
 def endpoint_key(url):

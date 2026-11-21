@@ -292,10 +292,11 @@ class Connection:
             fields["cached"] = True
         return self.call(build("model/list", **fields))
 
-    def features(self, model, test=False, *, cached_only=False):
+    def features(self, model, test=False, *, cached_only=False, tools=False):
         """Read model features. A measurement can make several model calls."""
         flags = {name: True for name, value in
-                 (("test", test), ("cached_only", cached_only)) if value}
+                 (("test", test), ("cached_only", cached_only), ("tools", tools))
+                 if value}
         request = build("model/features", model=model, **flags)
         return self.call(request, timeout=FEATURES_WAIT_SECONDS)
 

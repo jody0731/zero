@@ -97,9 +97,7 @@ class SettingsView(Scrolled, Screen):
         self.error = None
         # What the session in view runs with from its next turn
         self.now = {}
-        # What each model honours of its API's features, as the server
-        # measured it (model/features): model → feature → True, False or
-        # None; a model asked for and not answered yet maps to {}
+        # Support on the selected route, separately for agent and judge calls.
         self.features = {}
         self.rows = []
         # Each row's line in the list, for the scrolling
@@ -204,8 +202,9 @@ class SettingsView(Scrolled, Screen):
                 or self.values.get("model"))
 
     def read_features(self):
-        """Read stored feature measurements on the background thread."""
-        wanted = {self.runs_on(row) for row in self.rows} - {None}
+        """Read route compatibility without an inference call."""
+        wanted = {(model, row.name == "thinking_effort") for row in self.rows
+                  if (model := self.runs_on(row))}
         wanted -= set(self.features)
         if not wanted:
             return
@@ -213,13 +212,15 @@ class SettingsView(Scrolled, Screen):
             self.features[model] = {}
 
         def run():
-            for model in sorted(wanted):
+            for model, tools in sorted(wanted):
                 try:
-                    reply = self.zero.connection.features(model, cached_only=True)
+                    reply = self.zero.connection.features(
+                        model, cached_only=True, tools=tools,
+                    )
                 except ERRORS:
                     # Nothing shown unavailable: the server couldn't say
                     continue
-                self.features[model] = reply.get("features") or {}
+                self.features[model, tools] = reply
                 try:
                     self.app.call_from_thread(self.draw)
                 except RuntimeError:
@@ -230,16 +231,30 @@ class SettingsView(Scrolled, Screen):
                          name="model-features").start()
 
     def unavailable_note(self, row, value):
-        """" (unavailable on MODEL)" when the row's model is measured not to
-        honour what `value` needs; "" otherwise."""
-        setting = row.setting if isinstance(row, SessionRow) else row
-        feature = dict(getattr(setting, "needs", ())).get(value)
+        """The selected effort's status, when the server has reported it."""
         model = self.runs_on(row)
-        if feature is None or model is None:
-            return ""
-        if self.features.get(model, {}).get(feature) is False:
-            return f" (unavailable on {model})"
+        choices = self.features.get(
+            (model, row.name == "thinking_effort"), {},
+        ).get("thinking_efforts", {})
+        if value in choices:
+            if choices[value] is False:
+                return " (unavailable)"
+            if choices[value] is None:
+                return " (unverified)"
         return ""
+
+    def effort_picker(self, row, title, choices, now, chosen):
+        setting = row.setting if isinstance(row, SessionRow) else row
+        notes = {value: self.unavailable_note(row, value) for value in choices}
+        labels = {value: controller.setting_text(setting, value) + notes[value]
+                  for value in choices}
+        disabled = [labels[value] for value in choices
+                    if notes[value] == " (unavailable)"]
+        self.app.push_screen(
+            ChoiceView(title, list(labels.values()), labels.get(now),
+                       values=list(choices), disabled=disabled),
+            lambda value: value is not None and chosen(value),
+        )
 
     def heading(self, row):
         if isinstance(row, SessionRow):
@@ -338,12 +353,16 @@ class SettingsView(Scrolled, Screen):
     def missing_feature_text(self, row):
         """The preview's words for a value its model doesn't honour."""
         value = self.value(row)
-        if not self.unavailable_note(row, value):
-            return ""
+        note = self.unavailable_note(row, value)
         model = self.runs_on(row)
-        return (f'{model}\'s server was measured not to honour "{value}": '
-                "the choice is kept, and not sent while it runs there. `zero "
-                f"model features {model} --test` measures it again.")
+        reply = self.features.get((model, row.name == "thinking_effort"), {})
+        if error := reply.get("tools_error"):
+            return error
+        if note == " (unavailable)":
+            return "Choose a supported thinking effort before sending."
+        if note == " (unverified)":
+            return "The server has not confirmed support for this effort."
+        return ""
 
     def action_move(self, step):
         if self.rows:
@@ -373,10 +392,8 @@ class SettingsView(Scrolled, Screen):
         if row.kind in ("choice", "mode"):
             choices = (row.choices if row.kind == "choice"
                        else self.zero.modes())
-            self.app.push_screen(
-                ChoiceView(row.label, list(choices), now),
-                lambda value: value and self.set(row, value),
-            )
+            self.effort_picker(row, row.label, choices, now,
+                               lambda value: self.set(row, value))
         elif row.kind == "model":
             # New sessions' model has no unset choice: none set, they
             # can't start; the judge's unset is the session's own model
@@ -408,10 +425,8 @@ class SettingsView(Scrolled, Screen):
             return
         choices = (self.zero.modes() if setting.kind == "mode"
                    else list(setting.choices))
-        self.app.push_screen(
-            ChoiceView(label, choices, now),
-            lambda value: value and self.switch(row, value),
-        )
+        self.effort_picker(row, label, choices, now,
+                           lambda value: self.switch(row, value))
 
     def switch(self, row, value):
         self.zero.switch(**{row.name: value})

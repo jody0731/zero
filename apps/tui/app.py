@@ -46,6 +46,7 @@ from apps.tui.session_list_view import SessionListView
 from apps.tui.settings_view import SettingsView
 from apps.tui.widgets import ERRORS, MessageBox, Plain, Transcript, placeholder
 from client import render, session_list
+from client.connection import ProtocolError
 from client.follower import Follower
 from client.render import jobs_text
 
@@ -270,6 +271,7 @@ class ZeroApp(SafeClicks, App):
         # The session an `open` was last asked for: an earlier one's answer
         # that comes in after is dropped
         self.opening = None
+        self.sending = None
         self.view = SessionView()
         # config.toml's settings (/settings); a broken file is said, not used
         self.config_error = None
@@ -386,6 +388,7 @@ class ZeroApp(SafeClicks, App):
         """An opened session's records, fetched (open)."""
         if sid != self.opening:
             return
+        self.opening = None
         self.stop_following()
         self.client = SessionInput(self.connection, sid, workspace=row["workspace"])
         transcript = self.transcript
@@ -599,31 +602,86 @@ class ZeroApp(SafeClicks, App):
 
     def submit(self, field, follow_up=False):
         text = field.value
-        field.value = ""
         found = controller.command(text)
         if found is not None:
+            field.value = ""
             self.command(*found)
             return
         if self.client.leaves(text):
+            field.value = ""
             self.action_leave()
             return
-        self.send(text, follow_up)
+        self.send(text, follow_up, composer=field)
 
-    def send(self, text, follow_up=False, reply=False, choice=None):
+    def send(self, text, follow_up=False, reply=False, choice=None, *, composer=None):
         if not text.strip():
             return
         client = self.client
         target = (client.ask or {}).get("ask") if reply else None
         if reply and target is None:
             return
+        if not reply and self.opening is not None:
+            self.notify("Opening the session. Your message is in the composer.")
+            return
+        if composer is not None and self.sending and self.sending[0] is client:
+            return
+        pending = (client, composer) if composer is not None else None
+
+        def submitting():
+            if self.sending is pending:
+                self.sending = None
+            if client is self.client and composer.value == text:
+                composer.value = ""
+
+        def check(options):
+            if not reply and not client.running:
+                self.check_effort(client, options)
+            if pending is not None:
+                self.run_on_screen(submitting)
 
         def work():
             # Asked here, in turn: a line before it may have made the session
             made = client.session is None
-            return made, client.line(text, follow_up=follow_up, choice=choice,
-                                     reply_to=target)
+            answer = client.line(text, follow_up=follow_up, choice=choice,
+                                 reply_to=target, check=check)
+            return made, answer
 
-        self.request(work, then=lambda sent: self.sent(client, text, *sent))
+        def finished(result):
+            made, answer = result
+            self.sent(client, text, made, answer)
+
+        def failed(error):
+            if self.sending is pending:
+                self.sending = None
+            if client is self.client:
+                self.failed(error)
+
+        if pending is not None:
+            self.sending = pending
+        self.request(work, then=finished, failed=failed)
+
+    def check_effort(self, client, options):
+        """Check the route of a first message or the session's next turn."""
+        session = options["session"]
+        if session is None:
+            model = options["model"] or self.session_value("model")
+            effort = options.get("thinking_effort")
+            if model and effort is None:
+                listed, _ = self.connection.settings()
+                effort = next((row["value"] for row in listed
+                               if row["name"] == "thinking_effort"), None)
+        else:
+            runs = self.connection.runs_with(session)
+            model, effort = runs.get("model"), runs.get("thinking_effort")
+        if model:
+            capabilities = self.connection.features(model, cached_only=True, tools=True)
+            problem = controller.thinking_problem(
+                capabilities, effort or "model_default",
+            )
+            if problem:
+                raise ProtocolError(problem)
+        if client is not self.client or self.opening is not None:
+            raise ProtocolError("The session changed while checking the model.")
 
     def sent(self, client, text, made, answer):
         """A line the server took: shown as said, and followed."""

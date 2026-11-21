@@ -52,7 +52,9 @@ def tokens(text, bytes_a_token=BYTES_PER_TOKEN):
 def message_tokens(message, count=tokens):
     """A message's tokens, as it is sent; `count`: text's tokens (the
     server's count where there is one)."""
-    return count(json.dumps(message, ensure_ascii=False))
+    text = json.dumps(message, ensure_ascii=False)
+    # A server's separate tokenizer must never receive private continuation data.
+    return tokens(text) if "provider_state" in message else count(text)
 
 
 @dataclass(frozen=True)

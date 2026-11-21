@@ -7,16 +7,16 @@ them in Dev. verdict.py: the judge itself, one model call per verdict.
 hook.py: what it sees of a session, and the approver (JudgeApproval).
 """
 
-from model import THINKING_EFFORT_NEEDS, THINKING_EFFORTS
+from model import MODEL_DEFAULT_EFFORT, THINKING_EFFORT_NEEDS, THINKING_EFFORTS
 from settings import Setting
 
 SETTINGS = (
     # Unset, the judge is the session's model, as it stands
     Setting("judge_model", "Judge", "Model", None, "model",
             unset_means="the session's model"),
-    # Off: the judge reasons in its answer, before its decision (verdict.py),
-    # which is faster and doesn't circle as thinking can at temperature 0
-    Setting("judge_thinking_effort", "Judge", "Thinking effort", "off", "choice",
+    # The judge uses its model's own default until the user selects an effort.
+    Setting("judge_thinking_effort", "Judge", "Thinking effort",
+            MODEL_DEFAULT_EFFORT, "choice",
             choices=THINKING_EFFORTS, needs=THINKING_EFFORT_NEEDS,
             runs_on="judge_model"),
     # As the model's (model/__init__.py): a backstop, the judge's view now as

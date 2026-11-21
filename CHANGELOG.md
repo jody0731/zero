@@ -3,6 +3,18 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.8.4
+
+- ZERO defaults to Responses, including GPT-6.2 Sol on High with ZERO's
+  function tools and new compatible servers. Documented Chat exceptions and
+  saved API choices take precedence.
+- The browser and terminal mark unavailable thinking choices and keep an
+  affected draft while you choose another setting. Model default omits the
+  request's effort field.
+- Responses tool turns carry forward the provider's continuation data only
+  on the same model and endpoint. Saved API keys are bound to server URLs.
+  Save any legacy custom server key again to associate it with its URL.
+
 ## 0.7.8.3
 
 - Model selection fills in known context windows in the browser and terminal.

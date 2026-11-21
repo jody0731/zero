@@ -36,7 +36,8 @@
     settingsView: "General", modelLookup: null, modelServer: null,
     modelDirectories: new Map(), modelVersions: new Map(), modelPanelVersion: 0,
     rewindPoints: new Set(), composerDrafts: new Map(), submissions: new Map(),
-    jobs: new Map(), settingsDirty: false, settingsStatus: "",
+    jobs: new Map(), settingUpdates: new Set(), settingsStatus: "",
+    sessionRead: null,
     features: new Map(), turnStarted: null,
   };
 
@@ -380,7 +381,8 @@
     history.replaceState(null, "", id ? `#session=${encodeURIComponent(id)}`
       : "#view=new");
     state.turn = null;
-    state.settingsDirty = false;
+    state.settingUpdates = new Set();
+    state.sessionRead = null;
     state.settingsStatus = "";
     state.turnStarted = null;
     state.records = [];
@@ -402,11 +404,12 @@
       return;
     }
     timeline.replaceChildren(el("div", "loading", "…"));
+    state.sessionRead = Promise.all([
+      look("session/read", { session: id, limit: PAGE_RECORDS }),
+      look("session/user_messages", { session: id }),
+    ]);
     try {
-      const [reply, points] = await Promise.all([
-        look("session/read", { session: id, limit: PAGE_RECORDS }),
-        look("session/user_messages", { session: id }),
-      ]);
+      const [reply, points] = await state.sessionRead;
       if (state.open !== id || state.openVersion !== version) return;
       state.rewindPoints = new Set(points.messages.map((item) => item.seq));
       state.earlier = reply.earlier_count;
@@ -431,6 +434,8 @@
     saveComposerDraft();
     state.open = null;
     state.newSession = null;
+    state.settingUpdates = new Set();
+    state.sessionRead = null;
     $("title-editor")?.remove();
     state.turn = null;
     restoreComposerDraft();
@@ -1210,6 +1215,42 @@
 
   // ------------------------------------------------------------ sending
 
+  function effortLabel(value) {
+    return value === "model_default" ? "Model default" : value;
+  }
+
+  function effortProblem(reply, value) {
+    if (reply?.tools_error) return reply.tools_error;
+    if (reply?.thinking_efforts?.[value] === false) {
+      return `${effortLabel(value)} is unavailable on this route. `
+        + "Choose a supported thinking effort in Session settings.";
+    }
+    return "";
+  }
+
+  async function modelCapabilities(model, tools, fresh = false) {
+    if (!model) return null;
+    const key = JSON.stringify([model, tools]);
+    const saved = state.features.get(key);
+    if (!fresh && saved && Date.now() < saved.until) {
+      return saved.reply.catch(() => null);
+    }
+    const reply = change("model/features", { model, cached_only: true, tools });
+    state.features.set(key, { until: Date.now() + 15000, reply });
+    return fresh ? reply : reply.catch(() => null);
+  }
+
+  function labelEfforts(input, reply, note) {
+    for (const option of input.options) {
+      const supported = reply?.thinking_efforts?.[option.value];
+      option.disabled = supported === false;
+      const suffix = supported === false ? " (unavailable)"
+        : supported === null ? " (unverified)" : "";
+      option.textContent = effortLabel(option.value) + suffix;
+    }
+    note.textContent = effortProblem(reply, input.value);
+  }
+
   async function send(event) {
     if (event) event.preventDefault();
     const original = $("text").value;
@@ -1218,11 +1259,35 @@
     if (!text || button.disabled) return;
     const draft = state.newSession;
     const session = state.open;
+    const view = state.openVersion;
     if (!session && !draft) return;
     button.disabled = true;
     try {
       if (draft && text === "/init") text = state.hello.init_request;
       else if (await runCommand(text)) return;
+      await state.sessionRead;
+      while (state.openVersion === view && state.settingUpdates.size) {
+        await Promise.all(state.settingUpdates);
+      }
+      if (state.openVersion !== view) return;
+      const runs = state.runsWith;
+      if (!runs) throw new Error("Session settings are still loading.");
+      const { model, thinking_effort: effort } = runs;
+      const row = rowOf(session);
+      if (draft || !row || (!row.ask && !["running", "waiting"].includes(row.state))) {
+        const support = await modelCapabilities(model || row?.model, true, true);
+        if (state.openVersion !== view) return;
+        if (state.settingUpdates.size || state.runsWith?.model !== model
+            || state.runsWith?.thinking_effort !== effort) {
+          throw new Error("Session settings changed. Your message is in the composer.");
+        }
+        const problem = effortProblem(support, effort || "model_default");
+        if (problem) {
+          await drawDetails();
+          alert(problem);
+          return;
+        }
+      }
       if (draft) {
         const fields = { ...draft, text, source: "web" };
         const content = JSON.stringify(fields);
@@ -1435,7 +1500,7 @@
     const version = ++state.detailsVersion;
     if (draft && panel.draftRow === draft) return;
     panel.draftRow = draft;
-    const editing = state.settingsDirty || panel.contains(document.activeElement);
+    const editing = state.settingUpdates.size || panel.contains(document.activeElement);
     if (!draft && row && editing) {
       const family = familySection(row);
       const oldFamily = panel.querySelector(".session-family");
@@ -1512,7 +1577,7 @@
         input.append(unset);
       }
       for (const choice of choices || []) {
-        const option = el("option", null, choice);
+        const option = el("option", null, effortLabel(choice));
         option.value = choice;
         input.append(option);
       }
@@ -1743,6 +1808,8 @@
     const runs = state.runsWith || {};
     const inputs = {};
     const status = el("div", "sub save-status", state.settingsStatus);
+    const thinkingNote = el("div", "sub");
+    thinkingNote.setAttribute("aria-live", "polite");
     status.setAttribute("aria-live", "polite");
     const sayStatus = (message) => {
       if (row.id === state.open || row === state.newSession) {
@@ -1750,10 +1817,9 @@
       }
       status.textContent = message;
     };
-    const apply = async (name, value, control) => {
+    const update = async (name, value, control) => {
       const previous = name === "thinking_effort" ? runs[name] : row[name];
       control.disabled = true;
-      state.settingsDirty = true;
       sayStatus("Updating…");
       try {
         if (name === "model") await ensureModelWindow(value);
@@ -1776,9 +1842,16 @@
         sayStatus(error.message);
         throw error;
       } finally {
-        state.settingsDirty = false;
         control.disabled = false;
       }
+    };
+    const updates = state.settingUpdates;
+    const apply = (name, value, control) => {
+      const pending = update(name, value, control);
+      updates.add(pending);
+      const done = () => updates.delete(pending);
+      pending.then(done, done);
+      return pending;
     };
     for (const [name, label, value] of [
       ["mode", "Mode", row.mode], ["model", "Model", row.model],
@@ -1798,28 +1871,16 @@
     }
     form.append(workspaceControl(row.workspace, async (folder, button) => {
       await apply("workspace", folder, button);
-    }), status);
+    }), thinkingNote, status);
     const capabilities = async () => {
       const model = inputs.model.value.trim();
-      if (!model) return;
-      const setting = state.settings.find((each) => each.name === "thinking_effort")
-        || { needs: [] };
-      try {
-        if (!state.features.has(model)) {
-          state.features.set(model, change("model/features", {
-            model, cached_only: true,
-          }));
-        }
-        const reply = await state.features.get(model);
-        if (model !== inputs.model.value.trim()) return;
-        for (const option of inputs.thinking_effort.options || []) {
-          const need = (setting.needs || []).find(([value]) => value === option.value);
-          option.disabled = Boolean(need && reply.features[need[1]] === false);
-          option.title = option.disabled ? "Not supported by this model" : "";
-        }
-      } catch (error) { status.textContent = error.message; }
+      const reply = await modelCapabilities(model, true);
+      if (model === inputs.model.value.trim()) {
+        labelEfforts(inputs.thinking_effort, reply, thinkingNote);
+      }
     };
     inputs.model.addEventListener("change", capabilities);
+    inputs.thinking_effort.addEventListener("change", capabilities);
     capabilities();
     section.append(form);
     if (row.pending && row.pending.length) {

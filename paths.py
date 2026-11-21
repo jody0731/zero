@@ -41,7 +41,7 @@ import shutil
 import sys
 import tempfile
 import tomllib
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 NAME = "zero"
@@ -153,18 +153,17 @@ def sync_folder(folder):
 
 
 @contextmanager
-def changing(path):
-    """Hold a file of ZERO's while it is read, changed and written back: one
-    writer at a time, across ZERO's processes (a lock on its folder), so two
-    changes made at once both land. A link's file is held where it is."""
-    folder = Path(os.path.realpath(path)).parent
-    folder.mkdir(parents=True, exist_ok=True)
-    handle = os.open(folder, os.O_RDONLY)
-    try:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+def changing(path, *others):
+    """Hold the files' folders while rewriting them. A link's file is held
+    where it is, and a shared folder is locked only once."""
+    folders = sorted({Path(os.path.realpath(file)).parent for file in (path, *others)})
+    with ExitStack() as opened:
+        for folder in folders:
+            folder.mkdir(parents=True, exist_ok=True)
+            handle = os.open(folder, os.O_RDONLY)
+            opened.callback(os.close, handle)
+            fcntl.flock(handle, fcntl.LOCK_EX)
         yield
-    finally:
-        os.close(handle)
 
 
 def newer_note(where, found, known):

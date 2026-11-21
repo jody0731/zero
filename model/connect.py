@@ -3,14 +3,13 @@ tokens, and the server, its key and the user's default saved (model/service.py's
 messages).
 
 A server is asked for its models at /v1/models, including reported context
-windows. The connection then asks for as
-few tokens as its API allows from the chosen model, in the API its entry
-names (apis/; a server of the user's own speaks the Chat Completions API).
+windows. The connection then asks for as few tokens as its API allows from
+the chosen model, through the same reply API ordinary sessions use.
 A server that lists nothing (a 404 there) is proven by the call alone.
 An API that reports a window after loading is listed again after the test.
 Nothing is saved until the call answers.
 
-The key is saved in keys.toml. The server's own connection and any window
+The key and its URL are saved in keys.toml. The server's connection and any window
 the user gives for a particular model and URL are saved in models.toml.
 A key is never put in a reply: any error that would echo it is scrubbed.
 """
@@ -28,7 +27,6 @@ from core.llm import (
     safe_error_text,
 )
 from model import directory, servers
-from model.apis import APIS, DEFAULT
 from model.limits import endpoint, model_id, token_count
 from settings import sections
 
@@ -198,34 +196,34 @@ def with_format(text, number):
     return "".join(lines[:top]) + line + ("\n" + rest if rest.strip() else "")
 
 
-def save_key(name, key, path=None):
-    """The server's key in keys.toml (owner-only from the start); None takes
-    it out."""
-    path = Path(path or paths.keys_file())
-    with paths.changing(path):
-        text = read(path)
-        if key is None and name not in {table_name(h) for h, _ in
-                                        sections(text)}:
-            return
-        new = None if key is None else table_text(name, {"api_key": key})
-        text = with_format(replaced(text, name, new), servers.KEYS_FILE_FORMAT)
-        paths.write_whole(path, text, mode=0o600)
+def write_key(path, name, key, url=None):
+    """Write a server's key for its URL, or remove it when key is None."""
+    text = read(path)
+    if key is None and name not in {table_name(h) for h, _ in sections(text)}:
+        return
+    new = None if key is None else table_text(
+        name, {"api_key": key, "url": endpoint(url)},
+    )
+    text = with_format(replaced(text, name, new), servers.KEYS_FILE_FORMAT)
+    paths.write_whole(path, text, mode=0o600)
 
 
 def set_key(name, key):
     """Change just the saved credential for a configured server."""
-    server = (servers.find(name) if isinstance(name, str) and NAME.fullmatch(name)
-              else None)
-    if server is None:
-        raise ConnectError("Choose a configured model server.")
     if key is not None:
         if not isinstance(key, str) or not key.strip():
             raise ConnectError("Enter an API key to save.")
         key = key.strip()
         if any(character.isspace() or not character.isprintable() for character in key):
             raise ConnectError("An API key is one line without spaces.")
-    save_key(name, key)
-    return server
+    keys = paths.keys_file()
+    with paths.changing(paths.models_file(), keys):
+        server = (servers.find(name) if isinstance(name, str) and NAME.fullmatch(name)
+                  else None)
+        if server is None:
+            raise ConnectError("Choose a configured model server.")
+        write_key(keys, name, key, server.url)
+        return server
 
 
 def save_server(name, lines, path=None):
@@ -283,10 +281,12 @@ def reach(request):
         raise ConnectError("a key is a string; empty for none")
     if typed is not None:
         typed = typed.strip()
-        if not typed and known and known.key_env:
+        if not typed and known and known.key_env and endpoint(url) == endpoint(
+            known.url,
+        ):
             raise ConnectError(f"{known.title} needs its API key")
         key = typed or servers.NO_KEY
-    elif known and url == known.url:
+    elif known and endpoint(url) == endpoint(known.url):
         try:
             key = servers.api_key(known)
         except servers.ModelServerError as e:
@@ -304,14 +304,16 @@ def probe_request(request):
 
 def test_request(request):
     """Test one model with the saved connection and leave files alone."""
-    name, server, url, key = reach({"name": request.get("name")})
+    name, server, _, key = reach({"name": request.get("name")})
     model = request.get("model")
     if not isinstance(model, str) or not model.strip():
         raise ConnectError("Enter the model's name.")
     model = model.strip().removeprefix(f"{name}/")
     if not model:
         raise ConnectError("Enter the model's name.")
-    test_call(url, key, model, server.api, server=name, title=server.title)
+    _, entry, _ = model_route({"name": name, "model": model})
+    reply = servers.ModelServer(name, entry, model, refresh=False)
+    test_call(reply.reply_url, key, model, reply.api, server=name, title=server.title)
     return full_name(name, model)
 
 
@@ -341,7 +343,7 @@ def model_route(request):
     if not isinstance(url, str) or not url.startswith(("https://", "http://")):
         raise ConnectError("Enter the API URL starting with http:// or https://.")
     if entry is None or endpoint(entry["url"]) != endpoint(url):
-        own = {**own_lines(name), "url": url}
+        own = {**servers.without_endpoint_settings(own_lines(name)), "url": url}
         entry = servers.merge(catalog(), {name: own}, paths.models_file())[name]
     return name, entry, model
 
@@ -408,8 +410,8 @@ def connect(request):
                       "in tokens.")
     if known_window is None and not loads_window:
         raise ConnectError(missing_window)
-    api = APIS[entry.get("api", DEFAULT)]
-    test_call(url, key, model, api, server=name,
+    reply = servers.ModelServer(name, entry, model, refresh=False)
+    test_call(reply.reply_url, key, model, reply.api, server=name,
               title=title or (known.title if known else None))
     if loads_window:
         try:
@@ -420,20 +422,22 @@ def connect(request):
         known_window = context_window or limits.context_window
     if known_window is None:
         raise ConnectError(missing_window)
-    if request.get("key") is not None:
-        typed = request["key"].strip()
-        save_key(name, typed or None)
-    path = paths.models_file()
-    with paths.changing(path):
+    path, keys = paths.models_file(), paths.keys_file()
+    with paths.changing(path, keys):
         before = own_lines(name, path)
-        lines = dict(before)
         shipped = catalog().get(name)
+        previous_url = before.get("url") or (shipped["url"] if shipped else url)
+        lines = (servers.without_endpoint_settings(before)
+                 if endpoint(previous_url) != endpoint(url) else dict(before))
         if shipped is None:
             lines.update(title=title or lines.get("title") or name, url=url)
         elif url != shipped["url"] or "url" in lines:
             lines["url"] = url
         if context_window is not None:
             lines = save_window(lines, url, model, context_window)
+        if request.get("key") is not None:
+            typed = request["key"].strip()
+            write_key(keys, name, typed or None, url)
         if lines != before:
             write_server(path, name, lines)
     return full_name(name, model)
@@ -443,9 +447,11 @@ def disconnect(name):
     """The server's key and table out of the user's files."""
     if not isinstance(name, str) or not NAME.fullmatch(name):
         raise ConnectError(f"no server {name!r}")
-    save_key(name, None)
-    if name in servers.load(paths.models_file(), paths.models_file()):
-        save_server(name, None)
+    path, keys = paths.models_file(), paths.keys_file()
+    with paths.changing(path, keys):
+        write_key(keys, name, None)
+        if name in servers.load(path, path):
+            write_server(path, name, None)
 
 
 def server_of(model):
@@ -485,15 +491,17 @@ def rows():
     listed = []
     for name, entry in table.items():
         server = servers.ModelServer(name, entry)
-        has_saved_key = servers.saved_key(name, keys) is not None
-        key = "none needed" if server.key_env is None else "missing"
-        if has_saved_key:
+        has_saved_key = servers.stored_key(name, keys) is not None
+        saved_for_url = servers.saved_key(server, keys) is not None
+        needs_key = server.key_env is not None or (has_saved_key and not saved_for_url)
+        key = "missing" if needs_key else "none needed"
+        if saved_for_url:
             key = "there"
         if servers.environment_key(server):
             key = "environment"
         listed.append({
             "name": name, "title": server.title, "url": server.url,
-            "key_state": key, "needs_key": server.key_env is not None,
+            "key_state": key, "needs_key": needs_key,
             "has_saved_key": has_saved_key,
             "model_prefix": full_name(name, ""),
             "user_added": name in mine, "in_catalog": name in shipped,
@@ -503,7 +511,8 @@ def rows():
                 model: servers.model_limits(
                     name, entry, model, refresh=False,
                 )[1].context_window
-                for model in (entry.get("models", {}).keys()
+                for model in (set(entry.get("suggested_models", ()))
+                              | mine.get(name, {}).get("models", {}).keys()
                               | entry.get("context_windows", {}).get(
                                   endpoint(server.url), {},
                               ).keys())

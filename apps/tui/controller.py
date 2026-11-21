@@ -64,11 +64,11 @@ class SessionInput(SessionState):
         """Whether this line means leave, as Ctrl+D does."""
         return text.strip().lower() in LEAVE
 
-    def line(self, text, follow_up=False, choice=None, reply_to=None):
+    def line(self, text, follow_up=False, choice=None, reply_to=None, *, check=None):
         """A line typed disarms Ctrl+C's second press (SessionState.line)."""
         with self.lock:
             self.interrupt_armed = False
-        return super().line(text, follow_up, choice, reply_to)
+        return super().line(text, follow_up, choice, reply_to, check=check)
 
     def ctrl_c(self, empty=True, stop=None):
         """Stop a moving turn; a parked one isn't moving, so only say so.
@@ -325,9 +325,23 @@ def setting_text(setting, value, default_model=None):
             return f"{setting.unset_means} ({default_model})"
         # An effort the session was made without: none was sent
         return setting.unset_means or "the API's default"
+    if value == "model_default":
+        return "Model default"
     if isinstance(value, float):
         return f"{value:g}"
     return str(value)
+
+
+def thinking_problem(reply, effort):
+    """Explain which saved choice must change before beginning a turn."""
+    if error := reply.get("tools_error"):
+        return error
+    available = reply.get("thinking_efforts", {})
+    if available.get(effort) is False:
+        label = "Model default" if effort == "model_default" else effort
+        return (f"{label} is unavailable on this route. Choose a supported "
+                "thinking effort in /model.")
+    return ""
 
 
 def parse_setting(setting, text):

@@ -82,6 +82,7 @@ class Step:
             # A formatting correction cannot execute another operation.
             reply.tool_calls = []
             reply.message.pop("tool_calls", None)
+            reply.message.pop("provider_state", None)
             self.sections = None
         self.calls = [Call(self, call) for call in reply.tool_calls]
         self.empty = not self.calls and self.sections is None

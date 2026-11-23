@@ -35,7 +35,7 @@
 illustrative session data. Run <code>zero</code> to open it;
 <code>zero tui</code> opens the terminal app.</sub></p>
 
-- **Any model.** Choose a server from the [catalog](model/catalog.toml) or
+- **Any model.** Choose a server from the [catalog](components/model/catalog.toml) or
   connect your own server that speaks the Chat Completions or Responses API.
   Settings show which features ZERO has measured on your model.
 - **Many sessions:** each with its own workspace and history, opened, switched, renamed or archived from the browser or terminal.
@@ -101,7 +101,7 @@ The unpacked folder can go once it has installed.
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) and the system
   `libseccomp.so.2`: ZERO's sandbox and its filter for read-only commands.
   `zero doctor` checks both; a missing filter cannot run an unreviewed command.
-- a model from the [catalog](model/catalog.toml) or your own compatible server
+- a model from the [catalog](components/model/catalog.toml) or your own compatible server
 
 </details>
 
@@ -435,21 +435,23 @@ about the task wait for an answer through `zero_reply` in every mode.
 The full screen, the web UI, the commands and the MCP server are apps of ZERO's server, and a program in any language can be one. `zero server start --json` starts the server when none runs and names the way in:
 
 ```json
-{"ok": true, "socket": "/home/you/.zero/run/zero.sock", "token_file": "/home/you/.zero/app-token", "protocol": 6, "version": "0.7.7.4.12", "pid": 4242}
+{"ok": true, "socket": "/home/you/.zero/run/zero.sock", "token_file": "/home/you/.zero/app-token", "protocol": 8, "version": "<release>", "pid": 4242}
 ```
 
-A request is one JSON object on a line, answered by one line; [`protocol/schema.json`](protocol/schema.json) describes every message, its reply and the rows replies carry. Name the protocol in each request (`"protocol": 6`). A message that changes something (marked `x-changes`) carries an `id` you pick, new for each message: send the same id again when you don't know whether it got through, and it runs once, its first reply coming back marked `replayed`. A reply may carry fields your app doesn't know yet; read what you know. A program of yours on this machine is known by the socket itself; where it isn't (a relay, a container), put the token file's text in each request's `token`. The token lets your apps in and nothing more.
+A request is one JSON object on a line, answered by one line; [`protocol/schema.json`](protocol/schema.json) describes every message, its reply and the rows replies carry. Name the protocol in each request (`"protocol": 8`). A message that changes something (marked `x-changes`) carries an `id` you pick, new for each message: send the same id again when you don't know whether it got through, and it runs once, its first reply coming back marked `replayed`. A reply may carry fields your app doesn't know yet; read what you know. A program of yours on this machine is known by the socket itself; where it isn't (a relay, a container), put the token file's text in each request's `token`. The token lets your apps in and nothing more.
 
 ```python
 import json, socket
 
 with socket.socket(socket.AF_UNIX) as s:
     s.connect("/home/you/.zero/run/zero.sock")
-    s.sendall(b'{"message": "server/hello", "protocol": 6}\n')
+    s.sendall(b'{"message": "server/hello", "protocol": 8}\n')
     print(json.loads(s.makefile().readline())["modes"])
 ```
 
-Protocol 6 clients use `session/submit` for an existing session. Include
+Protocol 8 sends native public `Entry` records (`{seq, time, entry}`) in session history and watches, with each entry type declaring the fields apps can read (`protocol/entries.py`), and streams incremental `upsert`/`remove` row diffs after the initial `sessions` snapshot on `session/list` watches. A streamed draft carries its current Markdown in `draft.text`. Older clients below Protocol 8 are refused cleanly; on-disk format-7 logs still upgrade automatically on open.
+
+Protocol 6 and newer clients use `session/submit` for an existing session. Include
 `reply_to` to answer a specific question. A separate message queues while the
 question waits. If the previous server is busy during an upgrade, finish its
 work in the already-open app. The new client can replace it once idle.
@@ -478,7 +480,7 @@ ZERO was once a git clone with a Python environment of its own (`~/Applications/
 
 | Path | What it holds |
 | --- | --- |
-| `~/.local/share/zero/` | ZERO's releases, each in `versions/` with its own Python; `current` names the one that runs |
+| `~/.local/share/zero/` | ZERO's releases, each in `versions/` with its own Python; `current` names the one that runs (with self-contained plugins under `zero/components/`) |
 | `~/.local/bin/zero` | the command, which runs `current` |
 | `~/.agents/skills/` | the skills the agents on your machine share, which ZERO reads too |
 | `~/.config/systemd/user/zero-http-door.socket` | systemd's hold on the HTTP door's port, with `zero-http-door.service` beside it; `zero http-door uninstall` takes them away, `zero http-door install` puts them back. The port is `[http_door] port` in `config.toml` |

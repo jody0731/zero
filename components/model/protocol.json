@@ -1,0 +1,423 @@
+{
+  "defs": {
+    "model_failure": {
+      "type": "object",
+      "description": "What happened on a model request, with provider details redacted",
+      "required": [
+        "operation",
+        "server",
+        "server_title",
+        "next_action"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "enum": [
+            "generate_reply",
+            "test_model",
+            "compact_context"
+          ]
+        },
+        "server": {
+          "type": "string"
+        },
+        "server_title": {
+          "type": "string"
+        },
+        "http_status": {
+          "type": "integer"
+        },
+        "provider_code": {
+          "type": "string"
+        },
+        "provider_message": {
+          "type": "string"
+        },
+        "observation": {
+          "type": "string"
+        },
+        "next_action": {
+          "enum": [
+            "retry",
+            "fallback",
+            "stop"
+          ]
+        },
+        "fallback": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "message_extensions": {
+    "session/send": {
+      "fields": {
+        "thinking_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's thinking effort: off, low, high or max"
+        }
+      }
+    },
+    "session/submit": {
+      "fields": {
+        "thinking_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's thinking effort: off, low, high or max"
+        }
+      }
+    },
+    "session/set": {
+      "fields": {
+        "thinking_effort": {
+          "type": "string"
+        }
+      }
+    },
+    "session/read": {
+      "reply": {
+        "runs_with": {
+          "type": "object",
+          "properties": {
+            "thinking_effort": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "messages": {
+    "model/list": {
+      "about": "Every server the server can reach, with its models by the names a session takes, or why it lists none. Pass server for one directory, or cached to reuse directories already read for this connection.",
+      "fields": {
+        "server": {
+          "type": "string"
+        },
+        "cached": {
+          "type": "boolean"
+        }
+      },
+      "reply": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "server, title, models, any resolved model_limits by model name, and an error if the read failed"
+        }
+      }
+    },
+    "model/window": {
+      "about": "The selected model's effective context window, null if it is unknown. A connection can name its server and proposed API URL.",
+      "fields": {
+        "model": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "reply": {
+        "url": {
+          "type": "string"
+        },
+        "context_window": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_input_tokens": {
+          "type": "integer"
+        },
+        "max_output_tokens": {
+          "type": "integer"
+        }
+      }
+    },
+    "model/window/set": {
+      "about": "Remember a context window for one model on its current endpoint.",
+      "fields": {
+        "model": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "context_window": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "model",
+        "url",
+        "context_window"
+      ],
+      "changes": true
+    },
+    "model/features": {
+      "about": "What a model honours of its API's features (thinking_off, thinking_on, strict_json, json_mode), as measured: each true or false, null where never measured. Measured now when none are kept or `test` is true, a few small calls to the model. With `cached_only`, read the route's declared or measured support with no model calls. Pass tools for choices on a normal tool-equipped turn.",
+      "fields": {
+        "model": {
+          "type": "string"
+        },
+        "test": {
+          "type": "boolean"
+        },
+        "cached_only": {
+          "type": "boolean"
+        },
+        "tools": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "reply": {
+        "model": {
+          "type": "string"
+        },
+        "api": {
+          "type": "string"
+        },
+        "measured_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "features": {
+          "type": "object"
+        },
+        "thinking_efforts": {
+          "type": "object"
+        },
+        "tools_error": {
+          "type": "string"
+        }
+      },
+      "changes": true,
+      "timeout_seconds": 300
+    },
+    "model/server/list": {
+      "about": "Every model server the server knows, whether its key is there, the default model and its server, and why a session on it couldn't start (null: it can).",
+      "reply": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "name, title, url, key_state, needs_key, has_saved_key, model_prefix, user_added, in_catalog, context_window, models"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "default_server": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the server the default model goes to"
+        },
+        "not_ready_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "model/server/probe": {
+      "about": "A server's models, for a pick list. A typed url takes the typed key or none; a name alone, its own url and stored key.",
+      "fields": {
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      },
+      "reply": {
+        "url": {
+          "type": "string"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "id, context_window, any maximum input and output, and whether it reports its window on load"
+        }
+      }
+    },
+    "model/server/connect": {
+      "about": "A server's model tested with a call of a few tokens, then saved: the key in keys.toml, the server in models.toml; the first model connected becomes the default.",
+      "fields": {
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "context_window": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title": {
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "model"
+      ],
+      "reply": {
+        "model": {
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean"
+        }
+      },
+      "changes": true,
+      "timeout_seconds": 90
+    },
+    "model/server/key/set": {
+      "about": "Save a key and read that server's model directory. A null key removes the saved value. A directory error accompanies a successful key save and can be retried with model/list.",
+      "fields": {
+        "name": {
+          "type": "string"
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "key"
+      ],
+      "reply": {
+        "has_saved_key": {
+          "type": "boolean"
+        },
+        "directory": {
+          "type": "object",
+          "description": "a model/list server row"
+        }
+      },
+      "changes": true
+    },
+    "model/server/test": {
+      "about": "Send a short test call to a model on a configured server. The provider may charge for it.",
+      "fields": {
+        "name": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "model"
+      ],
+      "reply": {
+        "model": {
+          "type": "string"
+        }
+      },
+      "changes": true,
+      "timeout_seconds": 90
+    },
+    "model/server/disconnect": {
+      "about": "A server's key and the user's lines for it taken out.",
+      "fields": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "reply": {
+        "removed": {
+          "type": "string"
+        },
+        "default_unset": {
+          "type": "boolean"
+        }
+      },
+      "changes": true
+    }
+  },
+  "commands": {
+    "/model": "the model and its thinking, from the next turn: /model NAME, or pick"
+  }
+}

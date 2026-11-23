@@ -1,0 +1,75 @@
+{
+  "messages": {
+    "session/search": {
+      "about": "Search what every session's log holds, running or done: with query alone, the sessions whose records match, best first, each with its best record; with query and session, that session's matching records; with session and around, the records near one, whole.",
+      "fields": {
+        "query": {
+          "type": "string",
+          "description": "words a record holds, each whole; OR, \"a phrase\" and word* as FTS5 reads them"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id or the start of it"
+        },
+        "around": {
+          "type": "integer",
+          "description": "a record's seq in that session"
+        },
+        "count": {
+          "type": "integer",
+          "description": "how many sessions, or records, at most (10); with no query, how many on each side (5)"
+        }
+      },
+      "reply": {
+        "query": {
+          "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+          ]
+        },
+        "session": {
+          "type": "object",
+          "description": "the session searched or read",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "a session's id"
+            },
+            "title": {"type": "string"},
+            "workspace": {"type": "string"},
+            "state": {"type": "string"},
+            "mode": {"type": "string"},
+            "archived": {"type": "boolean"},
+            "updated_at": {"type": "number"}
+          },
+          "additionalProperties": true
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "the matching sessions, best first: a session's fields, record_count and its best record"
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "records: seq, kind (user, notice, reply, call, handoff), a call's tool or a notice's source, sender, action, target, time and a snippet (a match marked « ») or, near around, the whole text"
+        },
+        "session_count": {"type": "integer"},
+        "record_count": {"type": "integer"},
+        "matched_by": {
+          "enum": ["every word", "any word"],
+          "description": "what the records hold: every word, or, when no record does, any of them"
+        },
+        "around": {"type": "integer"},
+        "earlier_count": {"type": "integer"},
+        "later_count": {"type": "integer"}
+      }
+    }
+  }
+}

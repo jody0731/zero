@@ -32,7 +32,5 @@ class SessionState:
         self.watchers = {}
         # The reply streaming in: its latest draft event, or None
         self.draft = None
-        # Its context meter as its watchers last got it, and the line it was
-        # measured under (the runtime's meter_line)
+        # Its context meter as its watchers last got it
         self.meter = None
-        self.meter_line = None

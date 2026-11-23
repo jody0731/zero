@@ -1,6 +1,8 @@
-"""Plain text from log records and ask events."""
+"""Plain text from Protocol 8 log records and ask events."""
 
 from datetime import datetime
+
+from protocol import entries
 
 
 def duration(record, started=None, restarts=0):
@@ -10,7 +12,8 @@ def duration(record, started=None, restarts=0):
         ).total_seconds()))
         count = "once" if restarts == 1 else f"{restarts} times"
         return f"{seconds} s in all, resumed {count}"
-    return f"{record.get('seconds', 0)} s"
+    fields = entries.fields_of(record) if "entry" in record else record
+    return f"{fields.get('seconds', 0)} s"
 
 
 def short_tokens(count):
@@ -41,26 +44,28 @@ COMPACTED_BY = {"line": "at its line", "zero": "asked by ZERO",
                 "a request as too long"}
 
 
-# The records a compaction leaves: one, a failed one, or one with nothing
+# The entry types a compaction leaves: one, a failed one, or one with nothing
 # older than the newest step to hand off
-COMPACTION_RECORDS = ("compaction", "compaction_failed", "nothing_to_compact")
+COMPACTION_RECORDS = entries.COMPACTION_TYPES
 
 
 def compaction_text(record):
     """A compaction's record in a line: why, and the tokens before and
     after."""
-    why = COMPACTED_BY.get(record.get("reason"), record.get("reason"))
-    if record["type"] == "compaction_failed":
-        return f"compaction {why} failed: {record.get('error')}"
-    if record["type"] == "nothing_to_compact":
+    kind = entries.entry_type(record)
+    fields = entries.fields_of(record)
+    why = COMPACTED_BY.get(fields.get("reason"), fields.get("reason"))
+    if kind == "context/compaction_failed":
+        return f"compaction {why} failed: {fields.get('error')}"
+    if kind == "context/nothing_to_compact":
         return (f"compaction {why}: nothing to hand off, as the context holds "
                 "only its newest step")
-    before = short_tokens(record.get("tokens_before") or 0)
-    after = short_tokens(record.get("tokens_after") or 0)
-    how = "handed off" if record.get("summary") else "old outputs cleared"
+    before = short_tokens(fields.get("tokens_before") or 0)
+    after = short_tokens(fields.get("tokens_after") or 0)
+    how = "handed off" if entries.compaction_summary(record) else "old outputs cleared"
     text = f"context compacted {why}, {how}: {before} → {after} tokens"
     # What its askers said the handoff keeps, in a line
-    words = " ".join(" ".join((record.get("instructions") or {}).values()).split())
+    words = " ".join(" ".join((fields.get("instructions") or {}).values()).split())
     if words:
         text += f', keeping "{clipped_line(words)}"'
     return text
@@ -90,7 +95,8 @@ def model_failure_details(failure):
 
 def rewind_text(record):
     """A rewind, in a line: the records it left behind."""
-    return (f"rewound here: records {record['left_from']}–{record['left_to']} "
+    fields = entries.fields_of(record)
+    return (f"rewound here: records {fields['left_from']}–{fields['left_to']} "
             "left behind, kept in the log; files stay as they are")
 
 
@@ -108,16 +114,17 @@ def clipped(text):
 
 def outcome_of(record):
     """A tool record's outcome as (ok, exit code or None, wall time, output
-    lines), for the command blocks: from the data the record carries beside
-    its text (whether the call ran and failed, its tool's fields, where its
-    output starts in the text), never from its words."""
-    result = record.get("result") or ""
-    fields = record.get("fields") or {}
-    output_at = record.get("output_at")
+    lines), for the command blocks: from the data the record's entry carries
+    beside its text (whether the call ran and failed, its tool's fields, where
+    its output starts in the text), never from its words."""
+    data = entries.fields_of(record)
+    result = data.get("result") or ""
+    fields = data.get("fields") or {}
+    output_at = data.get("output_at")
     output = result[output_at:] if output_at is not None else result
     seconds = fields.get("wall_seconds")
     took = f"{seconds:.1f} s" if isinstance(seconds, (int, float)) else ""
-    ok = bool(record.get("ran")) and not record.get("failed")
+    ok = bool(data.get("ran")) and not data.get("failed")
     return ok, fields.get("exit_code"), took, output.splitlines()
 
 
@@ -130,9 +137,14 @@ def who(source, mine=None):
 
 
 def interaction_label(record):
-    event = record.get("interaction") or {}
-    sender = record.get("sender_name") or who(
-        event.get("sender") or record.get("source"))
+    """Human-readable actor/action/target label for a wire record or search hit."""
+    if "entry" in record:
+        event = entries.interaction(record) or {}
+        source = entries.field(record, "source")
+    else:
+        event = record.get("interaction") or {}
+        source = record.get("source")
+    sender = record.get("sender_name") or who(event.get("sender") or source)
     verbs = {"approve": "approved", "decline": "declined", "answer": "answered",
              "ask": "asked", "queue": "queued", "steer": "steer"}
     action = verbs.get(event.get("action"), "")
@@ -156,14 +168,15 @@ def jobs_text(jobs, sessions=False):
 
 def ask_line(ask):
     """An ask on one line, for plain output: its command and the reason the
-    user reads (its record's or its row's `reason`)."""
-    if ask.get("kind") == "secret":
-        title = ask.get("about") or "Private information needed"
+    user reads (from either a `sessions/ask` wire record or a `row.ask`)."""
+    data = entries.fields_of(ask) if "entry" in ask else ask
+    if data.get("kind") == "secret":
+        title = data.get("about") or "Private information needed"
         return title + ": use the masked form or zero private-input SESSION."
-    if ask.get("kind") == "question":
-        return f"Question: {ask['command']} (waiting for an answer)"
-    reason = ask.get("reason") or ""
-    return f"? {ask['tool']}: {ask['command']}" + (f" ({reason})" if reason else "")
+    if data.get("kind") == "question":
+        return f"Question: {data['command']} (waiting for an answer)"
+    reason = data.get("reason") or ""
+    return f"? {data['tool']}: {data['command']}" + (f" ({reason})" if reason else "")
 
 
 def call_line(call, summaries=None):
@@ -171,7 +184,7 @@ def call_line(call, summaries=None):
     which names the call (`read notes.txt`, `web_fetch URL`), a command's
     after a prompt's `$`."""
     line = command_of(call, summaries)
-    if call["function"].get("name") == "bash":
+    if entries.call_name(call) == "bash":
         return f"$ {line}"
     return line
 
@@ -180,10 +193,10 @@ def command_of(call, summaries=None):
     """A call as a line, as an ask shows it: the server's summary of it (an
     assistant record's `call_summaries`, by the call's id), else its raw
     arguments."""
-    found = (summaries or {}).get(call.get("id", ""))
+    found = (summaries or {}).get(entries.call_id(call))
     if found is not None:
         return found
-    return call["function"]["arguments"]
+    return entries.call_arguments(call)
 
 
 def grants_text(grants):
@@ -207,7 +220,8 @@ SWITCH_NAMES = {"judge_model": "judge", "judge_thinking_effort": "judge's thinki
 def switch_text(record):
     """A switch as the transcript shows it: "mode: default → auto"; the
     judge's too, which the model doesn't read."""
-    before = record.get("from", {})
+    fields = entries.fields_of(record)
+    before = fields.get("from") or {}
 
     def said(name, value):
         # The judge's model, unset, is the session's own
@@ -218,7 +232,7 @@ def switch_text(record):
     return " · ".join(
         f"{SWITCH_NAMES.get(name, name)}: {said(name, before.get(name, '?'))} "
         f"→ {said(name, value)}"
-        for name, value in record.get("to", {}).items()
+        for name, value in (fields.get("to") or {}).items()
     )
 
 
@@ -229,65 +243,67 @@ class Renderer:
         self.restarts = 0
 
     def event(self, event):
-        record = event.get("record", {})
-        kind = record.get("type")
+        record = event.get("record") or {}
+        kind = entries.entry_type(record)
+        fields = entries.fields_of(record)
         if record.get("audience") == "model":
-            self.restarts += record.get("kind") == "restarted"
+            self.restarts += fields.get("kind") == "restarted"
             return []
-        if kind == "user":
-            if not record.get("steer"):
+        if entries.is_turn_input(record):
+            if not fields.get("steer"):
                 self.started, self.restarts = record.get("time"), 0
-            if record.get("continue"):
+            if entries.is_continue(record):
                 return ["(you asked ZERO to go on)"]
-            source = record.get("source")
+            source = fields.get("source")
             # This terminal echoed its own steers and replies as they were sent
-            if self.source is not None and source == self.source and record.get(
+            if self.source is not None and source == self.source and fields.get(
                 "steer"
             ):
                 return []
-            mark = " (steer)" if record.get("steer") else ""
-            if record.get("interaction"):
-                return [f"{interaction_label(record)}> {record['text']}"]
-            return [f"{who(source, self.source)}{mark}> {record['text']}"]
-        if kind == "assistant":
-            message = record["message"]
-            lines = [message["content"]] if message.get("content") else []
+            text = entries.message_text(record)
+            mark = " (steer)" if fields.get("steer") else ""
+            if entries.interaction(record):
+                return [f"{interaction_label(record)}> {text}"]
+            return [f"{who(source, self.source)}{mark}> {text}"]
+        if kind == "chat/assistant_reply":
+            content = entries.assistant_text(record)
+            lines = [content] if content else []
             summaries = record.get("call_summaries")
-            for call in message.get("tool_calls") or []:
+            for call in entries.tool_calls(record):
                 lines.append(f"> {call_line(call, summaries)}")
             return lines
-        if kind == "tool":
-            return clipped(record["result"])
-        if kind == "ask":
+        if kind == "tools/result":
+            return clipped(fields.get("result") or "")
+        if kind == "sessions/ask":
             # The CLI's box holds the question; the transcript keeps one line
             return [ask_line(record)]
-        if kind == "answer":
-            if record.get("interaction"):
-                return [f"({interaction_label(record)}: {record.get('text', '')})"]
-            by = who(record.get("source"), self.source)
-            if record.get("kind") == "secret":
-                return [f"({by}: {record['text']})"]
-            if record.get("kind") == "question":
-                return [f"({by} answered: {record['text']})"]
-            if record["yes"]:
+        if kind == "sessions/answer":
+            if entries.interaction(record):
+                return [f"({interaction_label(record)}: {fields.get('text', '')})"]
+            by = who(fields.get("source"), self.source)
+            if fields.get("kind") == "secret":
+                return [f"({by}: {fields.get('text', '')})"]
+            if fields.get("kind") == "question":
+                return [f"({by} answered: {fields.get('text', '')})"]
+            if fields.get("yes"):
                 return [f"({by}: approved)"]
             return [f"({by} replied; not run)"]
-        if kind == "note":
-            self.restarts += record.get("kind") == "restarted"
-            return [record["text"]]
-        if kind == "switch":
+        if kind in entries.NOTE_TYPES:
+            self.restarts += fields.get("kind") == "restarted"
+            return [fields.get("text", "")]
+        if kind == "sessions/switch_note":
             return [f"({switch_text(record)})"]
         if kind in COMPACTION_RECORDS:
             return [f"({compaction_text(record)})"]
-        if kind == "rewind":
+        if kind == "sessions/rewind_note":
             return [f"({rewind_text(record)})"]
-        if kind == "turn_end":
+        if kind == "sessions/turn_end":
             elapsed = duration(record, self.started, self.restarts)
-            if record["outcome"] == "answered":
+            if fields.get("outcome") == "answered":
                 return [f"({elapsed})"]
-            why = record.get("detail") or ""
-            if record.get("error"):
-                why = record["error"].strip().splitlines()[-1]
+            why = fields.get("detail") or ""
+            if fields.get("error"):
+                why = fields["error"].strip().splitlines()[-1]
             detail = f": {why}" if why else ""
-            return [f"({record['outcome']}{detail}, {elapsed})"]
+            return [f"({fields.get('outcome')}{detail}, {elapsed})"]
         return []

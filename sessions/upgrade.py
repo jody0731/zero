@@ -26,10 +26,15 @@ import json
 import os
 import re
 import tempfile
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from core.history import LOG_FORMAT, NewerLog, log_format
+from core import attribution, entries, timeline
+from core.llm import Draft
+from core.timeline import LOG_FORMAT, OldLog
+from sessions.entries import build_record, encode_record
+from sessions.log import read_last_line, sync_folder
 
 UPGRADED = (
     "[The turns below come from a log without a harness header: their questions "
@@ -245,8 +250,60 @@ def from_6(records, header, time):
              "upgraded_from": first.get("upgraded_from", 6)}, *rest]
 
 
+def read_plain_reply(reply):
+    """The saved sections as Markdown for model replay."""
+    next_steps = reply.get("next") or {}
+    return "\n\n".join(text for text in (
+        reply.get("answer"), reply.get("why"), next_steps.get("user"),
+        next_steps.get("zero"),
+    ) if text)
+
+
+def without_reply_instructions(prompt):
+    body, separator, paragraph = prompt.rpartition("\n\n")
+    if not separator:
+        paragraph = prompt
+    if (paragraph.startswith("Your public reply is one JSON object in this form:")
+            and paragraph.endswith("Internal handoffs have their own format.")):
+        return body
+    return prompt
+
+
+def legacy_assistant(message, reply=None):
+    """Bring saved text, calls and opaque continuation into their own nodes."""
+    draft = Draft()
+    draft.content = read_plain_reply(reply) if reply else message.get("content")
+    draft.reasoning = message.get("reasoning_content")
+    for index, call in enumerate(message.get("tool_calls") or ()):
+        draft.calls[index] = {"id": call["id"], **call["function"]}
+    state = message.get("provider_state")
+    route = state.get("route") if isinstance(state, dict) else None
+    reply = draft.entry(route=route)
+    if state is None:
+        return reply
+    continuation = entries.make("provider_item", fields={
+        "route": route, "kind": "legacy_provider_state", "item": state,
+    })
+    return replace(reply, entries=(*reply.entries, continuation))
+
+
+def from_7(records, header, time):
+    """Give flat records stable envelopes without changing their sequence."""
+    result = []
+    for index, original in enumerate(records, 1):
+        record = {**original, "time": original.get("time") or time}
+        if index == 1 and record["type"] == "session":
+            record.update(format=LOG_FORMAT, upgraded_from=record.get(
+                "upgraded_from", 7))
+        if "system_prompt" in record:
+            prompt = record["system_prompt"]
+            record["system_prompt"] = without_reply_instructions(prompt)
+        result.append(_legacy_record(record, time, index, migrate_reply=True))
+    return result
+
+
 MIGRATIONS = {1: from_1, 2: from_2, 3: from_3, 4: from_4, 5: from_5,
-              6: from_6}
+              6: from_6, 7: from_7}
 
 
 def backup_path(path, source):
@@ -261,15 +318,189 @@ def is_backup(path):
     return ".format-" in Path(path).name
 
 
+def _legacy_record(line, time, seq, *, migrate_reply=False):
+    kind = line["type"]
+    seq = line.get("seq", seq)
+    stamp = line.get("time") or time
+    fields = {key: value for key, value in line.items()
+              if key not in ("seq", "type", "parent", "time")}
+    raw_settings = fields.get("settings")
+    if isinstance(raw_settings, dict):
+        judge = raw_settings.get("judge")
+        if isinstance(judge, dict) and "judge_model" not in raw_settings:
+            updated = dict(raw_settings)
+            updated["judge_model"] = judge.get("model")
+            if "effort" in judge and "judge_thinking_effort" not in updated:
+                updated["judge_thinking_effort"] = judge.get("effort")
+            fields["settings"] = updated
+    # A read-only migration and a later disk upgrade agree on inherited IDs.
+    entry_id = (fields.get("ask") if kind == "ask" else None) or f"record-{seq}"
+    if kind == "compaction":
+        children = []
+        if "system_prompt" in fields:
+            children.append(entries.make(
+                "system_prompt", fields={"text": fields.pop("system_prompt")},
+            ))
+        if fields.get("summary"):
+            children.append(entries.make(
+                "text", origin="model", fields={"text": fields.pop("summary")},
+            ))
+        entry = entries.make(
+            "compaction_handoff", id=entry_id, origin="system",
+            created_at=stamp, fields=fields or None,
+            entries=tuple(children) or None,
+        )
+        return build_record(seq, entry, line.get("parent"))
+    if kind in ("compaction_failed", "nothing_to_compact"):
+        entry = entries.make(
+            kind, id=entry_id, origin="system",
+            created_at=stamp, fields=fields or None,
+        )
+        return build_record(seq, entry, line.get("parent"))
+    if kind == "assistant" and (message := fields.pop("message", None)) is not None:
+        fields["entry"] = legacy_assistant(
+            message, fields.get("reply") if migrate_reply else None,
+        )
+    return build_record(seq, kind, line.get("parent"), time=stamp,
+                        fields=fields, entry_id=entry_id)
+
+
+def read_record(line, *, time=None, seq=None):
+    """Read a single native or legacy line without renumbering it."""
+    try:
+        return timeline.read_record(line)
+    except OldLog as old:
+        record = _legacy_record(line, time or timestamp(), seq or 1)
+        if entries.has(record.entry, "header"):
+            record = replace(record, log_format=old.found)
+        return record
+
+
+def _source_format(line):
+    if line is None:
+        return 1
+    mark = timeline.marked_format(line, first=True)
+    if mark is not None and mark < LOG_FORMAT:
+        return mark
+    if mark == LOG_FORMAT or "entry" in line:
+        return timeline.log_format((timeline.read_record(line, first=True),))
+    return mark or 1
+
+
+def _headerless_record(line):
+    """Recover the original format 1 facts from a partially started native log."""
+    if "entry" not in line:
+        return line
+    record = timeline.read_record(line)
+    entry = record.entry
+    fields = dict(entry.fields or {})
+    if timeline.is_turn_input(entry):
+        kind = "user"
+        fields["text"] = attribution.delivered_text(entry)
+    elif entries.has(entry, "turn_end"):
+        kind = "turn_end"
+    else:
+        raise ValueError(f"cannot migrate format 1 entry type {entry.type!r}")
+    return {**fields, "type": kind, "seq": record.seq, "time": record.time}
+
+
 def migrate(records, header=None, *, time):
-    """Pure in-memory upgrades, one step at a time; no file or clock access."""
+    """Pure in-memory upgrades of legacy records, one version at a time."""
     if not records:
         return []
-    source = log_format(records)
+    source = _source_format(records[0])
+    if source == LOG_FORMAT:
+        return [timeline.read_record(line) for line in records]
+    if source == 1:
+        records = [_headerless_record(line) for line in records]
     while source < LOG_FORMAT:
         records = MIGRATIONS[source](records, header, time)
         source += 1
     return records
+
+
+def _decode(path, line, number):
+    try:
+        raw = json.loads(line.decode("utf-8"))
+        if isinstance(raw, dict):
+            return raw
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        pass
+    raise ValueError(f"broken record at {path}:{number}")
+
+
+def _read_first(path):
+    try:
+        with open(path, "rb") as stream:
+            first = stream.readline()
+            number = 1
+            while first == b"\n":
+                first = stream.readline()
+                number += 1
+    except FileNotFoundError:
+        return None
+    return _decode(path, first, number) if first.endswith(b"\n") else None
+
+
+def _read_raw(path, data):
+    whole = data[:data.rfind(b"\n") + 1]
+    records = []
+    for number, line in enumerate(whole.split(b"\n")[:-1], 1):
+        if line:
+            raw = _decode(path, line, number)
+            if not records:
+                timeline.marked_format(raw, first=True)
+            records.append(raw)
+    return records
+
+
+def file_format(path):
+    """Read the original log's version without loading the rest of the file."""
+    return _source_format(_read_first(path))
+
+
+def read_header(log):
+    """A read-only view of the first record, preserving its original version."""
+    try:
+        return log.first_record()
+    except OldLog:
+        line = _read_first(log.path)
+        if line is not None:
+            timeline.marked_format(line, first=True)
+            return read_record(line)
+        return None
+
+
+def last_seq(log):
+    """Probe the last complete record's original sequence without migrating."""
+    try:
+        last = log.last_record()
+        return last.seq if last is not None else 0
+    except OldLog:
+        try:
+            with open(log.path, "rb") as stream:
+                first = stream.readline()
+                if first.endswith(b"\n"):
+                    timeline.marked_format(_decode(log.path, first, 1), first=True)
+                last = read_last_line(stream)
+        except FileNotFoundError:
+            return 0
+        return _decode(log.path, last, "last").get("seq", 0) if last else 0
+
+
+def read_records(log, *, time=None):
+    """Read native snapshots or migrate a legacy log in memory for a view."""
+    try:
+        records = log.records()
+        if not records or timeline.log_format(records) == LOG_FORMAT:
+            return records
+    except OldLog:
+        pass
+    try:
+        data = log.path.read_bytes()
+    except FileNotFoundError:
+        return ()
+    return migrate(_read_raw(log.path, data), time=time or timestamp())
 
 
 def _temp(folder, name, data):
@@ -310,30 +541,30 @@ def _backup(path, original):
 def upgrade_file(log, header):
     """Fsync the replacement and original copy, then atomically replace the log."""
     log.check_lock()
-    records = log.records()
-    source = log_format(records)
-    if source > LOG_FORMAT:
-        raise NewerLog(source)
-    if not log.path.exists() or source == LOG_FORMAT:
+    try:
+        original = log.path.read_bytes()
+    except FileNotFoundError:
         return False
-    original = log.path.read_bytes()
+    records = _read_raw(log.path, original)
+    source = _source_format(records[0] if records else None)
+    if source == LOG_FORMAT:
+        for raw in records[1:]:
+            timeline.read_record(raw)
+        return False
     stamp = timestamp()
     # A writer supplies a real header when an old log has no whole records.
     if not records:
         records = from_1(records, header, stamp)
     upgraded = migrate(records, header, time=stamp)
-    data = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in upgraded).encode()
+    data = b"".join(encode_record(record) for record in upgraded)
     temp = _temp(log.path.parent, log.path.name, data)
     try:
         backup = backup_path(log.path, source)
         _backup(backup, original)
+        sync_folder(log.path.parent)
         os.replace(temp, log.path)
-        log.last_seq = None
-        folder = os.open(log.path.parent, os.O_RDONLY)
-        try:
-            os.fsync(folder)
-        finally:
-            os.close(folder)
+        log.invalidate()
+        sync_folder(log.path.parent)
     finally:
         temp.unlink(missing_ok=True)
     return True
@@ -348,13 +579,30 @@ def record_failure(log, inbox, error):
     data = log.path.read_bytes()
     separator = b"" if not data or data.endswith(b"\n") else b"\n"
     count = data.count(b"\n") + bool(separator)
-    record = {
-        "seq": count + 1, "time": timestamp(), "type": "turn_end",
-        "inbox": inbox, "outcome": "crashed", "error": error,
-    }
-    ending = (json.dumps(record, ensure_ascii=False) + "\n").encode()
+    fields = {"inbox": inbox, "outcome": "crashed", "error": error}
+    stamp = timestamp()
+    try:
+        header = _read_first(log.path)
+    except ValueError:
+        header = None
+    mark = timeline.marked_format(header, first=True) if header is not None else None
+    seq = count + 1
+    if (header is not None and "entry" in header
+            and (mark is None or mark == LOG_FORMAT)):
+        try:
+            # A fork can have fewer lines than its last sequence number.
+            whole = data[:data.rfind(b"\n") + 1]
+            last = _decode(log.path, whole.splitlines()[-1], "last")
+            if type(last.get("seq")) is int:
+                seq = max(seq, last["seq"] + 1)
+        except (ValueError, IndexError):
+            pass
+        ending = encode_record(build_record(seq, "turn_end", time=stamp, fields=fields))
+    else:
+        record = {"seq": seq, "time": stamp, "type": "turn_end", **fields}
+        ending = (json.dumps(record, ensure_ascii=False) + "\n").encode()
     with open(log.path, "ab") as stream:
         stream.write(separator + ending)
         stream.flush()
         os.fsync(stream.fileno())
-    log.last_seq = None
+    log.invalidate()

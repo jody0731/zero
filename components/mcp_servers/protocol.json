@@ -1,0 +1,130 @@
+{
+  "messages": {
+    "mcp/list": {
+      "about": "The MCP servers whose tools ZERO's sessions use, as the user listed them, each with its state (starting, ready, failed, gone, stopped), its error and how many tools it offers; and what the list says that ZERO can't use. Values of env and headers are left out.",
+      "reply": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "name, transport, command, args, env, cwd, url, headers, tools, start_seconds, call_seconds, state, error, protocol_version"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mcp/get": {
+      "about": "One MCP server: its list row, its tools as the model calls them, what of its listing can't be offered, and its last words on stderr.",
+      "fields": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "reply": {
+        "server": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "mcp/add": {
+      "about": "An MCP server listed (a command ZERO starts, or a url), or copied from another agent's list (`from`: claude or codex; `tools` may narrow it); then started, the reply saying how its start went. One that fails stays listed.",
+      "fields": {
+        "name": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "start_seconds": {
+          "type": "number"
+        },
+        "call_seconds": {
+          "type": "number"
+        },
+        "outside_sandbox": {
+          "type": "boolean"
+        },
+        "from": {
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "reply": {
+        "server": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "changes": true,
+      "timeout_seconds": 90
+    },
+    "mcp/remove": {
+      "about": "An MCP server taken off the list and stopped; its tools offered no more.",
+      "fields": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "reply": {
+        "removed": {
+          "type": "string"
+        }
+      },
+      "changes": true
+    }
+  }
+}

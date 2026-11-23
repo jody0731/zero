@@ -1,0 +1,310 @@
+# The model servers ZERO knows out of the box (servers.py). The user's
+# models.toml adds servers of their own and changes any line here by naming
+# the same server. Each server: title (what the screens show), url,
+# key_env (the variable its key may come from; a key is then needed),
+# reply_api (the catalog's preferred API on this URL, with exact model
+# exceptions below), api (an explicitly configured API, which takes priority),
+# responses_url (the provider's separate Responses base, when it has one),
+# responses_since_version (the first release with Responses, for the local
+# server whose version is available at /api/version),
+# price (USD per 1M tokens at peak: cache hit, miss, output),
+# refuses_overlong_requests (whether the server rejects overlong requests).
+# [server.models] contains individual model settings and exact limits from
+# provider documentation. The generated limits.toml and prices.toml carry
+# the remaining published limits and prices.
+# models_dev_provider is the provider ID used for that public catalog.
+#
+# search_api names the separate lookup contract, with search_model where that
+# API runs an isolated model request. The user can choose a search service
+# by its model server name. A different server URL needs its own declaration.
+# bare_model_names marks the server for model names without a server prefix.
+# max_reasoning_effort overrides the wire value that the UI calls "max".
+# reasoning_efforts names supported explicit choices. An absent list means
+# unverified. API-specific declarations override shared choices.
+# chat_tool_efforts lists choices usable with functions on Chat.
+# chat_thinking_field names the provider's own Chat field.
+# replays_encrypted_reasoning requests and replays encrypted reasoning items.
+# replays_response_items controls whether opaque Responses output items replay.
+# requests_reasoning_summary asks Responses servers for reasoning summaries.
+# suggested_models are starter entries shown before the server lists models.
+
+[deepseek]
+models_dev_provider = "deepseek"
+title = "DeepSeek"
+url = "https://api.deepseek.com"
+key_env = "DEEPSEEK_API_KEY"
+replays_response_items = false
+suggested_models = ["deepseek-flash", "deepseek-v4-pro"]
+search_api = "deepseek_search"
+# Tried: 1.78M tokens came back 400, "maximum context length is 1048576"
+refuses_overlong_requests = true
+
+[deepseek.models]
+# Off-peak prices are half these
+"deepseek-v4-pro" = { reasoning_efforts = ["off", "low", "high", "max"] }
+
+[deepseek.models."deepseek-flash"]
+price = [0.006, 0.3, 1.2]
+reasoning_efforts = ["off", "low", "high", "max"]
+
+[ollama]
+title = "Ollama (on this computer)"
+url = "http://localhost:11434/v1"
+bare_model_names = true
+responses_since_version = [0, 13, 3]
+
+[openai]
+models_dev_provider = "openai"
+title = "OpenAI"
+url = "https://api.openai.com/v1"
+key_env = "OPENAI_API_KEY"
+replays_encrypted_reasoning = true
+requests_reasoning_summary = true
+accepts_zero_temperature = false
+suggested_models = ["gpt-5.4-mini", "gpt-6.2-sol"]
+search_api = "responses_search"
+search_model = "gpt-5.4-mini"
+# Its docs: context_length_exceeded
+refuses_overlong_requests = true
+
+[openai.models]
+# Search and audio models have separate Chat contracts.
+"gpt-5-search-api" = { reply_api = "chat_completions", reasoning_efforts = [] }
+"gpt-4o-audio-preview" = { reply_api = "chat_completions", reasoning_efforts = [] }
+"gpt-4o-mini-audio-preview" = { reply_api = "chat_completions", reasoning_efforts = [] }
+"gpt-4" = { reasoning_efforts = [] }
+"gpt-4-0613" = { reasoning_efforts = [] }
+"gpt-3.5-turbo" = { reasoning_efforts = [] }
+"gpt-3.5-turbo-0125" = { reasoning_efforts = [] }
+"gpt-3.5-turbo-1106" = { reasoning_efforts = [] }
+"gpt-4o" = { reasoning_efforts = [] }
+"gpt-4o-2024-05-13" = { reasoning_efforts = [] }
+"gpt-4o-2024-08-06" = { reasoning_efforts = [] }
+"gpt-4o-2024-11-20" = { reasoning_efforts = [] }
+"gpt-4o-mini" = { reasoning_efforts = [] }
+"gpt-4-turbo" = { reasoning_efforts = [] }
+"gpt-4.1" = { reasoning_efforts = [] }
+"gpt-4.1-mini" = { reasoning_efforts = [] }
+"gpt-4.1-nano" = { reasoning_efforts = [] }
+"gpt-6.2-astra" = { reasoning_efforts = ["low", "high", "max"], chat_tool_efforts = [] }
+"gpt-6.1-sol" = { reasoning_efforts = ["low", "high", "max"], chat_tool_efforts = [] }
+"gpt-6-astra" = { reasoning_efforts = ["low", "high", "max"], chat_tool_efforts = [] }
+"gpt-5" = { reasoning_efforts = ["low", "high"] }
+"gpt-5-mini" = { reasoning_efforts = ["low", "high"] }
+"gpt-5-nano" = { reasoning_efforts = ["low", "high"] }
+"o1" = { reasoning_efforts = ["low", "high"] }
+"o3" = { reasoning_efforts = ["low", "high"] }
+"o3-mini" = { reasoning_efforts = ["low", "high"] }
+"o4-mini" = { reasoning_efforts = ["low", "high"] }
+"gpt-5.1" = { reasoning_efforts = ["off", "low", "high"] }
+
+# Reasoning-model availability on Responses and explicit Chat.
+[openai.models."gpt-6-sol"]
+reasoning_efforts = ["off", "low", "high", "max"]
+chat_tool_efforts = ["off"]
+
+[openai.models."gpt-6-luna"]
+reasoning_efforts = ["off", "low", "high", "max"]
+chat_tool_efforts = ["off"]
+
+[openai.models."gpt-5.6"]
+reasoning_efforts = ["off", "low", "high", "max"]
+chat_tool_efforts = ["off"]
+
+[openai.models."gpt-5.6-sol"]
+reasoning_efforts = ["off", "low", "high", "max"]
+chat_tool_efforts = ["off"]
+
+[openai.models."gpt-5.6-terra"]
+reasoning_efforts = ["off", "low", "high", "max"]
+chat_tool_efforts = ["off"]
+
+[openai.models."gpt-5.6-luna"]
+reasoning_efforts = ["off", "low", "high", "max"]
+chat_tool_efforts = ["off"]
+
+[openai.models."gpt-5.4"]
+reasoning_efforts = ["off", "low", "high", "max"]
+max_reasoning_effort = "xhigh"
+chat_tool_efforts = ["model_default", "off"]
+
+[openai.models."gpt-5.4-mini"]
+reasoning_efforts = ["off", "low", "high", "max"]
+max_reasoning_effort = "xhigh"
+chat_tool_efforts = ["model_default", "off"]
+
+[openai.models."gpt-5.4-nano"]
+reasoning_efforts = ["off", "low", "high", "max"]
+max_reasoning_effort = "xhigh"
+chat_tool_efforts = ["model_default", "off"]
+
+[openai.models."gpt-5.5"]
+reasoning_efforts = ["off", "low", "high", "max"]
+max_reasoning_effort = "xhigh"
+chat_tool_efforts = ["off"]
+
+[openai.models."gpt-5.2"]
+reasoning_efforts = ["off", "low", "high", "max"]
+max_reasoning_effort = "xhigh"
+
+
+# https://developers.openai.com/api/docs/models/gpt-6.2-sol
+[openai.models."gpt-6.2-sol"]
+context_window = 1_050_000
+max_input_tokens = 922_000
+max_output_tokens = 128_000
+reasoning_efforts = ["low", "high", "max"]
+chat_tool_efforts = []
+
+[google]
+models_dev_provider = "google"
+title = "Google Gemini"
+url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+key_env = "GEMINI_API_KEY"
+# This URL serves Google’s OpenAI Chat compatibility API.
+reply_api = "chat_completions"
+
+[google.models]
+"gemini-2.5-flash" = { reasoning_efforts = ["off", "low", "high"] }
+"gemini-2.5-flash-lite" = { reasoning_efforts = ["off", "low", "high"] }
+"gemini-2.5-pro" = { reasoning_efforts = ["low", "high"] }
+"gemini-3-flash-preview" = { reasoning_efforts = ["low", "high"] }
+"gemini-3.1-flash-lite" = { reasoning_efforts = ["low", "high"] }
+"gemini-3.1-flash-lite-preview" = { reasoning_efforts = ["low", "high"] }
+"gemini-4-argon" = { reasoning_efforts = ["low", "high"] }
+"gemini-4-carbon" = { reasoning_efforts = ["low", "high"] }
+
+[google.models."gemini-4-hydrogen"]
+reasoning_efforts = ["low", "high", "max"]
+max_reasoning_effort = "xhigh"
+
+[google.models."gemini-4-neon"]
+reasoning_efforts = ["low", "high", "max"]
+max_reasoning_effort = "xhigh"
+
+[qwen]
+models_dev_provider = "alibaba-cn"
+title = "Qwen (Alibaba Cloud, China)"
+url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+key_env = "DASHSCOPE_API_KEY"
+
+[qwen.models."qwen-plus"]
+chat_reasoning_efforts = ["off"]
+chat_thinking_field = "enable_thinking"
+
+[qwen.models."deepseek-v4.1-flash"]
+responses_reasoning_efforts = ["off", "low", "high", "max"]
+
+[qwen.models."deepseek-v4-pro-0813"]
+responses_reasoning_efforts = ["off", "low", "high", "max"]
+
+[qwen.models."deepseek-v4-flash-0731"]
+responses_reasoning_efforts = ["off", "low", "high", "max"]
+
+[qwen.models."deepseek-v4-pro"]
+responses_reasoning_efforts = ["off", "high", "max"]
+
+[qwen.models."glm-5.3"]
+responses_reasoning_efforts = ["low", "high", "max"]
+
+[qwen.models."glm-5.2"]
+responses_reasoning_efforts = ["off", "high", "max"]
+
+[qwen.models."kimi-k3.1-pro"]
+responses_reasoning_efforts = ["low", "high", "max"]
+
+[qwen.models."qwen3.8-max"]
+responses_reasoning_efforts = ["off", "low", "max"]
+max_reasoning_effort = "xhigh"
+
+[qwen.models."qwen3.8-max-0902"]
+responses_reasoning_efforts = ["off", "low", "max"]
+max_reasoning_effort = "xhigh"
+
+[qwen.models."qwen3.8-flash"]
+responses_reasoning_efforts = ["off", "low", "max"]
+max_reasoning_effort = "xhigh"
+
+[qwen.models."qwen3.8-2.4t-a95b"]
+responses_reasoning_efforts = ["off", "low", "max"]
+max_reasoning_effort = "xhigh"
+
+[qwen.models."qwen3.8-27b"]
+responses_reasoning_efforts = ["off", "low", "max"]
+max_reasoning_effort = "xhigh"
+
+[qwen.models."qwen4-max"]
+responses_reasoning_efforts = ["off", "low", "high", "max"]
+max_reasoning_effort = "xhigh"
+chat_reasoning_efforts = ["off", "low", "high", "max"]
+
+[kimi]
+models_dev_provider = "moonshotai-cn"
+title = "Kimi (Moonshot AI, China)"
+url = "https://api.moonshot.cn/v1"
+key_env = "MOONSHOT_API_KEY"
+search_api = "moonshot_search"
+
+[kimi.models]
+[kimi.models."kimi-k2.6"]
+reply_api = "chat_completions"
+chat_reasoning_efforts = ["off"]
+chat_thinking_field = "thinking"
+accepts_zero_temperature = false
+
+[kimi.models."kimi-k2.7-code"]
+reply_api = "chat_completions"
+chat_reasoning_efforts = []
+accepts_zero_temperature = false
+
+[kimi.models."kimi-k2.7-code-highspeed"]
+reply_api = "chat_completions"
+chat_reasoning_efforts = []
+accepts_zero_temperature = false
+
+[kimi.models."kimi-k3"]
+reasoning_efforts = ["low", "high", "max"]
+accepts_zero_temperature = false
+
+[kimi.models."kimi-k3.1-pro"]
+reasoning_efforts = ["low", "high", "max"]
+accepts_zero_temperature = false
+
+[kimi.models."kimi-k3.1-pro-highspeed"]
+reasoning_efforts = ["low", "high", "max"]
+accepts_zero_temperature = false
+
+[glm]
+models_dev_provider = "zhipuai"
+title = "GLM (Zhipu AI, China)"
+url = "https://open.bigmodel.cn/api/paas/v4"
+key_env = "ZHIPU_API_KEY"
+responses_url = "https://open.bigmodel.cn/api/v1"
+chat_thinking_field = "thinking"
+
+[glm.models]
+"glm-4.5" = { chat_reasoning_efforts = ["off"] }
+"glm-4.5-air" = { chat_reasoning_efforts = ["off"] }
+"glm-4.5-flash" = { chat_reasoning_efforts = ["off"] }
+"glm-4.6" = { chat_reasoning_efforts = ["off"] }
+"glm-4.7" = { chat_reasoning_efforts = ["off"] }
+"glm-5" = { chat_reasoning_efforts = ["off"] }
+"glm-5.1" = { chat_reasoning_efforts = ["off"] }
+"glm-5.2" = { chat_reasoning_efforts = ["off", "high", "max"] }
+"glm-5.3-flash" = { chat_reasoning_efforts = ["low", "high", "max"] }
+"glm-5.3-flashx" = { chat_reasoning_efforts = ["low", "high", "max"] }
+
+[glm.models."glm-5.3"]
+responses_reasoning_efforts = ["high", "max"]
+chat_reasoning_efforts = ["low", "high", "max"]
+
+[openrouter]
+models_dev_provider = "openrouter"
+title = "OpenRouter (many servers, one key)"
+url = "https://openrouter.ai/api/v1"
+key_env = "OPENROUTER_API_KEY"
+replays_encrypted_reasoning = true
+accepts_zero_temperature = false
+reports_reasoning_efforts = true
+chat_thinking_field = "reasoning"
+# Hundreds of models: none listed; its own list gives each one's window

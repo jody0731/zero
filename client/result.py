@@ -7,6 +7,9 @@ the outcome, answer, open question, token use, duration and background work
 reported by the watch.
 """
 
+from protocol import entries
+
+
 class Result:
     def __init__(self, session, message_id=None):
         self.session = session
@@ -23,7 +26,9 @@ class Result:
 
     def add(self, event):
         """Take one event; True once the session has settled."""
-        record = event.get("record", {})
+        record = event.get("record") or {}
+        kind = entries.entry_type(record)
+        fields = entries.fields_of(record)
         if self.message_id:
             if any(row["id"] == self.message_id for row in event.get("withdrawn", ())):
                 self.last = {"outcome": "withdrawn"}
@@ -31,18 +36,18 @@ class Result:
                 return True
             if record and self.last:
                 # A new turn can start before the session as a whole settles.
-                self.settled = record["type"] == "user" and not record.get("steer")
+                self.settled = entries.is_turn_start(record)
                 return self.settled
-            if record.get("inbox") == self.message_id:
+            if fields.get("inbox") == self.message_id:
                 self.delivered = True
             if record and not self.delivered:
                 return False
-        if record.get("type") == "assistant":
+        if kind == "chat/assistant_reply":
             for name in self.tokens:
-                self.tokens[name] += record.get(f"{name}_tokens") or 0
-        elif record.get("type") == "turn_end":
+                self.tokens[name] += fields.get(f"{name}_tokens") or 0
+        elif kind == "sessions/turn_end":
             self.last = record
-            self.seconds += record.get("seconds") or 0
+            self.seconds += fields.get("seconds") or 0
         settled = event.get("settled")
         if settled is not None:
             self.ask = None if self.message_id and self.last else settled.get("ask")
@@ -53,6 +58,11 @@ class Result:
             self.settled = True
         return self.settled
 
+    def _last_fields(self):
+        if self.last is None:
+            return {}
+        return entries.fields_of(self.last) if "entry" in self.last else self.last
+
     def outcome(self):
         """The last turn's outcome; "waiting" while a question waits,
         "running" before it settles, None when nothing ran."""
@@ -60,7 +70,7 @@ class Result:
             return "running"
         if self.ask is not None:
             return "waiting"
-        return None if self.last is None else self.last["outcome"]
+        return None if self.last is None else self._last_fields()["outcome"]
 
     def exit_code(self):
         """The exit status: 0 answered, 1 not, 2 a question waits."""
@@ -69,13 +79,14 @@ class Result:
 
     def as_json(self):
         answer = None
-        if self.outcome() not in ("waiting", "running") and self.last:
-            answer = self.last.get("answer")
+        last = self._last_fields()
+        if self.outcome() not in ("waiting", "running") and last:
+            answer = last.get("answer")
         return {
             "ok": True, "session": self.session, "outcome": self.outcome(),
             "answer": answer, "ask": self.ask,
-            **({"reply": self.last["reply"]} if answer is not None
-               and "reply" in self.last else {}),
+            **({"reply": last["reply"]} if answer is not None
+               and "reply" in last else {}),
             "still_running": dict(self.still_running),
             "tokens": dict(self.tokens),
             "seconds": round(self.seconds, 1),
@@ -103,6 +114,6 @@ def latest_turn(records):
     """The seq to watch from so a Result covers the session's latest turn:
     just before its latest message that wasn't a steer; 0 for none."""
     for record in reversed(records):
-        if record.get("type") == "user" and not record.get("steer"):
+        if entries.is_turn_start(record):
             return record["seq"] - 1
     return 0

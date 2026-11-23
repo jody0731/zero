@@ -25,32 +25,46 @@ if __name__ == "__main__":
 
 import assembly  # noqa: E402
 import settings  # noqa: E402
+from paths import Paths  # noqa: E402
 from server.runtime import Runtime  # noqa: E402
 from server.server import AlreadyRunning, Server  # noqa: E402
-from paths import Paths, mcp_servers_file, permissions_file  # noqa: E402
 
 
-def build_runtime(paths, make_session=None, config=None, limits=None,
-                  make_consent=None, saved_permissions=permissions_file,
-                  tick=2.0, mcp_servers=mcp_servers_file, **options):
+def build_runtime(
+    paths,
+    make_session=None,
+    config=None,
+    limits=None,
+    *,
+    model=None,
+    mode=None,
+    default_model=None,
+    **service_options,
+):
     """ZERO's runtime, put together as the server runs it: the assembly's
     sessions, modes and services. `make_session`: in place of the assembly's
     (tests, the evals); `limits` over the config's for the assembly's.
-    `make_consent`, `saved_permissions`, `tick` and `mcp_servers` go to the
-    services (assembly.services); `options` to the Runtime."""
+    `service_options` go to `assembly.services`."""
     config = config or (lambda: settings.DEFAULTS)
     if make_session is None:
         make_session = assembly.server_session_maker(paths, config, limits)
-    services = assembly.services(config, make_consent, saved_permissions, tick,
-                                 mcp_servers)
-    return Runtime(paths, make_session, assembly.mode_rows(), services=services,
-                   config=config, **options)
+    services = assembly.services(config, **service_options)
+    return Runtime(
+        paths,
+        make_session,
+        assembly.mode_rows(),
+        services=services,
+        config=config,
+        model=model,
+        mode=mode,
+        default_model=default_model,
+    )
 
 
 def run(paths, model=None):
     """`model`: new sessions' model over config.toml's. A broken
     config.toml starts the server on the defaults, the error said."""
-    config = settings.Config(mode=assembly.canonical)
+    config = settings.Config()
     runtime = build_runtime(paths, config=config, model=model)
     Server(runtime, paths).serve()
 

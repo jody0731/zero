@@ -5,7 +5,7 @@ The loop (core/loop.py) fills them in; hooks read them at every hook.
 
 import time
 
-from core import public_reply, tools
+from core import entries, tools
 
 
 class Turn:
@@ -21,13 +21,11 @@ class Turn:
         self.started = time.monotonic()
         # Time spent waiting for the user, which hooks add (Approval)
         self.waiting = 0.0
-        # A parked turn coming back: (step, call, later calls, the reply)
+        # A parked turn coming back: its step, call, later calls and receipt
         self.unpark = None
         # A turn cut off after its end's fresh compaction: it had ended, and
         # a message that came since starts the next turn, not this one
         self.cut_past_its_end = False
-        self.reply_format_errors = 0
-        self.unformatted_reply = None
         self.outcome = self.detail = self.answer = self.error = None
         self.model_failure = None
         self.reply = None
@@ -66,44 +64,25 @@ class Step:
         self.retries = 0
         self.calls = []
         self.cut_off = self.malformed = self.empty = False
-        self.sections = None
-        self.invalid_reply = False
+        self.legacy_reply = None
+        self.content = None
         self.seconds = 0.0
         self.errors = []
 
-    def read_public_reply(self):
-        """Separate public text from tool calls before either reaches the log."""
+    def read_reply(self):
+        """Read the completed reply and validate its calls before execution."""
         reply = self.reply
-        raw = reply.content or ""
+        entries.ensure_executable(reply.entry)
         self.cut_off = reply.finish_reason == "length"
-        self.sections = public_reply.parse(raw)
-        repairing = self.turn.reply_format_errors > 0
-        if repairing and (reply.tool_calls or self.cut_off):
-            # A formatting correction cannot execute another operation.
-            reply.tool_calls = []
-            reply.message.pop("tool_calls", None)
-            reply.message.pop("provider_state", None)
-            self.sections = None
-        self.calls = [Call(self, call) for call in reply.tool_calls]
-        self.empty = not self.calls and self.sections is None
-        self.invalid_reply = self.empty and (
-            repairing or (not self.cut_off and bool(raw.strip())))
-        reply.content = None
-        reply.message.pop("content", None)
-        if self.invalid_reply:
-            self.turn.reply_format_errors += 1
-            self.turn.unformatted_reply = raw
-        elif self.sections is not None:
-            reply.content = public_reply.plain(self.sections)
-            reply.message["content"] = reply.content
-            self.turn.reply_format_errors = 0
-            self.turn.unformatted_reply = None
+        self.content = reply.content
+        self.calls = [Call(self, entry) for entry in entries.tool_calls(reply.entry)]
+        self.empty = not self.calls and not (self.content or "").strip()
 
     def assistant_record(self):
         reply = self.reply
         fields = {
             "step": self.number,
-            "message": reply.message,
+            "entry": reply.entry,
             "finish_reason": reply.finish_reason,
             "prompt_tokens": reply.prompt_tokens,
             "cached_tokens": reply.cached_tokens,
@@ -113,10 +92,6 @@ class Step:
         }
         if self.empty:
             fields["empty"] = True
-        if self.invalid_reply:
-            fields["invalid_reply"] = True
-        if self.sections is not None:
-            fields["reply"] = self.sections
         return fields
 
     def record(self):
@@ -130,9 +105,10 @@ class Call:
     def __init__(self, step, raw):
         self.step = step
         self.turn = step.turn
-        self.id = raw.id
-        self.name = raw.function.name
-        self.arguments = raw.function.arguments
+        entries.ensure_executable(raw, origin="model")
+        self.id = entries.call_id(raw)
+        self.name = raw.get("name")
+        self.arguments = raw.get("arguments")
         # A call to a tool that calls a found tool by its name is that
         # tool's call: every check, ask and record reads the tool that runs,
         # and `called_through` keeps the tool the model called
@@ -149,8 +125,9 @@ class Call:
         # When its tool started running (time.monotonic), once it has
         self.started_at = None
         # What its tool's answer carries beside its text (core/tools.py's
-        # Result): its fields, whether it failed, and where its output
+        # Result): its entries and fields, whether it failed, and where its output
         # starts in `result` while that is the tool's own text
+        self.entries = ()
         self.fields = {}
         self.failed = False
         self.output_at = None
@@ -175,6 +152,7 @@ class Call:
             "notes": self.notes,
             # Only where there is something to say, as an older log's
             # records have none of them
+            **({"entries": self.entries} if self.entries else {}),
             **({"fields": self.fields} if self.fields else {}),
             **({"failed": True} if self.failed else {}),
             **({"output_at": self.output_at}

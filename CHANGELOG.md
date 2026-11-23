@@ -3,6 +3,22 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.9.4
+
+- Sessions store conversations in Format 8 as structured, origin-attributed
+  entries, with automatic upgrade and `.format-7.jsonl` backups for older
+  logs. Protocol 8 sends native entries to every app and switches session
+  list updates to incremental diffs.
+- Native Responses and Chat Completions model adapters preserve provider
+  continuation state across tool turns, honor model-declared reasoning
+  summaries, and scope provider-side web search calls cleanly.
+- The browser app splits into native ES modules with incremental session list
+  updates, smoother streaming Markdown that keeps text selection intact, and
+  cleaner turn progress folds without blank disclosures.
+- Components are now self-contained under `components/` with declarative
+  manifests, capability-based tool traits, per-component protocol schemas,
+  and dynamically loaded browser UI extensions.
+
 ## 0.7.8.4
 
 - ZERO defaults to Responses, including GPT-6.2 Sol on High with ZERO's

@@ -10,6 +10,7 @@ import threading
 import time
 
 from client.render import command_of
+from protocol import entries
 
 
 class SessionState:
@@ -25,13 +26,13 @@ class SessionState:
         # A new session's thinking effort; None: the server's default
         self.thinking_effort = None
         self.running = False
-        # The open ask's `ask` record, from the log
+        # The open ask's `sessions/ask` record, from the log
         self.ask = None
         # What the turn is doing and since when (a monotonic time): thinking,
         # or running a command
         self.activity = None
         self.since = None
-        # The `retry` record of a model call that failed, until a reply
+        # The `sessions/retry` record of a model call that failed, until a reply
         self.retry = None
         # The reply streaming in (the server's `draft`: step, text, reasoning,
         # calls), until the next record replaces it
@@ -69,44 +70,46 @@ class SessionState:
                 self.retry = None
                 self.draft = None
                 return
-            record = event.get("record", {})
+            record = event.get("record") or {}
             if record:
                 # Any record ends the draft: the reply's own, a retry, a stop
                 self.draft = None
                 if self.activity == "writing":
                     self.doing("thinking")
-            kind = record.get("type")
-            if kind == "retry":
+            kind = entries.entry_type(record)
+            fields = entries.fields_of(record)
+            if kind == "sessions/retry":
                 self.retry = record
                 return
-            if kind in ("assistant", "turn_end", "ask") or (
-                kind == "note" and record.get("kind") == "fallback"
+            if (
+                kind in ("chat/assistant_reply", "sessions/turn_end", "sessions/ask")
+                or (kind in entries.NOTE_TYPES and fields.get("kind") == "fallback")
             ):
                 self.retry = None
             # A note that the turn resumed after a restart means it runs again
-            if kind in ("user", "tool") or (
-                kind == "note" and record.get("kind") == "restarted"
+            if entries.is_turn_input(record) or kind == "tools/result" or (
+                kind in entries.NOTE_TYPES and fields.get("kind") == "restarted"
             ):
                 self.running = True
                 self.doing("thinking")
-            elif kind == "assistant":
-                calls = record.get("message", {}).get("tool_calls") or []
+            elif kind == "chat/assistant_reply":
+                calls = entries.tool_calls(record)
                 if calls:
                     self.doing("running", command_of(
                         calls[0], record.get("call_summaries")))
-            elif kind == "turn_end":
-                if record.get("answer"):
-                    self.last_reply = record["answer"]
+            elif kind == "sessions/turn_end":
+                if fields.get("answer"):
+                    self.last_reply = fields["answer"]
                 self.running = False
                 self.ask = None
                 self.activity = None
-            elif kind == "ask":
+            elif kind == "sessions/ask":
                 # Parked: nothing runs until the reply
                 self.ask = record
                 self.running = False
                 self.activity = None
-            elif kind == "answer" and self.ask is not None:
-                if record["ask"] == self.ask["ask"]:
+            elif kind == "sessions/answer" and self.ask is not None:
+                if entries.ask_id(record) == entries.ask_id(self.ask):
                     self.ask = None
                     self.running = True
                     self.doing("thinking")

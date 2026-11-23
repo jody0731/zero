@@ -1,21 +1,19 @@
 """What the protocol's replies carry, built from the store and the logs in
-one place: a session's row, an ask, and a log's records as an app reads
-them (protocol/messages.py's ROWS and RECORDS).
+one place: a session's row, an ask, and a log's records as Protocol 8 apps
+read them (protocol/messages.py's ROWS and RECORD).
 
 A row is built from the store's columns by name, field by field, so a column
 renamed in the store (server/store.py's RENAMED_COLUMNS) changes the
 names below and no reply; a column an app has no use for (the next
-turn's switch, the log's place) never reaches one. A record goes out as the
-log holds it, with what an app would otherwise work out from another part's
-words: each tool call's line as an ask shows it (`call_summaries`), and an
-ask's answers with their words (`choice_labels`). A component's own rows
-(a job, a run in rounds) are built by its service, by the same rule.
+turn's switch, the log's place) never reaches one. Timeline records travel
+solely as native public `Entry` envelopes plus server-computed display hints
+(`audience`, `sender_name`, `notice_source`, `call_summaries`). A component's
+own rows (a job, a run in rounds) are built by its service.
 """
 
 import json
 
-from core import asking, history, public_reply, tools
-from core.llm import without_provider_state
+from core import asking, attribution, entries, timeline, tools
 
 
 def ask_row(ask):
@@ -58,68 +56,95 @@ def session_row(row, ask=None, pending=()):
     return found
 
 
-def call_summaries(message):
-    """Each of a model message's tool calls by its id, as an ask shows it;
+def call_summaries(entry):
+    """Each of a model reply's tool calls by its id, as an ask shows it;
     the raw arguments where they aren't JSON."""
     found = {}
-    for call in message.get("tool_calls") or ():
-        function = call.get("function") or {}
-        name, arguments = function.get("name", ""), function.get("arguments", "")
+    for call in entries.tool_calls(entry):
+        identifier = entries.call_id(call) or ""
+        name = call.get("name") or ""
+        arguments = call.get("arguments") or ""
         try:
             args = json.loads(arguments)
         except (TypeError, ValueError):
             args = None
         if isinstance(args, dict):
             try:
-                found[call.get("id", "")] = tools.summary(name, args, arguments)
+                found[identifier] = tools.summary(name, args, arguments)
                 continue
             except Exception:
                 pass
-        found[call.get("id", "")] = f"{name} {arguments}"
+        found[identifier] = f"{name} {arguments}"
     return found
 
 
-def record(record):
-    """A log's record as an app reads it."""
-    record = history.attributed(record)
-    if details := record.get("interaction"):
-        name = history.sender_name(details["sender"], details.get("sender_session"))
-        record = {**record, "sender_name": name}
-    kind = record.get("type")
-    if kind == "assistant" and "provider_state" in record.get("message", {}):
-        record = {**record, "message": without_provider_state(record["message"])}
-    if "reply" not in record:
-        if kind == "turn_end" and isinstance(record.get("answer"), str):
-            record = {**record, "reply": public_reply.sections(record["answer"])}
-        elif kind == "assistant" and not record.get("empty"):
-            text = record.get("message", {}).get("content")
-            if isinstance(text, str) and text:
-                record = {**record, "reply": public_reply.sections(text)}
-    if kind in ("note", "switch") and "model_failure" not in record:
+def record(record, *, session=None):
+    """A timeline record as Protocol 8 apps read it, or None if wholly private."""
+    entry = record.entry
+    public = entries.public(entry)
+    if public is None:
+        return None
+    fields = dict(public.get("fields") or {})
+    if entries.has(entry, "header") and "format" not in fields:
+        fields["format"] = (
+            timeline.LOG_FORMAT if record.log_format is None
+            else record.log_format
+        )
+    if "interaction" not in fields:
+        if details := attribution.interaction(record, session):
+            fields["interaction"] = entries.thaw(details)
+    if reply := fields.get("reply"):
+        next_steps = reply.get("next") or {}
+        if not any((value or "").strip() for value in (
+            reply.get("why"), next_steps.get("user"), next_steps.get("zero"),
+        )):
+            fields.pop("reply")
+    if entries.has(entry, "ask") and fields.get("kind") in (None, "permission"):
+        notes = entry.get("notes") or {}
+        choices = fields.get("choices") or list(asking.PLAIN_CHOICES)
+        fields["choices"] = list(choices)
+        fields["choice_labels"] = asking.choice_labels(
+            choices, notes.get("offer_text"), notes.get("session_scope"),
+        )
+    if fields:
+        public["fields"] = fields
+    else:
+        public.pop("fields", None)
+    found = {"seq": record.seq, "time": record.time, "entry": public}
+    if record.parent is not None:
+        found["parent"] = record.parent
+    if details := fields.get("interaction"):
+        found["sender_name"] = attribution.sender_name(
+            details["sender"], details.get("sender_session"),
+        )
+    if (entries.has(entry, "note") or entries.has(entry, "switch")) and (
+        "model_failure" not in fields
+    ):
         # Harness notes belong to the model's context. Operational state
         # reaches people through turn outcomes, asks, jobs and session rows,
         # or a fallback note with a model failure report.
-        return {**record, "audience": "model"}
-    if kind == "user" and history.is_notice(record):
-        return {**record, "notice": True,
-                "notice_source": history.NOTICES[record["source"]]}
-    if kind == "assistant" and (record.get("message") or {}).get("tool_calls"):
-        return {**record, "call_summaries": call_summaries(record["message"])}
-    if kind == "ask" and record.get("kind") not in ("question", "secret"):
-        offer = (record.get("notes") or {}).get("offer_text")
-        choices = record.get("choices") or asking.PLAIN_CHOICES
-        return {**record, "choice_labels": asking.choice_labels(
-            choices, offer, (record.get("notes") or {}).get("session_scope"))}
-    return record
+        found["audience"] = "model"
+    elif entries.has(entry, "notice") and fields.get("source") in attribution.NOTICES:
+        found["notice_source"] = attribution.NOTICES[fields["source"]]
+    elif entries.has(entry, "assistant_reply"):
+        if summaries := call_summaries(entry):
+            found["call_summaries"] = summaries
+    return found
 
 
 def records(found):
-    return [record(r) for r in found]
+    return [wire for r in found if (wire := record(r)) is not None]
 
 
 def event(event):
-    """A watch's event as an app reads it: its record, if it has one, built
-    as above."""
+    """A watch's event as an app reads it: its record projected to Protocol 8,
+    or None when the record is wholly private."""
     if "record" in event:
-        return {**event, "record": record(event["record"])}
+        found = dict(event)
+        session = found.pop("record_session", None)
+        wire = record(found["record"], session=session)
+        if wire is None:
+            return None
+        found["record"] = wire
+        return found
     return event

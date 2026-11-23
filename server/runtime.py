@@ -49,150 +49,29 @@ message came to, not a look through every session's inbox.
 """
 
 import json
-import sqlite3
 import threading
 import time
+import weakref
 import traceback
-from collections import deque
-from dataclasses import dataclass, field
-from pathlib import Path
 
 import settings
-from core import history, public_reply
-from core.control import Control
-from core.loop import INTERRUPTED, Session
-from core.asking import NO, PARK, YES
-from sessions import upgrade
-from sessions.log import Log, fresh_log
-from sessions.lock import Busy, SessionLock
-from server import rebuild, replies
-from server.idempotency import request_hash
+from core import attribution, entries, timeline
+from server import replies
+from server.admission import (
+    Admission, CONTINUE, Message, WHEN_BUSY, picked, sent_before,
+)
 from server.rebuild import FAILED
 from server.services import Refused
-from server.session_actions import (
-    ID_TRIES, SessionActions, check_thinking_effort, new_id, title,
-)
+from server.session_actions import SessionActions, title
 from server.session_state import SessionState
-from server.store import ReplyUnavailable, Store, UnknownSession
+from server.store import Store
+from server.turn_runner import MAX_RESUMES, TurnRunner, switch_note
+from server.watchers import BEHIND, DELETED, WATCH_QUEUE_MAX, Watcher, WatcherHub
+from sessions import upgrade
+from sessions.lock import Busy, SessionLock
+from sessions.log import Log
 
-MAX_RESUMES = 3
-WHEN_BUSY = ("steer", "queue")
-# What a turn begun by `continue` opens with: the user's wish, not their words
-CONTINUE = "[The user asked you to go on with the task.]"
-# Events a watch may have waiting; a watcher further behind is let go with
-# a `bye` "behind", and follows again from the log, which holds them all
-WATCH_QUEUE_MAX = 2000
-# Why a watch the runtime lets go ends (protocol/messages.py): too far
-# behind, or its session deleted
-BEHIND = "behind"
-DELETED = "deleted"
-# How often `wait` looks again at a message no runner has taken yet
 WAIT_LOOK_SECONDS = 0.05
-
-
-@dataclass
-class Message:
-    """A message from a client. `session` None starts a new session."""
-
-    id: str
-    text: str
-    session: str | None = None
-    mode: str | None = None
-    model: str | None = None
-    # A new session's thinking effort; None: config.toml's
-    thinking_effort: str | None = None
-    # Who sent it: each caller names itself (the CLI, terminal-<pid>)
-    source: str = field(kw_only=True)
-    # The ask this message replies to: the client marks a line typed at an
-    # ask's prompt
-    reply_to: str | None = None
-    # One of the ask's choices, picked at the box: no consent check
-    choice: str | None = None
-    # A new session's workspace, an absolute folder; None means /
-    workspace: str | None = None
-    # While a turn runs: "steer" it, or "queue" as a follow-up after its answer
-    when_busy: str = "steer"
-    title: str | None = None
-
-
-def sent_before(row, message, digest):
-    """What a message sent again gets, its id already in the inbox: the
-    first's ack, nothing run again; refused when the id came with another
-    message (its text, or the session it named)."""
-    payload = json.loads(row["payload"])
-    same = (row["kind"] == "user" and payload.get("text") == message.text
-            and row["source"] == message.source
-            and payload.get("reply_to") == message.reply_to
-            and payload.get("choice") == message.choice
-            and payload.get("request_hash", digest) == digest
-            and (message.session is None or message.session == row["session"]))
-    if not same:
-        raise Refused(f"message id {message.id!r} was used for another "
-                      "message; a new message takes a new id")
-    ack = {"admitted": False, "session": row["session"]}
-    if payload.get("handled_as") is not None:
-        ack["handled_as"] = payload["handled_as"]
-    return ack
-
-
-def picked(ask, payload):
-    """The choice picked at an ask's box, if the reply is marked for that
-    ask and the ask offers it; else None."""
-    choice = payload.get("choice")
-    offered = ask.get("choices") or [YES, NO]
-    if payload.get("reply_to") != ask["ask"] or choice not in offered:
-        return None
-    return choice
-
-
-def switch_note(changes, session):
-    """What the model reads when the user changed the session between turns:
-    what changed, and what the hooks say it runs with now (the `switched`
-    hook: Environment's workspace and sandbox)."""
-    said = "; ".join(f"{name} {old} → {new}" for name, (old, new) in changes.items())
-    now = session.hooks.collect("switched", session)
-    return f"[Harness note: the user changed this session's {said}. From here on:{now}]"
-
-
-class Watcher:
-    """One watching connection's queue: records and events, in order, at
-    most `most` of them (design rule 12: every queue has a cap)."""
-
-    def __init__(self, most=None):
-        self.events = deque()
-        self.most = WATCH_QUEUE_MAX if most is None else most
-        self.ready = threading.Condition()
-        # Why the server closes this watch: a `bye` reason, once it does
-        self.bye = None
-
-    def put(self, event):
-        with self.ready:
-            if self.bye is not None:
-                return
-            # A draft holds the whole reply so far, so a newer one replaces
-            # one still queued: a slow reader gets the latest, not each
-            if "draft" in event and self.events and "draft" in self.events[-1]:
-                self.events[-1] = event
-            elif len(self.events) >= self.most:
-                # Too far behind: let go, to follow again from the log
-                self.events.clear()
-                self.bye = BEHIND
-            else:
-                self.events.append(event)
-            self.ready.notify_all()
-
-    def close(self, reason):
-        with self.ready:
-            self.bye = self.bye or reason
-            self.ready.notify_all()
-
-    def take(self, timeout):
-        """What came since the last take, waiting up to `timeout` for any."""
-        with self.ready:
-            self.ready.wait_for(lambda: self.events or self.bye, timeout)
-            events = list(self.events)
-            self.events.clear()
-            return events
 
 
 class Runtime(SessionActions):
@@ -251,8 +130,13 @@ class Runtime(SessionActions):
         self.accepting = True
         self.started = False
         # The session list's listeners wait for its version to move
-        self.list_version = 0
-        self.list_changed = threading.Condition()
+        self.watcher_hub = WatcherHub(self)
+        self.list_cache_version = None
+        self.list_cache_rows = {}
+        self.list_cache_lock = threading.Lock()
+        self.list_build_lock = threading.Lock()
+        self.admission = Admission(self)
+        self.turn_runner = TurnRunner(self)
         self.store.on_change = self.notify_list_changed
         # The components' services by name, the messages they add, and those of
         # them that only look
@@ -368,18 +252,15 @@ class Runtime(SessionActions):
         message is being admitted."""
         return bool(self.runner_count or self.leaving_count or self.admitting)
 
-    def notify_list_changed(self):
-        with self.list_changed:
-            self.list_version += 1
-            self.list_changed.notify_all()
+    @property
+    def list_version(self):
+        return self.watcher_hub.list_version
+
+    def notify_list_changed(self, changed_sids=()):
+        return self.watcher_hub.notify_list_changed(changed_sids)
 
     def wait_list(self, version, timeout):
-        """The list's version once it passes `version`, or after `timeout`."""
-        with self.list_changed:
-            self.list_changed.wait_for(
-                lambda: self.list_version != version, timeout
-            )
-            return self.list_version
+        return self.watcher_hub.wait_list(version, timeout)
 
     def wake(self, sid=None):
         """Dispatch an admitted notice to its session, or look for waiting ones."""
@@ -388,65 +269,87 @@ class Runtime(SessionActions):
 
     def log(self, sid, lock=None):
         """A session's log; what it appends reaches the session's watchers."""
-        return Log(
-            self.paths.sessions / f"{sid}.jsonl", lock=lock,
-            on_append=lambda record: self.appended(sid, record),
-            transform=self.redact,
-        )
+        log = Log(self.paths.sessions / f"{sid}.jsonl", lock=lock,
+                  transform=self.redact_entry)
+        writer = weakref.ref(log)
+        log.on_append = lambda record: self.appended(sid, record, writer())
+        return log
+
+    def read_log(self, sid):
+        """Use the harness's log cache where this runtime already has one."""
+        state = self.states.get(sid)
+        harness = state.harness if state is not None else None
+        return harness.log if harness is not None else self.log(sid)
+
+    def read_records(self, sid):
+        return upgrade.read_records(self.read_log(sid))
+
+    def read_header(self, sid):
+        try:
+            return upgrade.read_header(self.read_log(sid))
+        except timeline.NewerLog:
+            return None
+
+    def read_branch(self, sid, *, log=None):
+        log = log or self.read_log(sid)
+        try:
+            records = log.branch()
+            if not records or timeline.log_format(records) == timeline.LOG_FORMAT:
+                return records
+        except timeline.OldLog:
+            pass
+        return timeline.branch(upgrade.read_records(log))
+
+    @staticmethod
+    def read_log_record(line, *, seq=None):
+        """Decode a log line for components that read from a byte offset."""
+        raw = json.loads(line.decode("utf-8"))
+        if seq == 1:
+            timeline.marked_format(raw, first=True)
+        return upgrade.read_record(raw, seq=seq)
 
     def redact(self, value, partial=False):
         for service in self.services.values():
             value = service.redact(value, partial=partial)
         return value
 
-    def appended(self, sid, record):
-        if record["type"] == "turn_end":
-            self.store.mark_ended(sid, record["seq"])
+    def redact_entry(self, entry):
+        for service in self.services.values():
+            entry = service.redact_entry(entry)
+        return entry
+
+    @property
+    def private_ask_kinds(self):
+        kinds = {}
+        for service in self.services.values():
+            kinds.update(service.private_ask_kinds)
+        return kinds
+
+    def stream_filters(self):
+        """Fresh stream-filter callables provided by attached services."""
+        found = []
+        for service in self.services.values():
+            factory = service.stream_filter()
+            if factory is not None:
+                found.append(factory())
+        return found
+
+    def appended(self, sid, record, log):
+        if entries.has(record.entry, "turn_end"):
+            self.store.mark_ended(sid, record.seq)
         # Any record ends the draft: the reply's own, a retry, a stop's note
         self.state(sid).draft = None
         self.publish(sid, {"record": record})
-        self.meter(sid, record)
+        self.meter(sid, log)
 
-    def meter(self, sid, record):
-        """The context's meter after a record, sent to the watchers when it
-        changes: from the whole log the first time this server sees the
-        session or when the line's setting has changed since, then record by
-        record (core/history.py)."""
-        compact_at = self.meter_line()
-        state = self.state(sid)
-        before = state.meter
-        if before is None or state.meter_line != compact_at:
-            now = None
-            for each in self.log(sid).branch():
-                now = history.metered(now, each, compact_at)
-        else:
-            now = history.metered(before, record, compact_at)
-        state.meter = now
-        state.meter_line = compact_at
-        if now != before and now["tokens"]:
-            self.publish(sid, {"context": now})
+    def meter(self, sid, log=None):
+        return self.watcher_hub.meter(sid, log)
 
     def draft(self, sid, step, draft):
-        """The model's reply as it streams in (core/llm.py, Draft), to the
-        session's watchers: the text so far, how much reasoning, the tools
-        whose calls have begun. Kept until the next record, for a watch that
-        starts mid-reply; never logged."""
-        reply = public_reply.parse(draft.content, partial=True)
-        event = {"draft": {
-            "step": step,
-            "text": public_reply.plain(reply) if reply is not None else "",
-            **({"reply": reply} if reply is not None else {}),
-            "reasoning": len(draft.reasoning),
-            "calls": [call["name"] for _, call in sorted(draft.calls.items())],
-        }}
-        event = self.redact(event, partial=True)
-        self.state(sid).draft = event
-        self.publish(sid, event)
+        return self.watcher_hub.draft(sid, step, draft)
 
     def current_draft(self, sid):
-        """The draft event of the reply streaming in now, or None."""
-        state = self.states.get(sid)
-        return None if state is None else state.draft
+        return self.watcher_hub.current_draft(sid)
 
     def session_lock(self, sid):
         return SessionLock(self.paths.locks / f"{sid}.lock")
@@ -462,191 +365,26 @@ class Runtime(SessionActions):
 
     def message_fields(self):
         """What a message carries beside its text onto its user record:
-        core's (history.MESSAGE_FIELDS) and those the services read."""
-        names = list(history.MESSAGE_FIELDS)
+        core's (attribution.MESSAGE_FIELDS) and those the services read."""
+        names = list(attribution.MESSAGE_FIELDS)
         for service in self.services.values():
             names += [n for n in service.message_fields if n not in names]
         return names
 
     def admit(self, message, extra=None, *, legacy_send=False):
-        """Commit a message to the inbox, then return the ack: its session and
-        its handled_as, what became of it. `extra`: payload fields."""
-        if not self.accepting:
-            raise Refused("the server is shutting down; send it again once it's back")
-        message.text = self.redact(message.text)
-        if not message.text.strip():
-            raise Refused("empty message")
-        if message.when_busy not in WHEN_BUSY:
-            raise Refused(f"when_busy is one of {WHEN_BUSY}")
-        digest = request_hash({**vars(message), "fields": extra or {}})
-        seen = self.store.query("SELECT * FROM inbox WHERE id = ?", message.id)
-        if seen:
-            return sent_before(seen[0], message, digest)
-        new = None
-        sid = message.session
-        if message.title is not None and (sid is not None or not message.title.strip()):
-            raise Refused("an initial title needs a new session and a nonblank name")
-        if sid is None:
-            workspace = message.workspace or "/"
-            if not Path(workspace).is_absolute():
-                raise Refused(f"a workspace is an absolute folder, not {workspace!r}")
-            if not Path(workspace).is_dir():
-                raise Refused(f"no folder {workspace}")
-            mode = self.check_mode(message.mode or self.mode)
-            model = message.model or self.model
-            if not model:
-                raise Refused(
-                    "no model is set yet: zero, the terminal, connects one "
-                    "(Connect a model; later /settings, Models and keys), or "
-                    "--model names one"
-                )
-            initial_title = message.text
-            if message.title:
-                initial_title = self.redact(message.title)
-            new = {
-                "title": title(initial_title),
-                "source": message.source,
-                "model": model,
-                "mode": mode,
-                "workspace": str(Path(workspace).resolve()),
-            }
-            if message.thinking_effort is not None:
-                # Its first turn builds it with the effort, as a switch would
-                effort = check_thinking_effort(
-                    "thinking_effort", message.thinking_effort
-                )
-                new["switch"] = json.dumps({"thinking_effort": effort})
-        payload = {"text": message.text, "request_hash": digest, **(extra or {})}
-        if message.choice is not None and message.reply_to is None:
-            raise Refused("a choice answers the question named in reply_to")
-        if message.reply_to is not None and sid is None:
-            raise Refused("a reply needs the session of its question")
-        if message.reply_to is not None:
-            payload["reply_to"] = message.reply_to
-            if message.choice is not None:
-                payload["choice"] = message.choice
-        with self.door:
-            if not self.accepting:
-                raise Refused("the server is shutting down; send it again once "
-                              "it's back")
-            self.admitting += 1
-            self.admissions += 1
-        try:
-            admitted, sid, handled_as = self.admit_to_session(
-                message, sid, new, payload, legacy_send)
-            if admitted and self.started:
-                self.dispatch(sid)
-        finally:
-            with self.activity:
-                self.admitting -= 1
-                self.activity.notify_all()
-        return {"admitted": admitted, "session": sid, "handled_as": handled_as}
+        return self.admission.admit(message, extra, legacy_send=legacy_send)
 
     def check_reply(self, sid, message, expected):
-        ask = self.store.open_ask(sid)
-        if not ask or ask["id"] != message.reply_to:
-            raise Refused("the addressed question no longer waits in this session")
-        if ask["kind"] == "secret" and expected != "secret":
-            raise Refused("This input uses the vault's masked form.")
-        if expected and ask["kind"] != expected:
-            raise Refused("the addressed question has another kind")
-        if ask["requires_user"] and not history.is_user_source(message.source):
-            raise Refused("this change needs an answer from the user")
-        if message.choice is not None:
-            offered = replies.ask_row(ask)["choices"]
-            if message.choice not in offered:
-                raise Refused(f"the question's choices are {', '.join(offered)}, "
-                              f"not {message.choice!r}")
+        return self.admission.check_reply(sid, message, expected)
 
     def admit_to_session(self, message, sid, new, payload, legacy_send):
-        """(admitted, session id, handled_as): what becomes of the message
-        decided and its row committed under the session's own lock. A new
-        session takes a new id, and another when one is taken."""
-        for tries in range(1, ID_TRIES + 1):
-            if new:
-                sid = new_id()
-            state = self.state(sid)
-            with state.lock:
-                if message.reply_to is not None:
-                    seen = self.store.query("SELECT * FROM inbox WHERE id = ?",
-                                            message.id)
-                    if seen:
-                        ack = sent_before(seen[0], message, payload["request_hash"])
-                        return False, ack["session"], ack["handled_as"]
-                    self.check_reply(sid, message, payload.get("reply_kind"))
-                    handled_as = "reply"
-                else:
-                    handled_as = ("started" if new else
-                                  self.handled_as(sid, state, message, legacy_send))
-                said = dict(payload)
-                if handled_as == "queued":
-                    said["follow_up"] = True
-                # What a copy of it sent again is told (sent_before)
-                said["handled_as"] = handled_as
-                try:
-                    admitted, sid = self.store.admit(
-                        message.id, sid, "user", message.source, said,
-                        new_session=new,
-                    )
-                except ReplyUnavailable as error:
-                    raise Refused(str(error)) from None
-                except UnknownSession:
-                    raise Refused(f"no session {sid!r}") from None
-                except sqlite3.IntegrityError:
-                    if not new or tries == ID_TRIES:
-                        raise
-                    continue
-                if not admitted:
-                    row, = self.store.query("SELECT * FROM inbox WHERE id = ?",
-                                            message.id)
-                    ack = sent_before(row, message, payload["request_hash"])
-                    handled_as = ack["handled_as"]
-                return admitted, sid, handled_as
+        return self.admission.admit_to_session(message, sid, new, payload, legacy_send)
 
     def handled_as(self, sid, state, message, legacy_send=False):
-        """What becomes of a message to this session, decided under its
-        lock: `reply` to its open ask, `steered` or `queued` (a follow-up)
-        while a turn runs or waits to, `started` otherwise."""
-        info = self.store.session(sid)
-        if info is None:
-            raise Refused(f"no session {sid!r}")
-        if info["state"] == "waiting":
-            if legacy_send:
-                raise Refused("A question is waiting. Name it with reply_to "
-                              "to answer, or use session/submit for new work.")
-            return "queued"
-        busy = state.runner is not None or self.store.has_queued(sid)
-        if not busy:
-            return "started"
-        return "queued" if message.when_busy == "queue" else "steered"
+        return self.admission.handled_as(sid, state, message, legacy_send)
 
     def continue_turn(self, sid, msg_id, source):
-        """Take on a turn that ended without an answer (stopped, failed, past a
-        limit), with no new message: the turn opens with a harness note. Refused
-        while a turn runs, resumes or waits on an ask (Pi's `continue`)."""
-        info = self.store.session(sid)
-        if info is None:
-            raise Refused(f"no session {sid!r}")
-        seen = self.store.query("SELECT * FROM inbox WHERE id = ?", msg_id)
-        if seen:
-            message = Message(msg_id, CONTINUE, session=sid, source=source)
-            digest = request_hash({**vars(message), "fields": {"continue": True}})
-            return sent_before(seen[0], message, digest)
-        state = self.state(sid)
-        with state.lock:
-            if state.runner is not None or self.store.has_queued(sid):
-                raise Refused("a turn is running in this session; nothing to continue")
-            if self.store.open_ask(sid) is not None:
-                raise Refused("a question is waiting in this session: answer it")
-        ends = [r for r in self.log(sid).branch() if r["type"] == "turn_end"]
-        if not ends:
-            raise Refused("this session has no turn to go on with")
-        if ends[-1]["outcome"] == "answered":
-            raise Refused("its last turn was answered; send a message instead")
-        return self.admit(
-            Message(msg_id, CONTINUE, session=sid, source=source),
-            extra={"continue": True},
-        )
+        return self.admission.continue_turn(sid, msg_id, source)
 
     def start(self):
         """Bring the database in step with the logs, finish what a crash or a
@@ -675,534 +413,60 @@ class Runtime(SessionActions):
         self.dispatch()
 
     def adopt_logs(self):
-        """Design rule 9: a log with no row (its database lost or replaced,
-        a fork cut off between its log and its row, a log copied in) is
-        listed again, its row made from its header (rebuild.adopted_row),
-        its other rows then rebuilt from it as any log ahead of its rows
-        is. A file that isn't a session's log is left alone."""
-        known = self.store.session_ids()
-        for path in sorted(self.paths.sessions.glob("*.jsonl")):
-            sid = path.stem
-            # An upgraded log's original beside it starts as a log does
-            if sid in known or upgrade.is_backup(path):
-                continue
-            try:
-                records = self.log(sid).records()
-                if not records or records[0].get("type") != "session":
-                    # Not a session's log
-                    continue
-                records = upgrade.migrate(records, time=upgrade.timestamp())
-                row = rebuild.adopted_row(sid, records, title)
-                if row is None:
-                    continue
-                self.store.add_session(sid, row)
-                print(f"ZERO's server: listed {sid} again from its log "
-                      "(it had no row)", flush=True)
-            except Exception:
-                traceback.print_exc()
+        return self.turn_runner.adopt_logs()
 
     def rebuild_ahead(self):
-        """Design rule 9: rebuild the rows of each session whose log is
-        ahead of them (past its row's `log_seq`), from the log, under the
-        session's lock: the kernel's (server/rebuild.py) and each service's,
-        in one transaction. A session in step is only looked at: its log's
-        last record, read from the end. A log with no row is adopted first."""
-        self.adopt_logs()
-        services = [service.rebuild for service in self.services.values()]
-        missing = {row["id"] for row in self.store.query(
-            "SELECT id FROM sessions WHERE state IN ('running', 'waiting') "
-            "AND NOT EXISTS (SELECT 1 FROM inbox WHERE session = sessions.id "
-            "AND status = 'delivered')"
-        )}
-        for row in self.store.sessions():
-            sid = row["id"]
-            log = self.log(sid)
-            try:
-                last = log.last_record()
-            except ValueError:
-                # A broken log: its next turn records the failure
-                traceback.print_exc()
-                continue
-            if last is None or (sid not in missing
-                                and last.get("seq", 0) <= row["log_seq"]):
-                continue
-            lock = self.session_lock(sid)
-            try:
-                lock.acquire()
-            except Busy as error:
-                self.state(sid).blocked = True
-                print(f"Skipping {sid}: {error}")
-                continue
-            try:
-                records = log.records()
-                # A newer ZERO's log: its rows stay as that ZERO left them
-                if history.log_format(records) <= history.LOG_FORMAT:
-                    records = upgrade.migrate(records, time=upgrade.timestamp())
-                    self.store.rebuild(sid, rebuild.kernel_rows(records), records,
-                                       services)
-            except Exception:
-                traceback.print_exc()
-            finally:
-                lock.release()
+        return self.turn_runner.rebuild_ahead()
 
     def repair(self, row, lock=None):
-        own = lock is None
-        lock = lock or self.session_lock(row["session"])
-        if own:
-            lock.acquire()
-        try:
-            self._repair(row, lock)
-        finally:
-            if own:
-                lock.release()
+        return self.turn_runner.repair(row, lock)
 
     def _repair(self, row, lock):
-        sid = row["session"]
-        current = self.store.query("SELECT * FROM inbox WHERE id = ?", row["id"])[0]
-        if current["status"] == "done":
-            return
-        row = current
-        log = self.log(sid, lock)
-        try:
-            all_records = log.branch()
-            records = [r for r in all_records if r.get("inbox") == row["id"]]
-            ends = [r for r in records if r["type"] == "turn_end"]
-            outcome = ends[-1]["outcome"] if ends else None
-            pending = history.unfinished_turn(all_records)
-        except Exception:
-            upgrade.record_failure(log, row["id"], traceback.format_exc())
-            self.store.finish(row["arrival"], sid, "failed")
-            return
-        # A reply to an ask already in the log: the ask closed with it, if the
-        # server died before its row was
-        answers = [r for r in all_records
-                   if r["type"] == "answer" and r.get("inbox") == row["id"]]
-        open_ask = self.store.open_ask(sid) if answers else None
-        if open_ask is not None and open_ask["id"] == answers[-1].get("ask"):
-            self.store.close_ask(open_ask["id"], row["id"],
-                                 bool(answers[-1].get("yes")), row["source"])
-            return
-        # A steer, or a reply to an ask, already in the log
-        if answers or any(r.get("steer") and r.get("inbox") == row["id"]
-                          for r in all_records):
-            self.store.mark_steer_done(row["id"])
-            return
-        if row["kind"] == "stop":
-            if not pending:
-                self.store.mark_steer_done(row["id"])
-            return
-        ask = history.parked_ask(all_records)
-        if ask is not None and pending and pending[0].get("inbox") == row["id"]:
-            # Parked: it waits for its reply, with no resume and no budget used
-            self.store.park(sid, ask, row["id"])
-            return
-        if ends:
-            # It ended; only the row's update was lost (and the services'
-            # word of it, which they keep once)
-            failed = outcome in FAILED
-            state = "failed" if failed else "idle"
-            self.store.finish(row["arrival"], sid, state)
-            self.turn_ended(sid, outcome)
-        elif records:
-            stops = self.store.stops(sid, row)
-            if stops:
-                try:
-                    if history.log_format(all_records) != history.LOG_FORMAT:
-                        self.upgrade_session(sid, log)
-                        pending = history.unfinished_turn(log.branch())
-                except Exception:
-                    upgrade.record_failure(log, row["id"], traceback.format_exc())
-                    self.store.finish(row["arrival"], sid, "failed")
-                    for stop in stops:
-                        self.store.mark_steer_done(stop["id"])
-                    return
-                self.repair_end(log, pending, row, "interrupted",
-                                "stopped before a restart", stopped=True)
-                for stop in stops:
-                    self.store.mark_steer_done(stop["id"])
-                self.store.finish(row["arrival"], sid, "idle")
-                self.turn_ended(sid, "interrupted")
-            elif row["clean_stop"]:
-                # A clean stop cut it off: it resumes without using a try
-                self.store.resume(row["arrival"], sid, counted=False)
-            elif row["resume_count"] < MAX_RESUMES:
-                self.store.resume(row["arrival"], sid)
-            else:
-                self.repair_end(log, pending, row, "failed", "cut off after 3 resumes")
-                self.store.finish(row["arrival"], sid, "failed")
-                self.turn_ended(sid, "failed")
-        elif row["status"] == "delivered":
-            # Marked begun with no record of it: nothing ran, so it can run
-            self.store.requeue(row["arrival"], sid)
+        return self.turn_runner._repair(row, lock)
 
     def repair_end(self, log, pending, row, outcome, detail, stopped=False):
-        """Close a cut-off turn without calling either model."""
-        if history.log_format(log.branch()) == history.LOG_FORMAT:
-            writer = self.state(row["session"]).harness
-            if writer is None:
-                writer = Session(None, [], "", log, {})
-            else:
-                writer.restore(log)
-            write = writer.write
-        else:
-            write = log.append
-        for fields in history.closing_results(pending, history.UNKNOWN, "unknown"):
-            write("tool", **fields)
-        if stopped:
-            write("note", kind="interrupted", text=INTERRUPTED)
-            for steer in self.store.steers(row["session"], row["arrival"]):
-                write("user", **history.steer_fields(steer))
-                self.store.mark_steer_done(steer["inbox"])
-        write("turn_end", inbox=row["id"], outcome=outcome, detail=detail,
-              seconds=0.0, agent_seconds=0.0, wait_seconds=0.0)
+        return self.turn_runner.repair_end(log, pending, row, outcome, detail, stopped)
 
     def dispatch(self, sid=None):
-        """Start a runner for the session `sid`, if a message of it can
-        start a turn and none runs; for every such session when `sid` is
-        None (the start, a service's notice)."""
-        if not self.accepting:
-            return
-        for each in ([sid] if sid is not None else self.store.waiting_sessions()):
-            self.start_runner(each)
+        return self.turn_runner.dispatch(sid)
 
     def start_runner(self, sid):
-        # Looked at first, so a session gone (deleted) gets no state again
-        if not self.store.has_queued(sid):
-            return
-        state = self.state(sid)
-        with state.lock:
-            if (state.runner is not None or state.blocked
-                    or not self.store.has_queued(sid)):
-                return
-            thread = threading.Thread(
-                target=self.runner, args=(sid, state), name=f"session-{sid}",
-                # A stop doesn't wait on a thread past the drain
-                daemon=True,
-            )
-            # The idle close come first: the message waits for the next start
-            if self.hold_runner(state, thread, while_accepting=True):
-                thread.start()
+        return self.turn_runner.start_runner(sid)
 
     def runner(self, sid, state):
-        """Run a session's queued messages one at a time, then leave."""
-        drained = False
-        lock = self.session_lock(sid)
-        try:
-            lock.acquire()
-        except Busy as error:
-            print(f"Skipping {sid}: {error}")
-            with state.lock:
-                state.blocked = True
-                self.let_go(state, leaving=False)
-            return
-        try:
-            drained = self.run_queued(sid, state, lock)
-        finally:
-            with state.lock:
-                lock.release()
-                if not drained:
-                    # Left to the next start's repair: its queued message no
-                    # longer keeps this server up
-                    state.blocked = True
-                # Past its last turn, the runner still has its last word to
-                # say: `settled`, then a dispatch that starts a turn on a
-                # message admitted meanwhile
-                self.let_go(state, leaving=True)
-        try:
-            if drained:
-                settled = self.settled(sid)
-                if settled is not None:
-                    self.publish(sid, {"settled": settled})
-                self.dispatch(sid)
-        finally:
-            self.said_last_word(state)
+        return self.turn_runner.runner(sid, state)
 
     def run_queued(self, sid, state, lock):
-        while True:
-            # Checking for work and leaving are one step, so a message admitted
-            # meanwhile either is seen here or finds no runner and starts one
-            with state.lock:
-                row = self.store.next_queued(sid) if self.accepting else None
-                if row is None:
-                    return True
-            try:
-                self.run_turn(sid, row, lock=lock)
-            except Exception:
-                # The log or the database failed, not the turn: leave this session
-                # to the next start's repair rather than loop on it
-                traceback.print_exc()
-                return False
+        return self.turn_runner.run_queued(sid, state, lock)
 
     def run_turn(self, sid, row, lock=None):
-        own = lock is None
-        lock = lock or self.session_lock(sid)
-        if own:
-            lock.acquire()
-        control = Control(
-            steers=lambda: (
-                self.store.steers(
-                    sid, row["arrival"], notices_only=control.stop.is_set()
-                ) if self.accepting else []
-            ),
-            delivered=lambda steer: self.store.mark_steer_done(steer["inbox"]),
-            draft=lambda step, draft: self.draft(sid, step, draft),
-        )
-        state = self.state(sid)
-        with state.lock:
-            state.running = (control, row)
-        try:
-            self._run_turn(sid, row, lock, control)
-        finally:
-            with state.lock:
-                state.running = None
-            if own:
-                lock.release()
+        return self.turn_runner.run_turn(sid, row, lock)
 
     def _run_turn(self, sid, row, lock, control):
-        log = self.log(sid, lock)
-        try:
-            records = log.branch()
-            pending = history.unfinished_turn(records)
-            begun = any(
-                r["type"] == "user" and r.get("inbox") == row["id"] for r in records
-            )
-        except Exception:
-            upgrade.record_failure(log, row["id"], traceback.format_exc())
-            self.store.finish(row["arrival"], sid, "failed")
-            return
-        ask = history.parked_ask(records)
-        payload = json.loads(row["payload"])
-        if payload.get("reply_to") is not None:
-            # An old inbox can contain submissions from before admission checks.
-            expected = payload.get("reply_kind")
-            matches = (ask and ask["ask"] == payload["reply_to"]
-                       and (not expected or ask.get("kind", "permission") == expected)
-                       and (ask.get("kind") != "secret" or expected == "secret")
-                       and (not history.requires_user(ask)
-                            or history.is_user_source(row["source"]))
-                       and (payload.get("choice") is None or picked(ask, payload)))
-            if matches:
-                self.take_reply(sid, row, ask, pending[0]["inbox"], log, control)
-            else:
-                # A stale submission in an older inbox cannot become a new turn.
-                self.store.mark_steer_done(row["id"])
-            return
-        if pending and pending[0].get("inbox") != row["id"]:
-            raise ValueError("the queued message is not the log's open turn")
-        if begun and not pending:
-            raise ValueError("no open turn to resume")
-        try:
-            if log.path.exists() and history.log_format(records) != history.LOG_FORMAT:
-                self.upgrade_session(sid, log)
-                records = log.branch()
-        except Exception:
-            upgrade.record_failure(log, row["id"], traceback.format_exc())
-            self.store.finish(row["arrival"], sid, "failed")
-            return
-        payload = json.loads(row["payload"])
-        text = payload["text"]
-        workspace = Path(self.store.session(sid)["workspace"])
-        if not workspace.is_dir():
-            self.end_for_missing_workspace(
-                sid, row, log, records, begun, text, workspace
-            )
-            return
-        try:
-            session = self.harness_for_turn(sid, log, records, begun)
-        except Exception:
-            begun = any(
-                r["type"] == "user" and r.get("inbox") == row["id"] for r in records
-            )
-            if begun:
-                for fields in history.closing_results(
-                    history.unfinished_turn(records), history.UNKNOWN, "unknown"
-                ):
-                    log.append("tool", **fields)
-            else:
-                log.append("user", inbox=row["id"], source=row["source"], text=text)
-            self.store.begin(row["arrival"], sid)
-            log.append(
-                "turn_end", inbox=row["id"], outcome="crashed",
-                error=traceback.format_exc(),
-            )
-            self.store.finish(row["arrival"], sid, "failed")
-            self.turn_ended(sid, "crashed")
-            return
-        records = session.log.branch()
-        begun = any(
-            r["type"] == "user" and r.get("inbox") == row["id"] for r in records
-        )
-        if begun:
-            turn = session.resume(inbox=row["id"], control=control)
-        else:
-            turn = session.open_turn(
-                text, inbox=row["id"], source=row["source"], control=control,
-                continued=bool(payload.get("continue")),
-                queued=bool(payload.get("follow_up")),
-                carried={name: payload[name] for name in self.message_fields()
-                         if payload.get(name) is not None},
-            )
-        self.store.begin(row["arrival"], sid)
-        self.finish_turn(sid, session, turn, row)
+        return self.turn_runner._run_turn(sid, row, lock, control)
 
     def end_for_missing_workspace(self, sid, row, log, records, begun, text, workspace):
-        """End the turn, its history kept: no command can run in a folder that
-        isn't there."""
-        if begun:
-            for fields in history.closing_results(
-                history.unfinished_turn(records), history.UNKNOWN, "unknown"
-            ):
-                log.append("tool", **fields)
-        else:
-            log.append("user", inbox=row["id"], source=row["source"], text=text)
-        self.store.begin(row["arrival"], sid)
-        log.append(
-            "turn_end", inbox=row["id"], outcome="failed",
-            detail=f"this session's workspace {workspace} is gone",
+        return self.turn_runner.end_for_missing_workspace(
+            sid, row, log, records, begun, text, workspace,
         )
-        self.store.finish(row["arrival"], sid, "failed")
-        self.turn_ended(sid, "failed")
 
     def finish_turn(self, sid, session, turn, row):
-        """Run the turn, then settle its row: done, or still delivered while it
-        waits on an ask."""
-        try:
-            outcome = session.run(turn)
-        except Exception:
-            ends = [r for r in session.log.branch()
-                    if r["type"] == "turn_end" and r.get("inbox") == row["id"]]
-            if not ends:
-                raise
-            outcome = ends[-1]["outcome"]
-        if outcome == "waiting":
-            self.store.park(sid, history.parked_ask(session.log.branch()), row["id"])
-            self.turn_ended(sid, outcome)
-            return
-        ended = "failed" if outcome in FAILED else "idle"
-        with self.state(sid).lock:
-            # Its stops done with it; its rows in step up to its turn_end
-            self.store.finish(row["arrival"], sid, ended, session.log.last_seq)
-        self.turn_ended(sid, outcome)
+        return self.turn_runner.finish_turn(sid, session, turn, row)
 
     def take_reply(self, sid, row, ask, turn_id, log, control):
-        """The parked session's next message is the reply to its ask: what it
-        answers is the reply step's (a service's, permissions/service.py: the box's
-        choice, or words the consent check reads), or else the choice picked
-        at the box alone. A yes runs the call; anything else cancels the ask
-        and joins the turn as a message. The box's No declines the call and
-        ends the turn."""
-        payload = json.loads(row["payload"])
-        turn_row, = self.store.query(
-            "SELECT * FROM inbox WHERE session = ? AND id = ?", sid, turn_id)
-        text = payload["text"]
-        choice, verdict = self.reply_step(sid, ask, payload)
-        yes = choice is not None and choice != NO
-        session = self.harness(sid, log)
-        fields = {
-            "ask": ask["ask"], "yes": yes, "inbox": row["id"],
-            "source": row["source"], "text": text, "consent": verdict,
-        }
-        if payload.get("sender_session"):
-            fields["sender_session"] = payload["sender_session"]
-        if choice is not None:
-            fields["choice"] = choice
-        if ask.get("kind"):
-            fields["kind"] = ask["kind"]
-        if ask.get("kind") == "question":
-            fields["yes"] = False
-            if payload.get("choice") is not None:
-                fields["text"] = ask["choice_labels"].get(choice, text)
-        turn = session.reply(fields, control=control)
-        self.store.close_ask(ask["ask"], row["id"], fields["yes"], row["source"])
-        state = self.state(sid)
-        with state.lock:
-            # A stop now belongs to the parked turn, not to the reply
-            state.running = (control, turn_row)
-        self.finish_turn(sid, session, turn, turn_row)
+        return self.turn_runner.take_reply(sid, row, ask, turn_id, log, control)
 
     def reply_step(self, sid, ask, payload):
-        """(choice, verdict) for a reply to a parked ask."""
-        for service in self.services.values():
-            answer = service.reply(sid, ask, payload)
-            if answer is not None:
-                return answer
-        return picked(ask, payload), None
+        return self.turn_runner.reply_step(sid, ask, payload)
 
     def upgrade_session(self, sid, log):
-        """Ask the current harness for its header, then restore it from the upgrade."""
-        info = self.store.session(sid)
-        fresh = fresh_log(self.paths.sessions, info["model"])
-        session = self.make_session(sid, info, log=fresh, ask=PARK)
-        session.header_fields = {"row": rebuild.header_row(info)}
-        upgrade.upgrade_file(log, session.session_record())
-        session.restore(log)
-        self.session_built(sid, session)
-        self.state(sid).harness = session
+        return self.turn_runner.upgrade_session(sid, log)
 
     def harness_for_turn(self, sid, log, records, begun):
-        """The harness a turn runs on. A new turn takes what the user set
-        since the last one (mode, model, workspace, effort, the judge),
-        logged as a switch, a note the model reads when it names what the
-        agent knows of itself; a begun one (parked, or cut off by a restart)
-        keeps what it started with."""
-        info = self.store.session(sid)
-        switch = json.loads(info["switch"] or "{}")
-        logged = history.running_with(records)
-        if begun:
-            # Built as it started, if it must be built again
-            before = {name: logged[name] for name in switch if name in logged}
-            return self.harness(sid, log, info={**info, **before})
-        if not switch:
-            return self.harness(sid, log)
-        self.state(sid).harness = None
-        # The effort and the judge have no column of their own: the switch
-        # carries them
-        session = self.harness(sid, log, info={**info, **switch})
-        changes = {
-            name: (logged.get(name), new) for name, new in switch.items()
-            if logged.get(name) != new
-        }
-        if changes and records:
-            moved = {
-                "from": {name: old for name, (old, _) in changes.items()},
-                "to": {name: new for name, (_, new) in changes.items()},
-                "settings": session.fresh_settings,
-            }
-            seen = {k: v for k, v in changes.items() if k in history.MODEL_VISIBLE}
-            if "model" in changes:
-                # A new model loses the cache anyway: the system message is
-                # written again for it, which names it
-                session.rebuild_system("model")
-            if seen:
-                # The model reads what changed of what it knows of itself
-                session.write("note", kind="switch",
-                              text=switch_note(seen, session), **moved)
-            else:
-                # The judge alone: nothing the agent knows changed
-                session.write("switch", **moved)
-            session.settings = session.fresh_settings
-        self.store.update_session(sid, switch=None)
-        return session
+        return self.turn_runner.harness_for_turn(sid, log, records, begun)
 
     def harness(self, sid, log=None, info=None):
-        """Build once per runtime; the harness owns its history on disk.
-        `info`: the session's row, or what its log runs with (a begun turn)."""
-        state = self.state(sid)
-        if state.harness is None:
-            info = info or self.store.session(sid)
-            session = self.make_session(sid, info, log=log or self.log(sid),
-                                        ask=PARK)
-            # Its header, when its first turn writes it, carries its row
-            session.header_fields = {"row": rebuild.header_row(info)}
-            state.harness = session
-            self.session_built(sid, session)
-        elif log is not None:
-            session = state.harness
-            session.log.lock = log.lock
-            session.log.last_seq = None
-            if session.log.branch():
-                session.restore(session.log)
-        return state.harness
+        return self.turn_runner.harness(sid, log, info)
 
     def session_built(self, sid, session):
         """Each service's share of a harness built for this session (the jobs:
@@ -1228,69 +492,22 @@ class Runtime(SessionActions):
             return state.runner is not None or self.store.has_queued(sid)
 
     def stop_turn(self, sid, msg_id, source):
-        """Commit the stop before setting its flag or sending the ack."""
-        state = self.state(sid)
-        with state.lock:
-            if not self.accepting:
-                raise Refused("the server is shutting down")
-            seen = self.store.query("SELECT * FROM inbox WHERE id = ?", msg_id)
-            if seen:
-                if seen[0]["kind"] != "stop" or seen[0]["session"] != sid:
-                    raise Refused("message id already used")
-                return {"stopped": True, "withdrawn": []}
-            running = state.running
-            if running is None or not history.unfinished_turn(self.log(sid).branch()):
-                return {"stopped": False, "withdrawn": []}
-            control, row = running
-            self.store.admit(msg_id, sid, "stop", source, {"turn": row["id"]})
-            control.stop_detail = f"stop from {source}"
-            control.stop.set()
-            # What the turn hasn't taken goes back to its sender's input (Pi)
-            withdrawn = self.store.withdraw_messages(sid, row["arrival"])
-        if withdrawn:
-            self.publish(sid, {"withdrawn": withdrawn})
-        return {"stopped": True, "withdrawn": withdrawn}
+        return self.admission.stop_turn(sid, msg_id, source)
 
     def subscribe(self, sid):
-        """A watcher for the session's records from now on; subscribe before
-        reading the log's catch-up, so nothing falls between the two."""
-        if self.store.session(sid) is None:
-            raise Refused(f"no session {sid!r}")
-        token, watcher = object(), Watcher()
-        state = self.state(sid)
-        with state.lock:
-            state.watchers = {**state.watchers, token: watcher}
-        return token, watcher
+        return self.watcher_hub.subscribe(sid)
 
     def unsubscribe(self, sid, token):
-        state = self.states.get(sid)
-        if state is None:
-            return
-        with state.lock:
-            state.watchers = {k: w for k, w in state.watchers.items() if k is not token}
+        return self.watcher_hub.unsubscribe(sid, token)
 
     def publish(self, sid, event):
-        state = self.states.get(sid)
-        if state is None:
-            return
-        for watcher in state.watchers.values():
-            watcher.put(event)
+        return self.watcher_hub.publish(sid, event)
 
     def close_watchers(self, reason):
-        """Every watch ends with a `bye` and its reason."""
-        for _, state in self.all_states():
-            for watcher in state.watchers.values():
-                watcher.close(reason)
+        return self.watcher_hub.close_watchers(reason)
 
     def forget_state(self, sid):
-        """A deleted session's state let go of: its watches end with a `bye`
-        "deleted", its harness and draft go with it."""
-        with self.door:
-            state = self.states.pop(sid, None)
-        if state is None:
-            return
-        for watcher in state.watchers.values():
-            watcher.close(DELETED)
+        return self.watcher_hub.forget(sid)
 
     def command_session(self, unix_session):
         """The session whose command leads the Unix session `unix_session`,
@@ -1318,81 +535,15 @@ class Runtime(SessionActions):
         return left
 
     def append_between_turns(self, sid, refused, type, **fields):
-        """Append a record to a session's log while no turn runs or waits for
-        an answer (a grant taken back, permissions/service.py); else Refused,
-        with `refused`."""
-        state = self.state(sid)
-        with state.lock:
-            row = self.store.session(sid)
-            if (state.runner is not None or self.store.has_queued(sid)
-                    or row["state"] in ("running", "waiting")):
-                raise Refused(refused)
-            lock = self.session_lock(sid)
-            try:
-                lock.acquire()
-            except Busy as error:
-                raise Refused(str(error)) from None
-            try:
-                self.log(sid, lock).append(type, **fields)
-            finally:
-                lock.release()
+        return self.turn_runner.append_between_turns(sid, refused, type, **fields)
 
-    def compact(self, sid, instructions=None):
-        """The user's compaction of a session's context: at once for one at
-        rest, on a thread of its own held as its runner, so no turn starts
-        meanwhile and the client needn't wait for the handoff; before the
-        next step for one whose turn runs or waits for an answer.
-        `instructions`: the user's words on what the handoff keeps, or None.
-        Its record (or `compaction_failed`) reaches the watchers as any
-        record does."""
-        instructions = (instructions or "").strip() or None
-        if self.store.session(sid) is None:
-            raise Refused(f"no session {sid!r}")
-        state = self.state(sid)
-        with state.lock:
-            if not self.accepting:
-                raise Refused("the server is shutting down")
-            row = self.store.session(sid)
-            busy = (state.runner is not None or self.store.has_queued(sid)
-                    or row["state"] in ("running", "waiting"))
-            if busy:
-                session = state.harness
-                if session is None:
-                    raise Refused("its turn waits for an answer; a compaction "
-                                  "can be asked for once it runs again")
-                session.want_compaction("user", instructions)
-                return {"compacting": "before_next_step"}
-            if not any(r["type"] == "user" for r in self.log(sid).branch()):
-                raise Refused("the session has no conversation yet")
-            thread = threading.Thread(target=self._compact,
-                                      args=(sid, state, instructions),
-                                      name=f"compact-{sid}", daemon=True)
-            self.hold_runner(state, thread)
-        thread.start()
-        return {"compacting": "now"}
+    def run_on_session(self, sid, name, fn, *, if_busy=None, precheck=None):
+        return self.turn_runner.run_on_session(
+            sid, name, fn, if_busy=if_busy, precheck=precheck,
+        )
 
-    def _compact(self, sid, state, instructions):
-        lock = self.session_lock(sid)
-        try:
-            lock.acquire()
-            try:
-                self.harness(sid, self.log(sid, lock)).compact(
-                    "user", instructions=instructions)
-            finally:
-                lock.release()
-        except Exception:
-            traceback.print_exc()
-        finally:
-            with state.lock:
-                # Its last word is still to say, as a turn runner's is
-                self.let_go(state, leaving=True)
-        try:
-            settled = self.settled(sid)
-            if settled is not None:
-                self.publish(sid, {"settled": settled})
-            self.dispatch(sid)
-        finally:
-            self.said_last_word(state)
+    def _run_on_session(self, sid, state, fn):
+        return self.turn_runner._run_on_session(sid, state, fn)
 
     def busy_with(self):
         """What keeps the server up besides its clients: turns running, resuming

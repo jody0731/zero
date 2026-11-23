@@ -4,12 +4,12 @@ schema.json ships with ZERO, so an app in any language is built against it:
 each message's request and reply are in `$defs` (`session.send` and
 `session.send.reply`, the name's slashes as dots), the requests together
 under `oneOf`, the error reply every message may get, the rows replies carry
-(`row.session`, `row.ask`, …) and what an app reads of each kind of a log's
-records (`record.tool`, `record.user`, …). A reply may grow fields within a
-protocol, so schema.json lets an object carry more than it names; the tests
+(`row.session`, `row.ask`, …), the native `Entry` envelope (`entry`,
+`entry.timeline`) and the wire `record` shape. A reply may grow fields within
+a protocol, so schema.json lets an object carry more than it names; the tests
 hold every reply the server sends to the strict form (`strict`), where a row
-built from the store carries exactly its fields. A test holds the file to
-messages.py; after a change to a message:
+or record carries exactly its fields. A test holds the file to messages.py;
+after a change to a message:
 
     python -m protocol.schema
 """
@@ -20,9 +20,8 @@ from pathlib import Path
 
 from protocol import version
 from protocol.messages import (
-    EVERY_REQUEST, MESSAGES, MODEL_FAILURE, MODEL_FAILURE_REF, RECORD,
-    RECORD_FIELDS, RECORDS, REPLAYED, ROWS,
-    TOOL_RECORD, UNKNOWN_FIELDS,
+    DEFS, ENTRY, EVERY_REQUEST, MESSAGES, MODEL_FAILURE_REF, RECORD, REPLAYED,
+    ROWS, TIMELINE_ENTRY, UNKNOWN_FIELDS,
 )
 
 PATH = Path(__file__).with_name("schema.json")
@@ -53,20 +52,13 @@ def reply_schema(spec):
 
 
 def stream_schema(spec):
+    stream = spec["stream"]
+    if "oneOf" in stream:
+        return stream
     return {
         "type": "object",
         "description": "one event a line, until a bye",
-        "properties": spec["stream"],
-    }
-
-
-def record_schema(kind, fields):
-    if kind == "tool":
-        return TOOL_RECORD
-    return {
-        "type": "object", "description": f"a `{kind}` record",
-        "properties": {**RECORD_FIELDS, "type": {"const": kind}, **fields},
-        "additionalProperties": True,
+        "properties": stream,
     }
 
 
@@ -78,7 +70,10 @@ def build():
                        "model_failure": MODEL_FAILURE_REF},
         "required": ["ok", "error"],
     }}
-    defs["model_failure"] = MODEL_FAILURE
+    defs["entry"] = ENTRY
+    defs["entry.timeline"] = TIMELINE_ENTRY
+    for name, definition in DEFS.items():
+        defs[name] = definition
     for name, spec in MESSAGES.items():
         defs[key(name)] = request_schema(name, spec)
         defs[key(name) + ".reply"] = reply_schema(spec)
@@ -87,8 +82,6 @@ def build():
     for name, row in ROWS.items():
         defs[f"row.{name}"] = row
     defs["record"] = RECORD
-    for kind, fields in RECORDS.items():
-        defs[f"record.{kind}"] = record_schema(kind, fields)
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": f"zero-protocol-{version.PROTOCOL}",

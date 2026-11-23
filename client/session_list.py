@@ -9,6 +9,33 @@ import time
 ATTENTION_SESSIONS = 3
 
 
+def sort_key(row):
+    """Server session-list order: waiting first, then newest activity."""
+    return (
+        row.get("state") == "waiting",
+        row.get("updated_at", 0),
+        row.get("created_at", 0),
+    )
+
+
+def apply_list_event(by_id, event):
+    """Apply a `session/list` watch event (`sessions`, `upsert`, `remove`) to
+    `by_id` in place and return rows in server order, or None if `event`
+    carried no list update."""
+    if "sessions" in event:
+        by_id.clear()
+        for row in event["sessions"]:
+            by_id[row["id"]] = row
+    elif "upsert" in event or "remove" in event:
+        for sid in event.get("remove") or ():
+            by_id.pop(sid, None)
+        for row in event.get("upsert") or ():
+            by_id[row["id"]] = row
+    else:
+        return None
+    return sorted(by_id.values(), key=sort_key, reverse=True)
+
+
 def needs_you(sessions, current=None):
     """The other sessions that need the user, in Alt+↓'s order: open asks
     first, the oldest first; then news (a turn ended since they last

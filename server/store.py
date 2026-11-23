@@ -13,9 +13,10 @@ lock). Every change is a function of the write connection, handed to the
 database's writer thread through a capped queue (`write`): the writer takes
 what is waiting, runs each change in a savepoint of its own (one that fails
 is undone alone and its caller gets the error), and commits them in one
-transaction, one flush to the disk for them all (a group commit, as Codex's
-log database batches its queue). Each caller waits for that commit, so a
-message that got its ack is on disk (synchronous FULL). Reads take a
+transaction. Each caller waits for that commit. WAL NORMAL keeps committed
+rows across a process exit. A power loss can lose commits since the last
+sync, and the session logs can rebuild rows from their durable boundaries.
+Reads take a
 connection from a pool and never wait on a write: SQLite's WAL lets them read
 the last commit while the writer writes. `on_change` hears each committed
 transaction, on the writer's thread: the server's live session list.
@@ -32,7 +33,7 @@ import traceback
 import weakref
 from datetime import datetime
 
-from core import history
+from core import attribution, entries
 from server.rebuild import labels_of
 
 # The database's format, its user_version: a newer ZERO's database is read for
@@ -214,10 +215,12 @@ def rename_columns(db, path, renamed_columns):
     if not due:
         return
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup = sqlite3.connect(path.with_name(f"{path.name}{BACKUP_SUFFIX}{stamp}"))
-    with backup:
+    backup = connect(path.with_name(f"{path.name}{BACKUP_SUFFIX}{stamp}"))
+    try:
+        backup.execute("PRAGMA journal_mode = WAL")
         db.backup(backup)
-    backup.close()
+    finally:
+        backup.close()
     db.execute("BEGIN IMMEDIATE")
     for table, old, new in due:
         db.execute(f'ALTER TABLE {table} RENAME COLUMN "{old}" TO "{new}"')
@@ -236,6 +239,47 @@ def add_columns(db, added_columns):
                 if name in FROM_THE_LOG.get(table, ()):
                     db.execute("UPDATE sessions SET log_seq = 0 WHERE id IN "
                                f"(SELECT session FROM {table})")
+
+
+def install_change_triggers(db):
+    """Record every session id touched inside a write transaction via TEMP
+    triggers; rolled back automatically across savepoint rollbacks."""
+    db.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS _touched_sessions (id TEXT PRIMARY KEY)"
+    )
+    tables = [
+        row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%'"
+        )
+    ]
+    for table in tables:
+        if table in ("inbox", "message_replies"):
+            continue
+        cols = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
+        col = ("id" if table == "sessions"
+               else "session" if "session" in cols else None)
+        if col is None:
+            continue
+        db.execute(
+            f'CREATE TEMP TRIGGER IF NOT EXISTS "_touch_{table}_ins" '
+            f'AFTER INSERT ON "{table}" BEGIN '
+            f'INSERT OR IGNORE INTO _touched_sessions (id) VALUES (NEW."{col}"); '
+            f'END'
+        )
+        db.execute(
+            f'CREATE TEMP TRIGGER IF NOT EXISTS "_touch_{table}_upd" '
+            f'AFTER UPDATE ON "{table}" BEGIN '
+            f'INSERT OR IGNORE INTO _touched_sessions (id) VALUES (OLD."{col}"); '
+            f'INSERT OR IGNORE INTO _touched_sessions (id) VALUES (NEW."{col}"); '
+            f'END'
+        )
+        db.execute(
+            f'CREATE TEMP TRIGGER IF NOT EXISTS "_touch_{table}_del" '
+            f'AFTER DELETE ON "{table}" BEGIN '
+            f'INSERT OR IGNORE INTO _touched_sessions (id) VALUES (OLD."{col}"); '
+            f'END'
+        )
 
 
 class Write:
@@ -327,19 +371,28 @@ class Writer:
 
     def commit(self, batch):
         db = self.db
+        touched = frozenset()
         try:
             if self.take_batch(batch):
+                touched = frozenset(
+                    row[0] for row in db.execute(
+                        "SELECT id FROM _touched_sessions WHERE id IS NOT NULL"
+                    )
+                )
+                if touched:
+                    db.execute("DELETE FROM _touched_sessions")
                 db.execute("COMMIT")
         except Exception as error:
             if db.in_transaction:
                 db.execute("ROLLBACK")
+            touched = frozenset()
             for write in batch:
                 write.error = write.error or error
                 write.result = None
         if any(write.error is None for write in batch):
             # Told before the callers go on, as a change's caller would
             try:
-                self.changed()
+                self.changed(touched)
             except Exception:
                 # The change is committed; a listener's failure is the
                 # listener's, not the callers'
@@ -358,6 +411,8 @@ def connect(path):
     db = sqlite3.connect(path, check_same_thread=False, isolation_level=None,
                          timeout=BUSY_SECONDS)
     db.row_factory = sqlite3.Row
+    # The log syncs state boundaries. SQLite syncs the WAL at checkpoint.
+    db.execute("PRAGMA synchronous = NORMAL")
     return db
 
 
@@ -370,8 +425,6 @@ class Store:
         self.path = path
         db = connect(path)
         db.execute("PRAGMA journal_mode = WAL")
-        # Each commit reaches the disk: an acked message survives a power cut
-        db.execute("PRAGMA synchronous = FULL")
         db.execute("PRAGMA foreign_keys = ON")
         rename_columns(db, path, {
             **RENAMED_COLUMNS,
@@ -393,15 +446,16 @@ class Store:
                   "this ZERO knows of it is read", file=sys.stderr, flush=True)
         else:
             db.execute(f"PRAGMA user_version = {FILE_FORMAT}")
+        install_change_triggers(db)
         self.on_change = None
         # The writer reaches the store weakly, so a store let go of stops
         # its thread
         mine = weakref.ref(self)
 
-        def changed():
+        def changed(touched):
             store = mine()
             if store is not None and store.on_change is not None:
-                store.on_change()
+                store.on_change(touched)
 
         self.writer = Writer(db, changed)
         # The read connections, opened as they are first needed, up to
@@ -613,7 +667,7 @@ class Store:
                      "source": row["source"]}
             # What it carries beside its text (a notice's sender's record,
             # its summary: jobs/store.py)
-            for name in history.MESSAGE_FIELDS:
+            for name in attribution.MESSAGE_FIELDS:
                 if payload.get(name) is not None:
                     steer[name] = payload[name]
             found.append(steer)
@@ -627,30 +681,49 @@ class Store:
         )
         return {r["id"]: r["delivery"] for r in rows}
 
-    def withdraw_messages(self, session, after):
-        """A stop takes back the user's steers and follow-ups its turn hasn't
-        taken (Pi): done here, and returned for their sender's input."""
-
-        def change(db):
-            rows = db.execute(
-                "SELECT * FROM inbox WHERE session = ? AND status = 'queued' AND "
-                "kind = 'user' AND arrival > ? ORDER BY arrival", (session, after),
-            ).fetchall()
-            db.executemany(
-                "UPDATE inbox SET status = 'done', "
-                "payload = json_set(payload, '$.withdrawn', 1) WHERE arrival = ?",
-                [(row["arrival"],) for row in rows],
-            )
-            return [dict(row) for row in rows]
-
+    @staticmethod
+    def withdraw_queued(db, session, after, before):
+        rows = db.execute(
+            "SELECT * FROM inbox WHERE session = ? AND status = 'queued' AND "
+            "kind = 'user' AND arrival > ? AND arrival < ? ORDER BY arrival",
+            (session, after, before),
+        ).fetchall()
+        db.executemany(
+            "UPDATE inbox SET status = 'done', "
+            "payload = json_set(payload, '$.withdrawn', 1) WHERE arrival = ?",
+            [(row["arrival"],) for row in rows],
+        )
         result = []
-        for row in self.write(change):
+        for row in rows:
             payload = json.loads(row["payload"])
             result.append({
                 "id": row["id"], "text": payload["text"], "source": row["source"],
                 "follow_up": bool(payload.get("follow_up")),
             })
         return result
+
+    def withdraw_messages(self, session, after, before):
+        """Finish withdrawal for a stop recovered from an older inbox."""
+        return self.write(lambda db: self.withdraw_queued(db, session, after, before))
+
+    def admit_stop(self, msg_id, session, source, row):
+        """Commit the stop and withdraw its pending steers and follow-ups together."""
+        def change(db):
+            prior = db.execute(
+                "SELECT session, kind FROM inbox WHERE id = ?", (msg_id,),
+            ).fetchone()
+            if prior is not None:
+                if prior["session"] != session or prior["kind"] != "stop":
+                    raise ValueError("message id already used")
+                return []
+            receipt = db.execute(
+                "INSERT INTO inbox (id, session, kind, source, payload, status, "
+                "created_at) VALUES (?, ?, 'stop', ?, ?, 'queued', ?)",
+                (msg_id, session, source, json.dumps({"turn": row["id"]}), time.time()),
+            )
+            return self.withdraw_queued(db, session, row["arrival"], receipt.lastrowid)
+
+        return self.write(change)
 
     def mark_steer_done(self, msg_id):
         """A steer is in the log; don't release the turn's claim."""
@@ -670,21 +743,23 @@ class Store:
         """A turn parked on `ask` (its log record): the ask open, the session
         waiting, its rows in step with the log up to the ask. Kept once: the
         boot repair may write it again."""
-        created_at = datetime.fromisoformat(ask["time"]).timestamp()
+        created_at = datetime.fromisoformat(ask.time).timestamp()
+        entry = ask.entry
+        call = entries.linked_to(entry, "asks_about") or ""
 
         def change(db):
             db.execute(
                 "INSERT OR IGNORE INTO asks (id, session, call, turn, tool, command, "
                 "why, reason, about, status, created_at, choice_labels, kind, "
                 "requires_user) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
-                (ask["ask"], session, ask["call"], turn, ask["tool"],
-                 str(ask["command"]), ask["why"], ask["reason"],
-                 ask.get("about"), created_at, labels_of(ask),
-                 ask.get("kind", "permission"), history.requires_user(ask)),
+                (entry.id, session, call, turn, entry.get("tool"),
+                 str(entry.get("command")), entry.get("why"), entry.get("reason"),
+                 entry.get("about"), created_at, labels_of(ask),
+                 entry.get("kind", "permission"), attribution.requires_user(entry)),
             )
             db.execute(
                 "UPDATE sessions SET state = 'waiting', updated_at = ?, "
-                "log_seq = ? WHERE id = ?", (time.time(), ask["seq"], session),
+                "log_seq = ? WHERE id = ?", (time.time(), ask.seq, session),
             )
 
         self.write(change)
@@ -696,7 +771,8 @@ class Store:
 
         def change(db):
             db.execute(
-                "UPDATE asks SET status = CASE WHEN kind IN ('question', 'secret') "
+                "UPDATE asks SET status = CASE "
+                "WHEN kind IS NOT NULL AND kind != 'permission' "
                 "THEN 'answered' ELSE ? END, closed_at = ?, reply = ?, source = ? "
                 "WHERE id = ?",
                 ("approved" if yes else "cancelled", now, reply, source, ask),
@@ -715,6 +791,17 @@ class Store:
 
     def open_asks(self):
         return self.query("SELECT * FROM asks WHERE status = 'open'")
+
+    def open_asks_for(self, sessions):
+        """Open asks belonging to the named session ids."""
+        sids = list(sessions)
+        if not sids:
+            return []
+        return self.query(
+            "SELECT * FROM asks WHERE status = 'open' "
+            "AND session IN (SELECT value FROM json_each(?))",
+            json.dumps(sids),
+        )
 
     def open_ask(self, session):
         """The session's ask waiting for a reply, or None."""
@@ -766,10 +853,11 @@ class Store:
             )
             turn = rows.open_turn
             if turn:
-                source = turn.get("source") or "unknown"
-                kind = source if history.is_notice(turn) else "user"
-                payload = {"text": turn.get("text", ""), "handled_as":
-                           "queued" if turn.get("queued") else "started"}
+                entry = turn.entry
+                source = entry.get("source") or "unknown"
+                kind = source if attribution.is_notice(entry) else "user"
+                payload = {"text": attribution.delivered_text(entry), "handled_as":
+                           "queued" if entry.get("queued") else "started"}
                 # An existing follow-up must still sort after the turn it follows.
                 db.execute(
                     "INSERT INTO inbox (arrival, id, session, kind, source, payload, "
@@ -777,8 +865,8 @@ class Store:
                     "((SELECT COALESCE(MIN(arrival), 0) - 1 FROM inbox), "
                     "?, ?, ?, ?, ?, 'delivered', ?) "
                     "ON CONFLICT(id) DO NOTHING",
-                    (turn["inbox"], session, kind, source, json.dumps(payload),
-                     datetime.fromisoformat(turn["time"]).timestamp()),
+                    (entry.get("inbox"), session, kind, source, json.dumps(payload),
+                     datetime.fromisoformat(turn.time).timestamp()),
                 )
             for id, status in rows.inbox.items():
                 db.execute(
@@ -817,6 +905,16 @@ class Store:
         return self.query(
             "SELECT * FROM sessions ORDER BY (state = 'waiting') DESC, "
             "updated_at DESC, created_at DESC"
+        )
+
+    def sessions_by_ids(self, sessions):
+        """Session rows for the named ids."""
+        sids = list(sessions)
+        if not sids:
+            return []
+        return self.query(
+            "SELECT * FROM sessions WHERE id IN (SELECT value FROM json_each(?))",
+            json.dumps(sids),
         )
 
     # Each message that changes something, run once by its id

@@ -153,11 +153,13 @@ class ListWatch:
     def run(self):
         while not self.leaving.is_set():
             stream = None
+            by_id = {}
             try:
                 stream = self.stream = self.connection.watch_list()
                 for event in stream:
-                    if "sessions" in event:
-                        self.sessions = event["sessions"]
+                    updated = session_list.apply_list_event(by_id, event)
+                    if updated is not None:
+                        self.sessions = updated
                         self.changed()
             except ERRORS + (ValueError,):
                 pass
@@ -466,13 +468,14 @@ class ZeroApp(SafeClicks, App):
         if generation is not None and generation != self.generation:
             return
         record = event.get("record")
-        if record is not None and record["type"] == "rewind":
+        kind = render.entries.entry_type(record) if record is not None else None
+        if kind == "sessions/rewind_note":
             # The conversation went back: its view is the branch it left
             self.open(self.client.session, remember=False)
             return
         if record is not None:
             self.transcript.add(record, self.connection.source)
-            if record["type"] in ("turn_end", "ask"):
+            if kind in ("sessions/turn_end", "sessions/ask"):
                 self.mark_seen(record["seq"])
         if "draft" in event:
             self.transcript.draft(event["draft"])
@@ -509,7 +512,7 @@ class ZeroApp(SafeClicks, App):
                 event.input.value = chosen
             self.submit(event.input)
         elif event.input.id == "reply":
-            if (self.client.ask or {}).get("kind") == "secret":
+            if render.entries.field(self.client.ask, "kind") == "secret":
                 event.input.value = ""
                 self.vault_input()
                 return
@@ -539,7 +542,7 @@ class ZeroApp(SafeClicks, App):
     def choose(self, index):
         """Send one of the box's choices: its label as the line, its id as
         the choice, so no consent check reads it."""
-        if (self.client.ask or {}).get("kind") == "secret":
+        if render.entries.field(self.client.ask, "kind") == "secret":
             self.vault_input()
             return
         offered = controller.choices(self.client.ask or {})
@@ -549,14 +552,16 @@ class ZeroApp(SafeClicks, App):
         self.send(label, reply=True, choice=choice)
 
     def vault_input(self):
-        ask = dict(self.client.ask or {})
+        ask = self.client.ask or {}
+        ask_fields = render.entries.fields_of(ask)
+        ask_identifier = render.entries.ask_id(ask)
         sid = self.client.session
-        parts = list(ask.get("choices", []))
+        parts = list(ask_fields.get("choices", []))
         values = {}
 
         def submit(cancel=False):
             payload = {"message": "vault/answer", "session": sid,
-                       "ask": ask["ask"]}
+                       "ask": ask_identifier}
             payload.update({"cancel": True} if cancel else {"values": values})
 
             def work():
@@ -585,9 +590,9 @@ class ZeroApp(SafeClicks, App):
                     values[part] = value
                     next_part()
 
-            title = ask.get("about") or "Private information"
-            instructions = ask.get("why", "") if ask.get("about") else ""
-            field = (ask.get("choice_labels") or {}).get(part, part)
+            title = ask_fields.get("about") or "Private information"
+            instructions = ask_fields.get("why", "") if ask_fields.get("about") else ""
+            field = (ask_fields.get("choice_labels") or {}).get(part, part)
             text = "\n\n".join(filter(None, (title, instructions, field,
                 "Saved encrypted on this device until you delete it. "
                 "The value stays outside the conversation.")))
@@ -617,7 +622,7 @@ class ZeroApp(SafeClicks, App):
         if not text.strip():
             return
         client = self.client
-        target = (client.ask or {}).get("ask") if reply else None
+        target = render.entries.ask_id(client.ask) if reply and client.ask else None
         if reply and target is None:
             return
         if not reply and self.opening is not None:
@@ -1160,10 +1165,11 @@ class ZeroApp(SafeClicks, App):
         ask = self.client.ask
         if ask is None:
             return False
-        if self.boxed != ask["ask"] and self.client.box_open(self.last_key):
-            self.boxed = ask["ask"]
+        identifier = render.entries.ask_id(ask)
+        if self.boxed != identifier and self.client.box_open(self.last_key):
+            self.boxed = identifier
             self.picked = 0
-        return self.boxed == ask["ask"]
+        return self.boxed == identifier
 
     def focus_input(self):
         target = "#reply" if self.box_showing() else "#message"
@@ -1201,10 +1207,10 @@ class ZeroApp(SafeClicks, App):
         view.query_one("#message", MessageBox).display = not showing
         if showing:
             view.offer([])
-            private = (self.client.ask or {}).get("kind") == "secret"
+            private = render.entries.field(self.client.ask, "kind") == "secret"
             view.query_one("#reply", MessageBox).read_only = private
             if private:
-                identifier = self.client.ask["ask"]
+                identifier = render.entries.ask_id(self.client.ask)
                 if getattr(self, "private_input_shown", None) != identifier:
                     self.private_input_shown = identifier
                     self.call_after_refresh(self.vault_input)
@@ -1230,20 +1236,21 @@ class ZeroApp(SafeClicks, App):
 
     def ask_text(self):
         ask = self.client.ask or {}
-        if ask.get("kind") == "secret":
-            title = ask.get("about") or "Private information needed"
+        fields = render.entries.fields_of(ask)
+        if fields.get("kind") == "secret":
+            title = fields.get("about") or "Private information needed"
             return Content(title + ": press Enter for masked fields. "
                            "Escape in a field cancels. Values stay out of chat.")
         # The command, the agent's reason, what the ask is about, then the one
         # permission question, where applicable
-        prefix = "Question: " if ask.get("kind") == "question" else "$ "
-        parts = [(f"{prefix}{ask.get('command', '')}", "bold")]
-        reason = ask.get("reason")
+        prefix = "Question: " if fields.get("kind") == "question" else "$ "
+        parts = [(f"{prefix}{fields.get('command', '')}", "bold")]
+        reason = fields.get("reason")
         if reason:
             parts.append((f"\n{reason}", "dim"))
-        if ask.get("about"):
-            parts.append((f"\n{ask['about']}", ""))
-        if ask.get("kind") != "question":
+        if fields.get("about"):
+            parts.append((f"\n{fields['about']}", ""))
+        if fields.get("kind") != "question":
             parts += [("\n? ", "bold $text-warning"),
                       (controller.PROCEED, "bold")]
         # The choices: the picked one marked; words typed below go to

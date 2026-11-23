@@ -58,13 +58,6 @@ def connect(path, timeout=30):
     return conn
 
 
-# Seconds a connect may take: the server's test call waits up to a minute
-CONNECT_WAIT_SECONDS = 90
-# Seconds a model's features may take to measure: four small calls, each
-# with a short thought on a thinking model
-FEATURES_WAIT_SECONDS = 300
-
-
 def request(path, payload, timeout=30):
     try:
         with connect(path, timeout) as conn:
@@ -192,7 +185,7 @@ class Connection:
             self.ensure()
             self.checked = True
 
-    def call(self, payload, timeout=30):
+    def call(self, payload, timeout=None):
         """The server's reply; ProtocolError for its no."""
         reply = self.reply_to(payload, timeout)
         if not reply["ok"]:
@@ -201,11 +194,14 @@ class Connection:
             )
         return reply
 
-    def reply_to(self, payload, timeout=30):
+    def reply_to(self, payload, timeout=None):
         """The server's reply as it came, its no too (a relay passes it on
         whole)."""
         self.ready()
-        if payload.get("message") == "vault/answer":
+        spec = MESSAGES.get(payload.get("message")) or {}
+        if timeout is None:
+            timeout = spec.get("timeout_seconds", 30)
+        if spec.get("stamp_source"):
             payload = {**payload, "source": self.source}
         payload = whole(payload, self.token(), self.relayed_for_pid)
         try:
@@ -298,7 +294,7 @@ class Connection:
                  (("test", test), ("cached_only", cached_only), ("tools", tools))
                  if value}
         request = build("model/features", model=model, **flags)
-        return self.call(request, timeout=FEATURES_WAIT_SECONDS)
+        return self.call(request)
 
     def servers(self):
         """Every model server the server knows, whether its key is there, the
@@ -335,7 +331,7 @@ class Connection:
                   "default": default}
         given = {k: v for k, v in fields.items() if v is not None}
         request = build("model/server/connect", name=name, model=model, **given)
-        return self.call(request, timeout=CONNECT_WAIT_SECONDS)
+        return self.call(request)
 
     def disconnect(self, name):
         """The server's key and the user's lines for it taken out."""
@@ -348,7 +344,7 @@ class Connection:
     def test_model(self, name, model):
         """Test a model using the existing connection. The server may charge."""
         request = build("model/server/test", name=name, model=model)
-        return self.call(request, timeout=CONNECT_WAIT_SECONDS)
+        return self.call(request)
 
     def mcp_servers(self):
         """(the MCP servers listed, each with its state; what the list says
@@ -365,7 +361,7 @@ class Connection:
         may take the server's start time, so the wait is long."""
         given = {k: v for k, v in fields.items() if v is not None}
         request = build("mcp/add", name=name, **given)
-        return self.call(request, timeout=CONNECT_WAIT_SECONDS)
+        return self.call(request)
 
     def mcp_remove(self, name):
         """An MCP server taken off the list and stopped."""

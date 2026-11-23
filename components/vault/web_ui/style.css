@@ -1,0 +1,7 @@
+/* Vault component styles for masked private-input ask forms. */
+
+.ask .vault-fields { display: grid; grid-template-columns: minmax(0, 1fr); }
+.ask:has(.vault-fields) { max-height: 65vh; overflow-y: auto; }
+.vault-fields label { display: grid; gap: 4px; }
+.vault-fields input { width: 100%; min-width: 0; }
+.private-instructions { white-space: pre-wrap; overflow-wrap: anywhere; }

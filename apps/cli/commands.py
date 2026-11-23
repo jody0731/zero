@@ -120,39 +120,42 @@ def history_text(info, records, working=True, runs_with=None, context=None):
         lines.insert(1, meter)
     started = None
     restarts = 0
+    entries = render.entries
     for record in records:
+        kind = entries.entry_type(record)
+        fields = entries.fields_of(record)
         if record.get("audience") == "model":
-            restarts += record.get("kind") == "restarted"
+            restarts += fields.get("kind") == "restarted"
             continue
         clock = datetime.fromisoformat(record["time"]).strftime("%H:%M:%S")
-        if record["type"] == "session" and record.get("note"):
-            lines.append(f"--- {record['note']} ---")
-        elif record["type"] == "note" and record.get("kind") in (
+        if kind == "sessions/header" and fields.get("note"):
+            lines.append(f"--- {fields['note']} ---")
+        elif kind in entries.NOTE_TYPES and fields.get("kind") in (
             "restarted", "upgraded"
         ):
-            lines.append(f"--- {record['text']} ---")
-            restarts += record.get("kind") == "restarted"
-        elif record["type"] == "user":
-            if not record.get("steer"):
+            lines.append(f"--- {fields['text']} ---")
+            restarts += fields.get("kind") == "restarted"
+        elif entries.is_turn_input(record):
+            if not fields.get("steer"):
                 started, restarts = record["time"], 0
-            mark = " (steer)" if record.get("steer") else ""
+            mark = " (steer)" if fields.get("steer") else ""
             # A background job's notice isn't the user's
-            who = record.get("sender_name") or render.who(record.get("source"))
+            who = record.get("sender_name") or render.who(fields.get("source"))
             who = "you" if who == "You" else who
-            lines.append(f"{clock}  {who}{mark}  {record['text']}")
-        elif record["type"] == "ask":
-            reason = record.get("reason") or ""
-            asked = (f"asks: {record['command']}"
+            lines.append(f"{clock}  {who}{mark}  {entries.message_text(record)}")
+        elif kind == "sessions/ask":
+            reason = fields.get("reason") or ""
+            asked = (f"asks: {fields['command']}"
                      + (f" ({reason})" if reason else ""))
             lines.append(f"{clock}  {NAME}  {asked}")
-        elif record["type"] == "answer":
+        elif kind == "sessions/answer":
             label = render.interaction_label(record)
-            lines.append(f"{clock}  {label}  {record.get('text', '')}")
-        elif record["type"] in render.COMPACTION_RECORDS:
+            lines.append(f"{clock}  {label}  {fields.get('text', '')}")
+        elif kind in render.COMPACTION_RECORDS:
             lines.append(f"--- {render.compaction_text(record)} ---")
-        elif record["type"] == "rewind":
+        elif kind == "sessions/rewind_note":
             lines.append(f"--- {render.rewind_text(record)} ---")
-        elif record["type"] == "turn_end":
+        elif kind == "sessions/turn_end":
             lines.append(f"{clock}  {NAME}  {ending(record, started, restarts)}")
     ask = info.get("ask")
     if working and ask is not None:
@@ -201,12 +204,13 @@ def list_sessions(server, sessions=None):
 
 def ending(record, started=None, restarts=0):
     """The answer, or how the turn ended without one."""
-    if record["outcome"] == "answered":
-        return f"{record['answer']}  ({duration(record, started, restarts)})"
-    why = record.get("detail")
-    if record.get("error"):
-        why = record["error"].strip().splitlines()[-1]
-    text = f"({record['outcome']}: {why})" if why else f"({record['outcome']})"
+    fields = render.entries.fields_of(record) if "entry" in record else record
+    if fields["outcome"] == "answered":
+        return f"{fields['answer']}  ({duration(record, started, restarts)})"
+    why = fields.get("detail")
+    if fields.get("error"):
+        why = fields["error"].strip().splitlines()[-1]
+    text = f"({fields['outcome']}: {why})" if why else f"({fields['outcome']})"
     if started and restarts:
         text += f"  ({duration(record, started, restarts)})"
     return text
@@ -778,12 +782,15 @@ def list_command(connection, args, out):
     archived = True if args.archived else None if args.all else False
     workspace = workspace_of(args.cd) if args.cd else None
     if args.watch:
+        by_id = {}
         with connection.watch_list(archived, workspace) as stream:
             for event in stream:
                 if args.json:
                     out(json.dumps(event, ensure_ascii=False))
-                elif "sessions" in event:
-                    out(list_sessions(connection, event["sessions"]) + "\n")
+                else:
+                    updated = session_list.apply_list_event(by_id, event)
+                    if updated is not None:
+                        out(list_sessions(connection, updated) + "\n")
                 if "bye" in event:
                     return 0
         return 0

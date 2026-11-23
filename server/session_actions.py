@@ -9,22 +9,25 @@ tree: a rewind to before one of the user's messages, and a fork into a new
 session. A service of the runtime's own class, over its store, locks and logs.
 """
 
+import copy
 import json
 import secrets
 import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import settings
-from core import history
+from core import attribution, entries, replay, timeline
 from core.loop import Session
 from server import replies, trash
 from server.rebuild import header_row
 from server.services import Refused
 from sessions import upgrade
 from sessions.lock import Busy
+from sessions.entries import fork_header
 from sessions.log import write_copy
 
 TITLE_LENGTH = 60
@@ -34,13 +37,22 @@ ID_TRIES = 5
 COLUMNS = ("mode", "model", "workspace")
 
 
-def check_thinking_effort(name, effort):
-    """`effort` if it is one of the setting's choices; else refused."""
-    efforts = settings.BY_NAME[name].choices
-    if effort not in efforts:
-        what = "judge effort" if name == "judge_thinking_effort" else "thinking_effort"
-        raise Refused(f"unknown {what} {effort!r}; efforts: {efforts}")
-    return effort
+def check_switchable(name, value):
+    """Validate and normalize a switchable setting value, or raise Refused."""
+    setting = settings.BY_NAME.get(name)
+    if setting is None or not setting.switchable:
+        raise Refused(f"cannot switch {name!r}")
+    if setting.empty_means_none:
+        if not isinstance(value, str):
+            raise Refused(f"{name} must be a string")
+        stripped = value.strip()
+        if not stripped:
+            return None
+        value = stripped
+    problem = settings.check(setting, value)
+    if problem:
+        raise Refused(problem)
+    return value
 
 
 def new_id():
@@ -62,9 +74,12 @@ class SessionActions:
         the newest `limit` of them, and how many came before those (earlier_count)."""
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
-        records = upgrade.migrate(self.log(sid).branch(), time=upgrade.timestamp())
-        records = [r for r in history.transcript(self.with_origins(sid, records))
-                   if r["seq"] > after and (before is None or r["seq"] < before)]
+        records = self.read_branch(sid)
+        records = [
+            r for r in replay.transcript(records)
+            if not entries.has(r.entry, "private_continuation")
+            and r.seq > after and (before is None or r.seq < before)
+        ]
         earlier_count = 0
         if limit is not None and len(records) > limit:
             earlier_count = len(records) - limit
@@ -72,20 +87,35 @@ class SessionActions:
         return records, earlier_count
 
     def with_origins(self, sid, records):
-        return history.attributed_records(
-            records, sid, lambda parent: self.log(parent).first_record())
+        return attribution.attributed_records(records, sid, self.read_header)
 
-    def context_meter(self, sid):
-        """The session's context as the user's meter shows it (core/history.py's
-        context_meter), or None before its first call."""
-        return history.context_meter(self.log(sid).branch(), self.meter_line())
+    def record_sessions(self, sid, records):
+        if not records:
+            return ()
+        return attribution.record_sessions(
+            records, sid, self.read_header, header=self.read_header(sid),
+        )
 
-    def set_session(self, sid, mode=None, model=None, workspace=None,
-                    thinking_effort=None, judge_model=None, judge_thinking_effort=None):
+    def context_meter(self, sid, *, log=None):
+        """The session's context meter, or None before its first call."""
+        log = log or self.read_log(sid)
+        compact_at = self.meter_line()
+        try:
+            return log.context_meter(compact_at)
+        except timeline.OldLog:
+            return timeline.context_meter(self.read_branch(sid, log=log), compact_at)
+
+    def logged_switches(self, sid, log=None):
+        log = log or self.read_log(sid)
+        try:
+            return log.running_with()
+        except timeline.OldLog:
+            return timeline.running_with(self.read_branch(sid, log=log))
+
+    def set_session(self, sid, mode=None, model=None, workspace=None, **overrides):
         """Change what a session runs with. Its next turn takes it; a
-        turn running or waiting for an answer keeps its own. `judge_model`
-        "": the session's own model again. Returns what was set, and whether
-        a turn now holds the old values."""
+        turn running or waiting for an answer keeps its own. Returns what
+        was set, and whether a turn now holds the old values."""
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
         fields = {}
@@ -102,26 +132,14 @@ class SessionActions:
             if not path.is_dir():
                 raise Refused(f"no folder {workspace}")
             fields["workspace"] = str(path.resolve())
-        if thinking_effort is not None:
-            fields["thinking_effort"] = check_thinking_effort(
-                "thinking_effort", thinking_effort
-            )
-        if judge_model is not None:
-            if not isinstance(judge_model, str):
-                raise Refused("a judge model is a model's name, or empty for "
-                              "the session's own")
-            fields["judge_model"] = judge_model.strip() or None
-        if judge_thinking_effort is not None:
-            fields["judge_thinking_effort"] = check_thinking_effort(
-                "judge_thinking_effort", judge_thinking_effort
-            )
+        for name, value in overrides.items():
+            if value is None:
+                continue
+            fields[name] = check_switchable(name, value)
         if not fields:
-            raise Refused(
-                "nothing to set: give a mode, a model, a workspace, a thinking effort, "
-                "or the judge's model or thinking effort"
-            )
-        # The session's row has no effort or judge: its switch and its log
-        # hold them
+            names = ", ".join(timeline.SWITCHABLE)
+            raise Refused(f"nothing to set: give one of {names}")
+        # Non-column switchable settings are carried by switch and the log
         columns = {k: v for k, v in fields.items() if k in COLUMNS}
         with self.state(sid).lock:
             switch = json.loads(self.store.session(sid)["switch"] or "{}")
@@ -140,75 +158,148 @@ class SessionActions:
         return self.live_settings()[name]
 
     def runs_with(self, sid):
-        """What the session's next turn runs with: its mode, model and
-        workspace (its row), its effort and judge (its log, then a switch
-        still to come). What the log doesn't name yet is config.toml's."""
+        """What the session's next turn runs with: its core columns, its
+        logged switchable settings, and any pending switch."""
         row = self.store.session(sid)
         if row is None:
             raise Refused(f"no session {sid!r}")
         config = self.config()
         now = {
-            "thinking_effort": config["thinking_effort"],
-            "judge_model": config["judge_model"],
-            "judge_thinking_effort": config["judge_thinking_effort"],
-            **history.running_with(self.log(sid).branch()),
-            **json.loads(row["switch"] or "{}"),
+            name: config.get(name, settings.DEFAULTS.get(name))
+            for name in timeline.SWITCHABLE
+            if name not in COLUMNS
         }
+        now.update(self.logged_switches(sid))
+        now.update(json.loads(row["switch"] or "{}"))
         now.update({name: row[name] for name in COLUMNS})
-        return {name: now[name] for name in history.SWITCHABLE}
+        return {name: now[name] for name in timeline.SWITCHABLE}
 
     def pending_switches(self, sid, row=None):
         """What a running or waiting turn holds from before a `set`: those
         values change when its next turn starts."""
         row = row or self.store.session(sid)
-        state = self.states.get(sid)
-        busy = ((state is not None and state.runner is not None)
-                or row["state"] in ("running", "waiting"))
-        if not busy or not row["switch"]:
+        if not row or not row["switch"]:
+            return []
+        if row["state"] not in ("running", "waiting"):
             return []
         switch = json.loads(row["switch"])
-        return [name for name in history.SWITCHABLE if name in switch]
+        return [name for name in timeline.SWITCHABLE if name in switch]
 
     def sessions(self, archived=None, workspace=None):
         """The session list, each with its open ask's question, whether it has
         news the user hasn't seen, and what the services add (the jobs: its
         running ones). `archived`: None for all, or only those archived (True)
         or not (False); `workspace`: only the sessions in exactly that
-        folder. Built whole once for each change the database commits (the
-        list's version), whoever asks for it meanwhile."""
-        result = []
-        rows, kept = self.listed_rows()
-        for row in rows:
-            if archived is not None and row["archived"] != archived:
-                continue
-            if workspace is not None and row["workspace"] != workspace:
-                continue
-            row = dict(row)
-            # Whether a turn holds a switch is the server's, not the database's
-            row["pending"] = self.pending_switches(row["id"], kept[row["id"]])
-            result.append(row)
-        return result
+        folder."""
+        return self.sessions_snapshot(archived, workspace)[1]
 
-    def listed_rows(self):
-        """Every session's row as the list shows it (server/replies.py), and
-        by id what of its store row a turn's switch is read from; built once
-        for each version of the list: kept, never changed, by every reader of
-        it."""
-        version = self.list_version
-        kept = getattr(self, "listed", None)
-        if kept is not None and kept[0] == version:
-            return kept[1], kept[2]
-        stored = self.store.sessions()
-        asks = {a["session"]: a for a in self.store.open_asks()}
-        rows = [replies.session_row(row, asks.get(row["id"])) for row in stored]
-        for service in self.services.values():
-            service.annotate(rows)
-        switches = {row["id"]: {"switch": row["switch"], "state": row["state"]}
-                    for row in stored}
-        # A change committed while it was built moved the version on: the
-        # next reader builds it again
-        self.listed = (version, rows, switches)
-        return rows, switches
+    def copy_row(self, row):
+        return {
+            key: (copy.deepcopy(value) if isinstance(value, (dict, list)) else value)
+            for key, value in row.items()
+        }
+
+    def sessions_snapshot(self, archived=None, workspace=None, min_version=None):
+        """Return `(version, sorted_rows)` from the incrementally refreshed
+        session-list cache, filtered by `(archived, workspace)`."""
+        self.ensure_list_cache(min_version)
+        with self.list_cache_lock:
+            version = self.list_cache_version
+            rows = [
+                self.copy_row(row) for row in self.list_cache_rows.values()
+                if (archived is None or row["archived"] == archived)
+                and (workspace is None or row["workspace"] == workspace)
+            ]
+        rows.sort(
+            key=lambda row: (
+                row["state"] == "waiting",
+                row["updated_at"],
+                row["created_at"],
+            ),
+            reverse=True,
+        )
+        return version, rows
+
+    def session_rows_for(self, sids, min_version=None):
+        """Return `{sid: row_or_None}` for the named sessions from the
+        incrementally refreshed cache."""
+        self.ensure_list_cache(min_version)
+        with self.list_cache_lock:
+            return {
+                sid: (
+                    self.copy_row(row)
+                    if (row := self.list_cache_rows.get(sid)) is not None
+                    else None
+                )
+                for sid in sids
+            }
+
+    def ensure_list_cache(self, min_version=None):
+        """Refresh only the sessions changed since `list_cache_version` (or do
+        a full build on cold start or ring-buffer overflow) until the cache
+        reaches at least `min_version` (default: current `list_version`)."""
+        want = self.list_version if min_version is None else min_version
+        with self.list_cache_lock:
+            cached_ver = self.list_cache_version
+            if cached_ver is not None and cached_ver >= want:
+                return cached_ver
+        with self.list_build_lock:
+            while True:
+                with self.list_cache_lock:
+                    cached_ver = self.list_cache_version
+                    if cached_ver is not None and cached_ver >= want:
+                        return cached_ver
+                if cached_ver is None:
+                    target = self.list_version
+                    built = self._build_rows_map(None)
+                    with self.list_cache_lock:
+                        self.list_cache_rows = built
+                        self.list_cache_version = target
+                        if target >= want:
+                            return target
+                else:
+                    target, touched = self.watcher_hub.list_changes_since(cached_ver)
+                    if touched is None:
+                        built = self._build_rows_map(None)
+                        with self.list_cache_lock:
+                            self.list_cache_rows = built
+                            self.list_cache_version = target
+                            if target >= want:
+                                return target
+                    elif not touched:
+                        with self.list_cache_lock:
+                            self.list_cache_version = max(cached_ver, target)
+                            if self.list_cache_version >= want:
+                                return self.list_cache_version
+                    else:
+                        updated = self._build_rows_map(touched)
+                        with self.list_cache_lock:
+                            for sid in touched:
+                                if sid in updated:
+                                    self.list_cache_rows[sid] = updated[sid]
+                                else:
+                                    self.list_cache_rows.pop(sid, None)
+                            self.list_cache_version = target
+                            if target >= want:
+                                return target
+
+    def _build_rows_map(self, sids=None):
+        if sids is None:
+            stored = self.store.sessions()
+            asks = {a["session"]: a for a in self.store.open_asks()}
+        else:
+            stored = self.store.sessions_by_ids(sids)
+            asks = {a["session"]: a for a in self.store.open_asks_for(sids)}
+        rows = [
+            replies.session_row(
+                row, asks.get(row["id"]), self.pending_switches(row["id"], row),
+            )
+            for row in stored
+        ]
+        if rows:
+            for service in self.services.values():
+                service.annotate(rows)
+        return {row["id"]: row for row in rows}
 
     def mark_seen(self, sid, seq):
         """The user has seen the session up to `seq`: it is the one they last
@@ -240,19 +331,19 @@ class SessionActions:
         rewind there would leave its task behind."""
         if self.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
-        records = self.log(sid).branch()
+        records = self.read_branch(sid)
         after = self.copied_to(sid)
-        return [{"seq": r["seq"], "time": r["time"], "text": r["text"]}
-                for r in reversed(history.rewind_points(records))
-                if r["seq"] > after]
+        return [{"seq": r.seq, "time": r.time, "text": entries.text(r.entry)}
+                for r in reversed(timeline.rewind_points(records))
+                if r.seq > after]
 
     def copied_to(self, sid):
         """The last record a session ZERO started copied from its parent (a
         subagent's fork), else 0: its rewind points start after it."""
         if self.store.session(sid).get("started_by") != "zero":
             return 0
-        head = self.log(sid).first_record() or {}
-        return (head.get("forked_from") or {}).get("seq", 0)
+        head = self.read_header(sid)
+        return (head.entry.get("forked_from") or {}).get("seq", 0) if head else 0
 
     def refuse_copied(self, sid, seq):
         """Refused for a record a subagent copied from its parent."""
@@ -269,9 +360,9 @@ class SessionActions:
         the user left it, and tells the model so."""
         row = self.store.session(sid)
         pending = json.loads(row["switch"] or "{}")
-        old, new = history.running_with(before), history.running_with(after)
+        old, new = timeline.running_with(before), timeline.running_with(after)
         now = {**old, **{name: row[name] for name in COLUMNS}}
-        changed = {name: now[name] for name in history.SWITCHABLE
+        changed = {name: now[name] for name in timeline.SWITCHABLE
                    if name in now and old.get(name) != new.get(name)}
         return {**changed, **pending}
 
@@ -322,8 +413,11 @@ class SessionActions:
                 raise Refused(str(error)) from None
             try:
                 log = self.log(sid, lock)
-                before = log.branch()
-                if history.log_format(before) != history.LOG_FORMAT:
+                try:
+                    before = log.branch()
+                except timeline.OldLog:
+                    before = ()
+                if timeline.log_format(before) != timeline.LOG_FORMAT:
                     raise Refused("this session's log is from an older ZERO; "
                                   "send it a message first")
                 try:
@@ -346,7 +440,7 @@ class SessionActions:
                 )
             finally:
                 lock.release()
-        return {"rewind": record, "text": left[0]["text"]}
+        return {"rewind": record, "text": entries.text(left[0].entry)}
 
     def fork(self, sid, seq=None, source="user"):
         """A new session from this one's conversation: its current branch up
@@ -360,26 +454,30 @@ class SessionActions:
         info = self.store.session(sid)
         if info is None:
             raise Refused(f"no session {sid!r}")
-        records = self.log(sid).branch()
-        if history.log_format(records) != history.LOG_FORMAT:
+        log = self.read_log(sid)
+        try:
+            records = log.branch()
+        except timeline.OldLog:
+            records = ()
+        if timeline.log_format(records) != timeline.LOG_FORMAT:
             raise Refused("this session's log is from an older ZERO; "
                           "send it a message first")
         if seq is None:
             state = self.states.get(sid)
             if ((state is not None and state.runner is not None)
                     or info["state"] in ("running", "waiting")
-                    or history.unfinished_turn(records)):
+                    or log.unfinished_turn()):
                 raise Refused("its last turn hasn't ended; fork from one of the "
                               "user's messages, or once it ends")
             copied, text, went_on = records, "", None
         else:
             self.refuse_copied(sid, seq)
             try:
-                _, left = history.left_behind_by(records, seq)
+                _, left = timeline.left_behind_by(records, seq)
             except ValueError as error:
                 raise Refused(str(error)) from None
             copied = records[: records.index(left[0])]
-            text = left[0]["text"]
+            text = entries.text(left[0].entry)
             went_on = {"effects": "".join(
                 service.fork_effects(sid, left) for service in self.services.values()
             )}
@@ -393,17 +491,23 @@ class SessionActions:
         """A new session from this one's finished turns: its current branch
         up to the start of the turn under way (all of it, when none is), as
         `fork` copies; ZERO's, a subagent's fork made mid-turn (DSH's "the
-        parent's completed conversation turns"). `rows_beside(db, id)`: rows
-        its maker writes in the same transaction as its own (a subagent's).
+        parent's completed conversation turns"). `rows_beside(db, id, parent=...)`:
+        rows its maker writes in the same transaction as its own (a subagent's).
         Returns the new session's id."""
         info = self.store.session(sid)
         if info is None:
             raise Refused(f"no session {sid!r}")
-        records = self.log(sid).branch()
-        if history.log_format(records) != history.LOG_FORMAT:
+        log = self.read_log(sid)
+        try:
+            records = log.branch()
+        except timeline.OldLog:
+            records = ()
+        if timeline.log_format(records) != timeline.LOG_FORMAT:
             raise Refused("this session's log is from an older ZERO")
-        under_way = history.unfinished_turn(records)
+        under_way = log.unfinished_turn()
         copied = records[: len(records) - len(under_way)]
+        if rows_beside is not None:
+            rows_beside = partial(rows_beside, parent=info)
         return self.copy_session(sid, info, records, copied, None,
                                  {"title": title, "source": source,
                                   "started_by": "zero"}, rows_beside)
@@ -422,21 +526,22 @@ class SessionActions:
             **row, "model": info["model"], "mode": info["mode"],
             "workspace": info["workspace"],
             "switch": json.dumps(switch) if switch else None, "parent": sid,
-            "seen_seq": copied[-1]["seq"], "created_at": made.timestamp(),
+            "seen_seq": copied[-1].seq, "created_at": made.timestamp(),
         }
-        earlier = copied[0].get("forked_from") or {}
-        header = {**copied[0], "forked_from": {
-            "session": sid, "seq": copied[-1]["seq"], "title": info["title"],
+        earlier = copied[0].entry.get("forked_from") or {}
+        forked_from = {
+            "session": sid, "seq": copied[-1].seq, "title": info["title"],
             "time": made.isoformat(timespec="seconds"),
             # Every session it came from, the parent first: their saved
             # outputs, which its copied context names, stay readable
             "ancestors": [sid, *earlier.get("ancestors", [])],
-            "ancestor_cutoffs": history.ancestor_cutoffs(
-                sid, copied[0], lambda parent: self.log(parent).first_record(),
-                lambda parent: self.log(parent).records()),
+            "ancestor_cutoffs": attribution.ancestor_cutoffs(
+                sid, copied[0], self.read_header, self.read_records,
+            ),
             "started_by": row["started_by"],
             **({"went_on": went_on} if went_on else {}),
-        }, "row": header_row(full)}
+        }
+        header = fork_header(copied[0], copied[-1].entry, forked_from, header_row(full))
         for tries in range(1, ID_TRIES + 1):
             new = new_id()
             path = self.paths.sessions / f"{new}.jsonl"
@@ -457,22 +562,25 @@ class SessionActions:
         raise FileExistsError(f"{ID_TRIES} new session ids were all taken")
 
     def new_child(self, sid, title, source, rows_beside=None,
-                  mode=None, model=None):
+                  mode=None, model=None, *, parent_log=None):
         """A new session under this one, its log empty: the same workspace,
         mode and model unless explicitly selected, and the thinking effort
         the parent runs with, which its first turn takes as a switch.
-        `rows_beside(db, id)`: rows its maker writes in the same transaction
-        as its own. Returns its id."""
+        `rows_beside(db, id, parent=...)`: rows its maker writes in the transaction
+        as its own. An in-process parent can supply the log its turn owns.
+        Returns the child's ID."""
         info = self.store.session(sid)
         if info is None:
             raise Refused(f"no session {sid!r}")
-        effort = history.running_with(self.log(sid).branch()).get("thinking_effort")
+        effort = self.logged_switches(sid, parent_log).get("thinking_effort")
         row = {
             "title": title, "source": source, "model": model or info["model"],
             "mode": mode or info["mode"], "workspace": info["workspace"],
             "switch": json.dumps({"thinking_effort": effort}) if effort else None,
             "parent": sid, "started_by": "zero",
         }
+        if rows_beside is not None:
+            rows_beside = partial(rows_beside, parent=info)
         for tries in range(1, ID_TRIES + 1):
             new = new_id()
             try:

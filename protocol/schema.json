@@ -1,17 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "zero-protocol-6",
-  "title": "Z.E.R.O. protocol 6",
+  "$id": "zero-protocol-8",
+  "title": "Z.E.R.O. protocol 8",
   "description": "One JSON object a line over the server's Unix socket (~/.zero/run/zero.sock; `zero server start --json` names it, starting the server when none answers): a request, then its reply; session/watch and session/list with watch stream events. Each request names its message in `message` and its protocol in `protocol`; a message marked x-changes carries an `id` the sender picks, run once. Where the socket can't tell who connects, `token` carries the token file's text.",
-  "x-protocol": 6,
-  "x-oldest-protocol": 4,
+  "x-protocol": 8,
+  "x-oldest-protocol": 8,
   "oneOf": [
-    {
-      "$ref": "#/$defs/vault.answer"
-    },
-    {
-      "$ref": "#/$defs/vault.status"
-    },
     {
       "$ref": "#/$defs/server.hello"
     },
@@ -55,9 +49,6 @@
       "$ref": "#/$defs/session.delete"
     },
     {
-      "$ref": "#/$defs/session.compact"
-    },
-    {
       "$ref": "#/$defs/session.user_messages"
     },
     {
@@ -70,10 +61,19 @@
       "$ref": "#/$defs/session.set"
     },
     {
-      "$ref": "#/$defs/session.search"
+      "$ref": "#/$defs/setting.list"
     },
     {
-      "$ref": "#/$defs/subagent.send"
+      "$ref": "#/$defs/setting.set"
+    },
+    {
+      "$ref": "#/$defs/session.submit"
+    },
+    {
+      "$ref": "#/$defs/session.compact"
+    },
+    {
+      "$ref": "#/$defs/workspace.list"
     },
     {
       "$ref": "#/$defs/job.list"
@@ -85,19 +85,16 @@
       "$ref": "#/$defs/job.stop"
     },
     {
-      "$ref": "#/$defs/rounds.list"
+      "$ref": "#/$defs/mcp.list"
     },
     {
-      "$ref": "#/$defs/rounds.stop"
+      "$ref": "#/$defs/mcp.get"
     },
     {
-      "$ref": "#/$defs/grant.list"
+      "$ref": "#/$defs/mcp.add"
     },
     {
-      "$ref": "#/$defs/grant.forget"
-    },
-    {
-      "$ref": "#/$defs/workspace.list"
+      "$ref": "#/$defs/mcp.remove"
     },
     {
       "$ref": "#/$defs/model.list"
@@ -130,25 +127,28 @@
       "$ref": "#/$defs/model.server.disconnect"
     },
     {
-      "$ref": "#/$defs/mcp.list"
+      "$ref": "#/$defs/grant.list"
     },
     {
-      "$ref": "#/$defs/mcp.get"
+      "$ref": "#/$defs/grant.forget"
     },
     {
-      "$ref": "#/$defs/mcp.add"
+      "$ref": "#/$defs/rounds.list"
     },
     {
-      "$ref": "#/$defs/mcp.remove"
+      "$ref": "#/$defs/rounds.stop"
     },
     {
-      "$ref": "#/$defs/setting.list"
+      "$ref": "#/$defs/session.search"
     },
     {
-      "$ref": "#/$defs/setting.set"
+      "$ref": "#/$defs/subagent.send"
     },
     {
-      "$ref": "#/$defs/session.submit"
+      "$ref": "#/$defs/vault.answer"
+    },
+    {
+      "$ref": "#/$defs/vault.status"
     }
   ],
   "$defs": {
@@ -179,6 +179,142 @@
       "required": [
         "ok",
         "error"
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "description": "A conversation entry. Nested entries inherit origin and time.",
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "enum": [
+                "user",
+                "system",
+                "model",
+                "tool"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "links": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "relation",
+                  "target_id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "relation": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "target_id": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  }
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fields": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "entries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/entry"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "entry.timeline": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/entry"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "origin",
+            "created_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "origin": {
+              "enum": [
+                "user",
+                "system",
+                "model",
+                "tool"
+              ]
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": true
+        }
       ]
     },
     "model_failure": {
@@ -229,134 +365,28 @@
         }
       }
     },
-    "vault.answer": {
+    "command_fields": {
       "type": "object",
-      "description": "Supply private values directly to a waiting vault request.",
+      "description": "structured fields carried beside a bash command's text",
       "properties": {
-        "message": {
-          "const": "vault/answer"
-        },
-        "protocol": {
+        "exit_code": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "its exit code, once it ended"
         },
-        "token": {
+        "wall_seconds": {
+          "type": "number",
+          "description": "how long it ran here"
+        },
+        "job_id": {
           "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+          "description": "the background job it started, or was moved to past its timeout"
         },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "session": {
-          "type": "string",
-          "description": "a session's id"
-        },
-        "ask": {
-          "type": "string"
-        },
-        "source": {
-          "type": "string",
-          "description": "who sends it: a client's own name"
-        },
-        "values": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "cancel": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "session",
-        "ask"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "vault.answer.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "saved": {
-          "type": "boolean"
-        },
-        "replayed": {
+        "timed_out": {
           "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
+          "description": "it ran past its timeout"
         }
       },
-      "required": [
-        "ok"
-      ]
-    },
-    "vault.status": {
-      "type": "object",
-      "description": "The vault count and where its encryption key is kept.",
-      "properties": {
-        "message": {
-          "const": "vault/status"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        }
-      },
-      "required": [
-        "message"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "vault.status.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "status": {
-          "type": "string"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
+      "additionalProperties": true
     },
     "server.hello": {
       "type": "object",
@@ -493,7 +523,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -575,7 +605,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -634,17 +664,6 @@
           "type": "string",
           "description": "who sends it: a client's own name"
         },
-        "thinking_effort": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "a new session's thinking effort: off, low, high or max"
-        },
         "reply_to": {
           "anyOf": [
             {
@@ -676,6 +695,17 @@
         "choice": {
           "type": "string",
           "description": "one of the open ask's `choices`, as picked at its box"
+        },
+        "thinking_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's thinking effort: off, low, high or max"
         },
         "rounds": {
           "type": "boolean",
@@ -738,7 +768,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -820,7 +850,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -901,14 +931,14 @@
     },
     "session.list": {
       "type": "object",
-      "description": "The sessions, each with its open ask; with `watch`, the list again at each change (archived ones left out).",
+      "description": "The sessions, each with its open ask; with `watch`, the opening snapshot then incremental `upsert`/`remove` diffs as sessions change.",
       "properties": {
         "message": {
           "const": "session/list"
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -981,20 +1011,58 @@
       ]
     },
     "session.list.event": {
-      "type": "object",
-      "description": "one event a line, until a bye",
-      "properties": {
-        "sessions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/row.session"
+      "description": "opening snapshot, incremental diffs, or bye",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "sessions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/row.session"
+              },
+              "description": "the whole list"
+            }
           },
-          "description": "the whole list"
+          "required": [
+            "sessions"
+          ],
+          "additionalProperties": false
         },
-        "bye": {
-          "type": "string"
+        {
+          "type": "object",
+          "properties": {
+            "upsert": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/row.session"
+              },
+              "description": "sessions added or changed"
+            },
+            "remove": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "session ids removed or filtered out"
+            }
+          },
+          "minProperties": 1,
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "bye": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bye"
+          ],
+          "additionalProperties": false
         }
-      }
+      ]
     },
     "session.deliveries": {
       "type": "object",
@@ -1005,7 +1073,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -1074,7 +1142,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -1130,57 +1198,47 @@
           "type": "array",
           "items": {
             "type": "object",
-            "description": "a record of a session's log: what an app reads of each kind is record.<type>",
+            "description": "a record of a session's log as a native timeline Entry",
             "properties": {
               "seq": {
                 "type": "integer",
                 "description": "its place in the session's log"
               },
-              "type": {
-                "type": "string"
+              "time": {
+                "type": "string",
+                "description": "when it was written (ISO 8601, with its offset)"
               },
-              "interaction": {
-                "type": "object",
-                "required": [
-                  "sender",
-                  "action",
-                  "target"
-                ],
-                "properties": {
-                  "sender": {
-                    "type": "string"
-                  },
-                  "action": {
-                    "type": "string"
-                  },
-                  "sender_session": {
-                    "type": "string"
-                  },
-                  "target": {
-                    "type": "object"
-                  }
-                }
+              "entry": {
+                "$ref": "#/$defs/entry.timeline"
               },
-              "sender_name": {
-                "type": "string"
+              "parent": {
+                "type": "integer",
+                "description": "the seq a rewind returns to"
               },
               "audience": {
                 "type": "string",
                 "description": "model: internal context, not shown in a person's conversation"
               },
-              "model_failure": {
-                "$ref": "#/$defs/model_failure"
+              "sender_name": {
+                "type": "string"
               },
-              "time": {
+              "notice_source": {
                 "type": "string",
-                "description": "when it was written (ISO 8601, with its offset)"
+                "description": "what sent this notice; it is not a person's message"
+              },
+              "call_summaries": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "each of its tool calls by id, as an ask shows it"
               }
             },
             "required": [
               "seq",
-              "type"
-            ],
-            "additionalProperties": true
+              "time",
+              "entry"
+            ]
           },
           "description": "the log's records"
         },
@@ -1200,9 +1258,6 @@
             "workspace": {
               "type": "string"
             },
-            "thinking_effort": {
-              "type": "string"
-            },
             "judge_model": {
               "anyOf": [
                 {
@@ -1215,6 +1270,9 @@
               "description": "null: the session's own model"
             },
             "judge_thinking_effort": {
+              "type": "string"
+            },
+            "thinking_effort": {
               "type": "string"
             }
           }
@@ -1276,7 +1334,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -1340,57 +1398,47 @@
       "properties": {
         "record": {
           "type": "object",
-          "description": "a record of a session's log: what an app reads of each kind is record.<type>",
+          "description": "a record of a session's log as a native timeline Entry",
           "properties": {
             "seq": {
               "type": "integer",
               "description": "its place in the session's log"
             },
-            "type": {
-              "type": "string"
+            "time": {
+              "type": "string",
+              "description": "when it was written (ISO 8601, with its offset)"
             },
-            "interaction": {
-              "type": "object",
-              "required": [
-                "sender",
-                "action",
-                "target"
-              ],
-              "properties": {
-                "sender": {
-                  "type": "string"
-                },
-                "action": {
-                  "type": "string"
-                },
-                "sender_session": {
-                  "type": "string"
-                },
-                "target": {
-                  "type": "object"
-                }
-              }
+            "entry": {
+              "$ref": "#/$defs/entry.timeline"
             },
-            "sender_name": {
-              "type": "string"
+            "parent": {
+              "type": "integer",
+              "description": "the seq a rewind returns to"
             },
             "audience": {
               "type": "string",
               "description": "model: internal context, not shown in a person's conversation"
             },
-            "model_failure": {
-              "$ref": "#/$defs/model_failure"
+            "sender_name": {
+              "type": "string"
             },
-            "time": {
+            "notice_source": {
               "type": "string",
-              "description": "when it was written (ISO 8601, with its offset)"
+              "description": "what sent this notice; it is not a person's message"
+            },
+            "call_summaries": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "each of its tool calls by id, as an ask shows it"
             }
           },
           "required": [
             "seq",
-            "type"
-          ],
-          "additionalProperties": true
+            "time",
+            "entry"
+          ]
         },
         "settled": {
           "type": "object",
@@ -1441,39 +1489,6 @@
               "type": "array",
               "items": {
                 "type": "string"
-              }
-            },
-            "reply": {
-              "type": "object",
-              "required": [
-                "answer",
-                "why",
-                "next"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "answer": {
-                  "type": "string"
-                },
-                "why": {
-                  "type": "string"
-                },
-                "next": {
-                  "type": "object",
-                  "required": [
-                    "user",
-                    "zero"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "user": {
-                      "type": "string"
-                    },
-                    "zero": {
-                      "type": "string"
-                    }
-                  }
-                }
               }
             }
           }
@@ -1534,7 +1549,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -1600,7 +1615,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -1665,7 +1680,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -1726,7 +1741,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -1787,7 +1802,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -1842,85 +1857,6 @@
         "ok"
       ]
     },
-    "session.compact": {
-      "type": "object",
-      "description": "Compact a session's context: at once when it rests, before the next step when its turn runs.",
-      "properties": {
-        "message": {
-          "const": "session/compact"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "session": {
-          "type": "string",
-          "description": "a session's id"
-        },
-        "instructions": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "the user's words on what the handoff keeps, beside its fixed form; with them a handoff is written"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "session"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "session.compact.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "compacting": {
-          "type": "string",
-          "enum": [
-            "now",
-            "before_next_step"
-          ]
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
     "session.user_messages": {
       "type": "object",
       "description": "The user's own messages on a session's current branch that start a turn, newest first: where a rewind or a fork begins.",
@@ -1930,7 +1866,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -1998,7 +1934,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -2047,51 +1983,41 @@
               "type": "integer",
               "description": "its place in the session's log"
             },
-            "type": {
-              "type": "string"
+            "time": {
+              "type": "string",
+              "description": "when it was written (ISO 8601, with its offset)"
             },
-            "interaction": {
-              "type": "object",
-              "required": [
-                "sender",
-                "action",
-                "target"
-              ],
-              "properties": {
-                "sender": {
-                  "type": "string"
-                },
-                "action": {
-                  "type": "string"
-                },
-                "sender_session": {
-                  "type": "string"
-                },
-                "target": {
-                  "type": "object"
-                }
-              }
+            "entry": {
+              "$ref": "#/$defs/entry.timeline"
             },
-            "sender_name": {
-              "type": "string"
+            "parent": {
+              "type": "integer",
+              "description": "the seq a rewind returns to"
             },
             "audience": {
               "type": "string",
               "description": "model: internal context, not shown in a person's conversation"
             },
-            "model_failure": {
-              "$ref": "#/$defs/model_failure"
+            "sender_name": {
+              "type": "string"
             },
-            "time": {
+            "notice_source": {
               "type": "string",
-              "description": "when it was written (ISO 8601, with its offset)"
+              "description": "what sent this notice; it is not a person's message"
+            },
+            "call_summaries": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "each of its tool calls by id, as an ask shows it"
             }
           },
           "required": [
             "seq",
-            "type"
-          ],
-          "additionalProperties": true
+            "time",
+            "entry"
+          ]
         },
         "text": {
           "type": "string",
@@ -2122,7 +2048,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -2199,7 +2125,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -2229,14 +2155,14 @@
         "workspace": {
           "type": "string"
         },
-        "thinking_effort": {
-          "type": "string"
-        },
         "judge_model": {
           "type": "string",
           "description": "empty: the session's own model"
         },
         "judge_thinking_effort": {
+          "type": "string"
+        },
+        "thinking_effort": {
           "type": "string"
         }
       },
@@ -2288,6 +2214,1926 @@
         "ok"
       ]
     },
+    "setting.list": {
+      "type": "object",
+      "description": "ZERO's settings, each with its value, and what is wrong with config.toml (null: nothing).",
+      "properties": {
+        "message": {
+          "const": "setting/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "setting.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "settings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "name, group, label, default, kind, choices, minimum, unset_means, shown, needs, runs_on, value"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "setting.set": {
+      "type": "object",
+      "description": "Write one of ZERO's settings to config.toml (an app's own table, the full screen's [tui], is the app's).",
+      "properties": {
+        "message": {
+          "const": "setting/set"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "name": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": [
+        "message",
+        "id",
+        "name",
+        "value"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "setting.set.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "set": {
+          "type": "object"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.submit": {
+      "type": "object",
+      "description": "Submit a message. Only reply_to answers a question. Other messages queue while the session waits for a reply.",
+      "properties": {
+        "message": {
+          "const": "session/submit"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "title": {
+          "type": "string",
+          "description": "initial title for a new session"
+        },
+        "text": {
+          "type": "string"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "a session's id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the open ask's id: this text answers it"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's folder"
+        },
+        "when_busy": {
+          "enum": [
+            "steer",
+            "queue"
+          ]
+        },
+        "choice": {
+          "type": "string",
+          "description": "one of the open ask's `choices`, as picked at its box"
+        },
+        "thinking_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's thinking effort: off, low, high or max"
+        },
+        "rounds": {
+          "type": "boolean",
+          "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "text",
+        "source"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "session.submit.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "admitted": {
+          "type": "boolean",
+          "description": "false: this id was sent before and its message is already in"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "handled_as": {
+          "enum": [
+            "started",
+            "steered",
+            "queued",
+            "reply"
+          ]
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.compact": {
+      "type": "object",
+      "description": "Compact a session's context: at once when it rests, before the next step when its turn runs.",
+      "properties": {
+        "message": {
+          "const": "session/compact"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the user's words on what the handoff keeps, beside its fixed form; with them a handoff is written"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "session"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "session.compact.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "compacting": {
+          "type": "string",
+          "enum": [
+            "now",
+            "before_next_step"
+          ]
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "workspace.list": {
+      "type": "object",
+      "description": "Folders for a person's workspace picker; no file contents are read.",
+      "properties": {
+        "message": {
+          "const": "workspace/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "path": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "workspace.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "path": {
+          "type": "string"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "next_after": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "job.list": {
+      "type": "object",
+      "description": "A session's background jobs, ended ones too; with none, every running job.",
+      "properties": {
+        "message": {
+          "const": "job/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "job.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/row.job"
+          },
+          "description": "one row a job"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "job.read": {
+      "type": "object",
+      "description": "A background job's state and retained output, without changing what the model has read.",
+      "properties": {
+        "message": {
+          "const": "job/read"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "job": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "job"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "job.read.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "job": {
+          "$ref": "#/$defs/row.job"
+        },
+        "output": {
+          "type": "string"
+        },
+        "omitted_bytes": {
+          "type": "integer"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "job.stop": {
+      "type": "object",
+      "description": "Stop a background job.",
+      "properties": {
+        "message": {
+          "const": "job/stop"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "job": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "job"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "job.stop.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "stopped": {
+          "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "mcp.list": {
+      "type": "object",
+      "description": "The MCP servers whose tools ZERO's sessions use, as the user listed them, each with its state (starting, ready, failed, gone, stopped), its error and how many tools it offers; and what the list says that ZERO can't use. Values of env and headers are left out.",
+      "properties": {
+        "message": {
+          "const": "mcp/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "mcp.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "name, transport, command, args, env, cwd, url, headers, tools, start_seconds, call_seconds, state, error, protocol_version"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "mcp.get": {
+      "type": "object",
+      "description": "One MCP server: its list row, its tools as the model calls them, what of its listing can't be offered, and its last words on stderr.",
+      "properties": {
+        "message": {
+          "const": "mcp/get"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "name"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "mcp.get.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "server": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "mcp.add": {
+      "type": "object",
+      "description": "An MCP server listed (a command ZERO starts, or a url), or copied from another agent's list (`from`: claude or codex; `tools` may narrow it); then started, the reply saying how its start went. One that fails stays listed.",
+      "properties": {
+        "message": {
+          "const": "mcp/add"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "name": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "start_seconds": {
+          "type": "number"
+        },
+        "call_seconds": {
+          "type": "number"
+        },
+        "outside_sandbox": {
+          "type": "boolean"
+        },
+        "from": {
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "mcp.add.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "server": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "mcp.remove": {
+      "type": "object",
+      "description": "An MCP server taken off the list and stopped; its tools offered no more.",
+      "properties": {
+        "message": {
+          "const": "mcp/remove"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "mcp.remove.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "removed": {
+          "type": "string"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.list": {
+      "type": "object",
+      "description": "Every server the server can reach, with its models by the names a session takes, or why it lists none. Pass server for one directory, or cached to reuse directories already read for this connection.",
+      "properties": {
+        "message": {
+          "const": "model/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "server": {
+          "type": "string"
+        },
+        "cached": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "model.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "server, title, models, any resolved model_limits by model name, and an error if the read failed"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.window": {
+      "type": "object",
+      "description": "The selected model's effective context window, null if it is unknown. A connection can name its server and proposed API URL.",
+      "properties": {
+        "message": {
+          "const": "model/window"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "model": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "model"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "model.window.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "url": {
+          "type": "string"
+        },
+        "context_window": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_input_tokens": {
+          "type": "integer"
+        },
+        "max_output_tokens": {
+          "type": "integer"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.window.set": {
+      "type": "object",
+      "description": "Remember a context window for one model on its current endpoint.",
+      "properties": {
+        "message": {
+          "const": "model/window/set"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "model": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "context_window": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "model",
+        "url",
+        "context_window"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "model.window.set.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.features": {
+      "type": "object",
+      "description": "What a model honours of its API's features (thinking_off, thinking_on, strict_json, json_mode), as measured: each true or false, null where never measured. Measured now when none are kept or `test` is true, a few small calls to the model. With `cached_only`, read the route's declared or measured support with no model calls. Pass tools for choices on a normal tool-equipped turn.",
+      "properties": {
+        "message": {
+          "const": "model/features"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "model": {
+          "type": "string"
+        },
+        "test": {
+          "type": "boolean"
+        },
+        "cached_only": {
+          "type": "boolean"
+        },
+        "tools": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "model"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "model.features.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "model": {
+          "type": "string"
+        },
+        "api": {
+          "type": "string"
+        },
+        "measured_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "features": {
+          "type": "object"
+        },
+        "thinking_efforts": {
+          "type": "object"
+        },
+        "tools_error": {
+          "type": "string"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.server.list": {
+      "type": "object",
+      "description": "Every model server the server knows, whether its key is there, the default model and its server, and why a session on it couldn't start (null: it can).",
+      "properties": {
+        "message": {
+          "const": "model/server/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "model.server.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "name, title, url, key_state, needs_key, has_saved_key, model_prefix, user_added, in_catalog, context_window, models"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "default_server": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the server the default model goes to"
+        },
+        "not_ready_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.server.probe": {
+      "type": "object",
+      "description": "A server's models, for a pick list. A typed url takes the typed key or none; a name alone, its own url and stored key.",
+      "properties": {
+        "message": {
+          "const": "model/server/probe"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "model.server.probe.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "url": {
+          "type": "string"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "id, context_window, any maximum input and output, and whether it reports its window on load"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.server.connect": {
+      "type": "object",
+      "description": "A server's model tested with a call of a few tokens, then saved: the key in keys.toml, the server in models.toml; the first model connected becomes the default.",
+      "properties": {
+        "message": {
+          "const": "model/server/connect"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "context_window": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title": {
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "name",
+        "model"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "model.server.connect.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "model": {
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.server.key.set": {
+      "type": "object",
+      "description": "Save a key and read that server's model directory. A null key removes the saved value. A directory error accompanies a successful key save and can be retried with model/list.",
+      "properties": {
+        "message": {
+          "const": "model/server/key/set"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "name": {
+          "type": "string"
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "name",
+        "key"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "model.server.key.set.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "has_saved_key": {
+          "type": "boolean"
+        },
+        "directory": {
+          "type": "object",
+          "description": "a model/list server row"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.server.test": {
+      "type": "object",
+      "description": "Send a short test call to a model on a configured server. The provider may charge for it.",
+      "properties": {
+        "message": {
+          "const": "model/server/test"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "name": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "name",
+        "model"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "model.server.test.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "model": {
+          "type": "string"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "model.server.disconnect": {
+      "type": "object",
+      "description": "A server's key and the user's lines for it taken out.",
+      "properties": {
+        "message": {
+          "const": "model/server/disconnect"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "model.server.disconnect.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "removed": {
+          "type": "string"
+        },
+        "default_unset": {
+          "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "grant.list": {
+      "type": "object",
+      "description": "The grants that hold in a session: what an ask's \"don't ask again\" allowed.",
+      "properties": {
+        "message": {
+          "const": "grant/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message",
+        "session"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "grant.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "id, by, scope, grant, description"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "grant.forget": {
+      "type": "object",
+      "description": "Take a grant back.",
+      "properties": {
+        "message": {
+          "const": "grant/forget"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "grant": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "session",
+        "grant"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "grant.forget.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "forgot": {
+          "type": "string"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "rounds.list": {
+      "type": "object",
+      "description": "A session's work in rounds, ended runs too; with none, every open one.",
+      "properties": {
+        "message": {
+          "const": "rounds/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "rounds.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "rounds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/row.rounds"
+          },
+          "description": "one row a run"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "rounds.stop": {
+      "type": "object",
+      "description": "Stop work in rounds: no next round starts; a round under way ends its turn.",
+      "properties": {
+        "message": {
+          "const": "rounds/stop"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "rounds": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "rounds"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "rounds.stop.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "stopped": {
+          "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
     "session.search": {
       "type": "object",
       "description": "Search what every session's log holds, running or done: with query alone, the sessions whose records match, best first, each with its best record; with query and session, that session's matching records; with session and around, the records near one, whole.",
@@ -2297,7 +4143,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -2435,7 +4281,7 @@
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -2550,130 +4396,16 @@
         "ok"
       ]
     },
-    "job.list": {
+    "vault.answer": {
       "type": "object",
-      "description": "A session's background jobs, ended ones too; with none, every running job.",
+      "description": "Supply private values directly to a waiting vault request.",
       "properties": {
         "message": {
-          "const": "job/list"
+          "const": "vault/answer"
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "session": {
-          "type": "string",
-          "description": "a session's id"
-        }
-      },
-      "required": [
-        "message"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "job.list.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "jobs": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/row.job"
-          },
-          "description": "one row a job"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "job.read": {
-      "type": "object",
-      "description": "A background job's state and retained output, without changing what the model has read.",
-      "properties": {
-        "message": {
-          "const": "job/read"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "job": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "job"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "job.read.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "job": {
-          "$ref": "#/$defs/row.job"
-        },
-        "output": {
-          "type": "string"
-        },
-        "omitted_bytes": {
-          "type": "integer"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "job.stop": {
-      "type": "object",
-      "description": "Stop a background job.",
-      "properties": {
-        "message": {
-          "const": "job/stop"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -2690,271 +4422,44 @@
           "maxLength": 200,
           "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
         },
-        "job": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "job"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "job.stop.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
+        "session": {
+          "type": "string",
+          "description": "a session's id"
         },
-        "stopped": {
+        "ask": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cancel": {
           "type": "boolean"
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "rounds.list": {
-      "type": "object",
-      "description": "A session's work in rounds, ended runs too; with none, every open one.",
-      "properties": {
-        "message": {
-          "const": "rounds/list"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "session": {
-          "type": "string",
-          "description": "a session's id"
-        }
-      },
-      "required": [
-        "message"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "rounds.list.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "rounds": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/row.rounds"
-          },
-          "description": "one row a run"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "rounds.stop": {
-      "type": "object",
-      "description": "Stop work in rounds: no next round starts; a round under way ends its turn.",
-      "properties": {
-        "message": {
-          "const": "rounds/stop"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "rounds": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "rounds"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "rounds.stop.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "stopped": {
-          "type": "boolean"
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "grant.list": {
-      "type": "object",
-      "description": "The grants that hold in a session: what an ask's \"don't ask again\" allowed.",
-      "properties": {
-        "message": {
-          "const": "grant/list"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "session": {
-          "type": "string",
-          "description": "a session's id"
-        }
-      },
-      "required": [
-        "message",
-        "session"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "grant.list.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "grants": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "description": "id, by, scope, grant, description"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "grant.forget": {
-      "type": "object",
-      "description": "Take a grant back.",
-      "properties": {
-        "message": {
-          "const": "grant/forget"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "session": {
-          "type": "string",
-          "description": "a session's id"
-        },
-        "grant": {
-          "type": "string"
         }
       },
       "required": [
         "message",
         "id",
         "session",
-        "grant"
+        "ask"
       ],
       "additionalProperties": false,
       "x-changes": true
     },
-    "grant.forget.reply": {
+    "vault.answer.reply": {
       "type": "object",
       "properties": {
         "ok": {
           "const": true
         },
-        "forgot": {
-          "type": "string"
+        "saved": {
+          "type": "boolean"
         },
         "replayed": {
           "type": "boolean",
@@ -2972,405 +4477,16 @@
         "ok"
       ]
     },
-    "workspace.list": {
+    "vault.status": {
       "type": "object",
-      "description": "Folders for a person's workspace picker; no file contents are read.",
+      "description": "The vault count and where its encryption key is kept.",
       "properties": {
         "message": {
-          "const": "workspace/list"
+          "const": "vault/status"
         },
         "protocol": {
           "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "path": {
-          "type": "string"
-        },
-        "after": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "workspace.list.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "path": {
-          "type": "string"
-        },
-        "parent": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "folders": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "name",
-              "path"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "next_after": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.list": {
-      "type": "object",
-      "description": "Every server the server can reach, with its models by the names a session takes, or why it lists none. Pass server for one directory, or cached to reuse directories already read for this connection.",
-      "properties": {
-        "message": {
-          "const": "model/list"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "server": {
-          "type": "string"
-        },
-        "cached": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "message"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "model.list.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "servers": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "description": "server, title, models, any resolved model_limits by model name, and an error if the read failed"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.window": {
-      "type": "object",
-      "description": "The selected model's effective context window, null if it is unknown. A connection can name its server and proposed API URL.",
-      "properties": {
-        "message": {
-          "const": "model/window"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "model": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "model"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "model.window.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "url": {
-          "type": "string"
-        },
-        "context_window": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "max_input_tokens": {
-          "type": "integer"
-        },
-        "max_output_tokens": {
-          "type": "integer"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.window.set": {
-      "type": "object",
-      "description": "Remember a context window for one model on its current endpoint.",
-      "properties": {
-        "message": {
-          "const": "model/window/set"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "model": {
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        },
-        "context_window": {
-          "type": "integer",
-          "minimum": 1
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "model",
-        "url",
-        "context_window"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "model.window.set.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.features": {
-      "type": "object",
-      "description": "What a model honours of its API's features (thinking_off, thinking_on, strict_json, json_mode), as measured: each true or false, null where never measured. Measured now when none are kept or `test` is true, a few small calls to the model. With `cached_only`, read the route's declared or measured support with no model calls. Pass tools for choices on a normal tool-equipped turn.",
-      "properties": {
-        "message": {
-          "const": "model/features"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "model": {
-          "type": "string"
-        },
-        "test": {
-          "type": "boolean"
-        },
-        "cached_only": {
-          "type": "boolean"
-        },
-        "tools": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "model"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "model.features.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "model": {
-          "type": "string"
-        },
-        "api": {
-          "type": "string"
-        },
-        "measured_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "features": {
-          "type": "object"
-        },
-        "thinking_efforts": {
-          "type": "object"
-        },
-        "tools_error": {
-          "type": "string"
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.server.list": {
-      "type": "object",
-      "description": "Every model server the server knows, whether its key is there, the default model and its server, and why a session on it couldn't start (null: it can).",
-      "properties": {
-        "message": {
-          "const": "model/server/list"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
         },
         "token": {
           "type": "string",
@@ -3388,996 +4504,14 @@
       "additionalProperties": false,
       "x-changes": false
     },
-    "model.server.list.reply": {
+    "vault.status.reply": {
       "type": "object",
       "properties": {
         "ok": {
           "const": true
         },
-        "servers": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "description": "name, title, url, key_state, needs_key, has_saved_key, model_prefix, user_added, in_catalog, context_window, models"
-        },
-        "default": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "default_server": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "the server the default model goes to"
-        },
-        "not_ready_reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.server.probe": {
-      "type": "object",
-      "description": "A server's models, for a pick list. A typed url takes the typed key or none; a name alone, its own url and stored key.",
-      "properties": {
-        "message": {
-          "const": "model/server/probe"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "name": {
+        "status": {
           "type": "string"
-        },
-        "url": {
-          "type": "string"
-        },
-        "key": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "model.server.probe.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "url": {
-          "type": "string"
-        },
-        "models": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "description": "id, context_window, any maximum input and output, and whether it reports its window on load"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.server.connect": {
-      "type": "object",
-      "description": "A server's model tested with a call of a few tokens, then saved: the key in keys.toml, the server in models.toml; the first model connected becomes the default.",
-      "properties": {
-        "message": {
-          "const": "model/server/connect"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "name": {
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        },
-        "key": {
-          "type": "string"
-        },
-        "model": {
-          "type": "string"
-        },
-        "context_window": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "title": {
-          "type": "string"
-        },
-        "default": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "name",
-        "model"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "model.server.connect.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "model": {
-          "type": "string"
-        },
-        "default": {
-          "type": "boolean"
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.server.key.set": {
-      "type": "object",
-      "description": "Save a key and read that server's model directory. A null key removes the saved value. A directory error accompanies a successful key save and can be retried with model/list.",
-      "properties": {
-        "message": {
-          "const": "model/server/key/set"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "name": {
-          "type": "string"
-        },
-        "key": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "name",
-        "key"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "model.server.key.set.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "has_saved_key": {
-          "type": "boolean"
-        },
-        "directory": {
-          "type": "object",
-          "description": "a model/list server row"
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.server.test": {
-      "type": "object",
-      "description": "Send a short test call to a model on a configured server. The provider may charge for it.",
-      "properties": {
-        "message": {
-          "const": "model/server/test"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "name": {
-          "type": "string"
-        },
-        "model": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "name",
-        "model"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "model.server.test.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "model": {
-          "type": "string"
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "model.server.disconnect": {
-      "type": "object",
-      "description": "A server's key and the user's lines for it taken out.",
-      "properties": {
-        "message": {
-          "const": "model/server/disconnect"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "name"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "model.server.disconnect.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "removed": {
-          "type": "string"
-        },
-        "default_unset": {
-          "type": "boolean"
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "mcp.list": {
-      "type": "object",
-      "description": "The MCP servers whose tools ZERO's sessions use, as the user listed them, each with its state (starting, ready, failed, gone, stopped), its error and how many tools it offers; and what the list says that ZERO can't use. Values of env and headers are left out.",
-      "properties": {
-        "message": {
-          "const": "mcp/list"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        }
-      },
-      "required": [
-        "message"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "mcp.list.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "servers": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "description": "name, transport, command, args, env, cwd, url, headers, tools, start_seconds, call_seconds, state, error, protocol_version"
-        },
-        "notes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "mcp.get": {
-      "type": "object",
-      "description": "One MCP server: its list row, its tools as the model calls them, what of its listing can't be offered, and its last words on stderr.",
-      "properties": {
-        "message": {
-          "const": "mcp/get"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "name"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "mcp.get.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "server": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "mcp.add": {
-      "type": "object",
-      "description": "An MCP server listed (a command ZERO starts, or a url), or copied from another agent's list (`from`: claude or codex; `tools` may narrow it); then started, the reply saying how its start went. One that fails stays listed.",
-      "properties": {
-        "message": {
-          "const": "mcp/add"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "name": {
-          "type": "string"
-        },
-        "command": {
-          "type": "string"
-        },
-        "args": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "env": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "cwd": {
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        },
-        "headers": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "tools": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "start_seconds": {
-          "type": "number"
-        },
-        "call_seconds": {
-          "type": "number"
-        },
-        "outside_sandbox": {
-          "type": "boolean"
-        },
-        "from": {
-          "enum": [
-            "claude",
-            "codex"
-          ]
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "name"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "mcp.add.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "server": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "notes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "mcp.remove": {
-      "type": "object",
-      "description": "An MCP server taken off the list and stopped; its tools offered no more.",
-      "properties": {
-        "message": {
-          "const": "mcp/remove"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "name"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "mcp.remove.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "removed": {
-          "type": "string"
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "setting.list": {
-      "type": "object",
-      "description": "ZERO's settings, each with its value, and what is wrong with config.toml (null: nothing).",
-      "properties": {
-        "message": {
-          "const": "setting/list"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        }
-      },
-      "required": [
-        "message"
-      ],
-      "additionalProperties": false,
-      "x-changes": false
-    },
-    "setting.list.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "settings": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "description": "name, group, label, default, kind, choices, minimum, unset_means, shown, needs, runs_on, value"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "setting.set": {
-      "type": "object",
-      "description": "Write one of ZERO's settings to config.toml (an app's own table, the full screen's [tui], is the app's).",
-      "properties": {
-        "message": {
-          "const": "setting/set"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "name": {
-          "type": "string"
-        },
-        "value": {}
-      },
-      "required": [
-        "message",
-        "id",
-        "name",
-        "value"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "setting.set.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "set": {
-          "type": "object"
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
-        },
-        "unknown_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "the request's fields this server's protocol doesn't have, left out"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "session.submit": {
-      "type": "object",
-      "description": "Submit a message. Only reply_to answers a question. Other messages queue while the session waits for a reply.",
-      "properties": {
-        "message": {
-          "const": "session/submit"
-        },
-        "protocol": {
-          "type": "integer",
-          "description": "the protocol the request is written in; none: 4, the last before requests named it"
-        },
-        "token": {
-          "type": "string",
-          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
-        },
-        "relayed_for_pid": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
-        },
-        "title": {
-          "type": "string",
-          "description": "initial title for a new session"
-        },
-        "text": {
-          "type": "string"
-        },
-        "session": {
-          "anyOf": [
-            {
-              "type": "string",
-              "description": "a session's id"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "mode": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "source": {
-          "type": "string",
-          "description": "who sends it: a client's own name"
-        },
-        "thinking_effort": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "a new session's thinking effort: off, low, high or max"
-        },
-        "reply_to": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "the open ask's id: this text answers it"
-        },
-        "workspace": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "a new session's folder"
-        },
-        "when_busy": {
-          "enum": [
-            "steer",
-            "queue"
-          ]
-        },
-        "choice": {
-          "type": "string",
-          "description": "one of the open ask's `choices`, as picked at its box"
-        },
-        "rounds": {
-          "type": "boolean",
-          "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "text",
-        "source"
-      ],
-      "additionalProperties": false,
-      "x-changes": true
-    },
-    "session.submit.reply": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "const": true
-        },
-        "admitted": {
-          "type": "boolean",
-          "description": "false: this id was sent before and its message is already in"
-        },
-        "session": {
-          "type": "string",
-          "description": "a session's id"
-        },
-        "handled_as": {
-          "enum": [
-            "started",
-            "steered",
-            "queued",
-            "reply"
-          ]
-        },
-        "replayed": {
-          "type": "boolean",
-          "description": "this id was sent before: the first reply again, and nothing ran"
         },
         "unknown_fields": {
           "type": "array",
@@ -4558,23 +4692,6 @@
         }
       }
     },
-    "row.mode": {
-      "type": "object",
-      "description": "one of the modes a session runs in",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "about": {
-          "type": "string",
-          "description": "its sandbox and who answers its asks, in a line"
-        },
-        "in_cycle": {
-          "type": "boolean",
-          "description": "a key that steps through the modes lands on it (false: chosen by its name only)"
-        }
-      }
-    },
     "row.job": {
       "type": "object",
       "description": "a background job",
@@ -4653,6 +4770,23 @@
         }
       }
     },
+    "row.mode": {
+      "type": "object",
+      "description": "one of the modes a session runs in",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "about": {
+          "type": "string",
+          "description": "its sandbox and who answers its asks, in a line"
+        },
+        "in_cycle": {
+          "type": "boolean",
+          "description": "a key that steps through the modes lands on it (false: chosen by its name only)"
+        }
+      }
+    },
     "row.rounds": {
       "type": "object",
       "description": "a session's work in rounds",
@@ -4724,280 +4858,33 @@
     },
     "record": {
       "type": "object",
-      "description": "a record of a session's log: what an app reads of each kind is record.<type>",
+      "description": "a record of a session's log as a native timeline Entry",
       "properties": {
         "seq": {
           "type": "integer",
           "description": "its place in the session's log"
         },
-        "type": {
-          "type": "string"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
         "time": {
           "type": "string",
           "description": "when it was written (ISO 8601, with its offset)"
-        }
-      },
-      "required": [
-        "seq",
-        "type"
-      ],
-      "additionalProperties": true
-    },
-    "record.session": {
-      "type": "object",
-      "description": "a `session` record",
-      "properties": {
-        "seq": {
+        },
+        "entry": {
+          "$ref": "#/$defs/entry.timeline"
+        },
+        "parent": {
           "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "session"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
+          "description": "the seq a rewind returns to"
         },
         "audience": {
           "type": "string",
           "description": "model: internal context, not shown in a person's conversation"
         },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "note": {
-          "type": "string",
-          "description": "a line the session's start carries (a fork's)"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.user": {
-      "type": "object",
-      "description": "a `user` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "user"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
         "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "text": {
-          "type": "string"
-        },
-        "source": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "notice": {
-          "type": "boolean"
-        },
-        "reference": {
           "type": "string"
         },
         "notice_source": {
           "type": "string",
           "description": "what sent this notice; it is not a person's message"
-        },
-        "inbox": {
-          "type": "string",
-          "description": "the message's id"
-        },
-        "steer": {
-          "type": "boolean",
-          "description": "sent while a turn ran"
-        },
-        "continue": {
-          "type": "boolean",
-          "description": "a turn went on with no new message"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.assistant": {
-      "type": "object",
-      "description": "a `assistant` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "assistant"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "reply": {
-          "type": "object",
-          "required": [
-            "answer",
-            "why",
-            "next"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "answer": {
-              "type": "string"
-            },
-            "why": {
-              "type": "string"
-            },
-            "next": {
-              "type": "object",
-              "required": [
-                "user",
-                "zero"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "user": {
-                  "type": "string"
-                },
-                "zero": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "message": {
-          "type": "object",
-          "description": "the model's message: content and tool_calls"
         },
         "call_summaries": {
           "type": "object",
@@ -5005,808 +4892,13 @@
             "type": "string"
           },
           "description": "each of its tool calls by id, as an ask shows it"
-        },
-        "prompt_tokens": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "cached_tokens": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "completion_tokens": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
-      "additionalProperties": true
-    },
-    "record.tool": {
-      "type": "object",
-      "description": "a tool call and its answer",
-      "properties": {
-        "type": {
-          "const": "tool"
-        },
-        "tool": {
-          "type": "string",
-          "description": "the tool's name"
-        },
-        "arguments": {
-          "type": "string",
-          "description": "the call's arguments, as the model wrote them (JSON); for a call made through another tool, those it gave for this one"
-        },
-        "called_through": {
-          "type": "string",
-          "description": "the tool the model called, which called this one by its name (missing: it called this one itself)"
-        },
-        "result": {
-          "type": "string",
-          "description": "the answer the model read"
-        },
-        "ran": {
-          "type": "boolean",
-          "description": "the tool ran"
-        },
-        "denied": {
-          "type": "boolean",
-          "description": "it was refused, so never ran"
-        },
-        "bad_call": {
-          "type": "boolean",
-          "description": "the call was malformed"
-        },
-        "failed": {
-          "type": "boolean",
-          "description": "it ran and failed (missing: it didn't)"
-        },
-        "output_at": {
-          "type": "integer",
-          "description": "where the tool's own output starts in `result`, after its head (missing: no such split)"
-        },
-        "fields": {
-          "type": "object",
-          "properties": {
-            "exit_code": {
-              "type": "integer",
-              "description": "its exit code, once it ended"
-            },
-            "wall_seconds": {
-              "type": "number",
-              "description": "how long it ran here"
-            },
-            "job_id": {
-              "type": "string",
-              "description": "the background job it started, or was moved to past its timeout"
-            },
-            "timed_out": {
-              "type": "boolean",
-              "description": "it ran past its timeout"
-            }
-          },
-          "description": "what its tool declares beside its text; a command's are listed"
-        },
-        "saved_path": {
-          "type": "string",
-          "description": "the file its whole result was saved in, past its share of the context (missing: none)"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.ask": {
-      "type": "object",
-      "description": "a `ask` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "ask"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "ask": {
-          "type": "string",
-          "description": "the ask's id"
-        },
-        "tool": {
-          "type": "string"
-        },
-        "command": {
-          "type": "string"
-        },
-        "why": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "about": {
-          "type": "string"
-        },
-        "choices": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "choice_labels": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "each of `choices` (in its order) with the words the ask's box shows for it"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.answer": {
-      "type": "object",
-      "description": "a `answer` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "answer"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "question_text": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        },
-        "choice": {
-          "type": "string"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "ask": {
-          "type": "string"
-        },
-        "yes": {
-          "type": "boolean"
-        },
-        "source": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.note": {
-      "type": "object",
-      "description": "a `note` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "note"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.retry": {
-      "type": "object",
-      "description": "a `retry` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "retry"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "step": {
-          "type": "integer"
-        },
-        "retry": {
-          "type": "integer"
-        },
-        "error": {
-          "type": "string"
-        },
-        "delay": {
-          "type": "number"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.switch": {
-      "type": "object",
-      "description": "a `switch` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "switch"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "from": {
-          "type": "object"
-        },
-        "to": {
-          "type": "object",
-          "description": "what changed, by name, to its new value"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.compaction": {
-      "type": "object",
-      "description": "a `compaction` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "compaction"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "tokens_before": {
-          "type": "integer"
-        },
-        "tokens_after": {
-          "type": "integer"
-        },
-        "summary": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "instructions": {
-          "type": "object",
-          "description": "what its askers said the handoff keeps, by who asked"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.compaction_failed": {
-      "type": "object",
-      "description": "a `compaction_failed` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "compaction_failed"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "error": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.nothing_to_compact": {
-      "type": "object",
-      "description": "a `nothing_to_compact` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "nothing_to_compact"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "reason": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.rewind": {
-      "type": "object",
-      "description": "a `rewind` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "rewind"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "left_from": {
-          "type": "integer",
-          "description": "the first record it left behind"
-        },
-        "left_to": {
-          "type": "integer",
-          "description": "the last record it left behind"
-        }
-      },
-      "additionalProperties": true
-    },
-    "record.turn_end": {
-      "type": "object",
-      "description": "a `turn_end` record",
-      "properties": {
-        "seq": {
-          "type": "integer",
-          "description": "its place in the session's log"
-        },
-        "type": {
-          "const": "turn_end"
-        },
-        "interaction": {
-          "type": "object",
-          "required": [
-            "sender",
-            "action",
-            "target"
-          ],
-          "properties": {
-            "sender": {
-              "type": "string"
-            },
-            "action": {
-              "type": "string"
-            },
-            "sender_session": {
-              "type": "string"
-            },
-            "target": {
-              "type": "object"
-            }
-          }
-        },
-        "sender_name": {
-          "type": "string"
-        },
-        "audience": {
-          "type": "string",
-          "description": "model: internal context, not shown in a person's conversation"
-        },
-        "model_failure": {
-          "$ref": "#/$defs/model_failure"
-        },
-        "time": {
-          "type": "string",
-          "description": "when it was written (ISO 8601, with its offset)"
-        },
-        "reply": {
-          "type": "object",
-          "required": [
-            "answer",
-            "why",
-            "next"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "answer": {
-              "type": "string"
-            },
-            "why": {
-              "type": "string"
-            },
-            "next": {
-              "type": "object",
-              "required": [
-                "user",
-                "zero"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "user": {
-                  "type": "string"
-                },
-                "zero": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "outcome": {
-          "type": "string"
-        },
-        "answer": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "detail": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "seconds": {
-          "type": "number"
-        }
-      },
-      "additionalProperties": true
+      "required": [
+        "seq",
+        "time",
+        "entry"
+      ]
     }
   }
 }

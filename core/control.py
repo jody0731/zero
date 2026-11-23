@@ -1,6 +1,7 @@
 """Optional turn controls supplied by a server, independent of how it stores work."""
 
 import threading
+from contextlib import nullcontext
 
 
 class Stopped(KeyboardInterrupt):
@@ -14,13 +15,26 @@ class Control:
     (step, draft): the model's reply as it streams in (core/llm.py, Draft),
     for the server's watchers; never logged."""
 
-    def __init__(self, steers=None, delivered=None, draft=None):
+    def __init__(self, steers=None, delivered=None, draft=None, *, deliver=None,
+                 park_lock=None):
         self.stop = threading.Event()
         self.stop_detail = "stop"
         self.steers = steers if steers is not None else lambda: []
         self.delivered = delivered if delivered is not None else lambda steer: None
         self.draft = draft if draft is not None else lambda step, draft: None
+        self.deliver = deliver if deliver is not None else self._deliver
+        self.park_lock = nullcontext() if park_lock is None else park_lock
+
+    def _deliver(self, steer, write):
+        write()
+        self.delivered(steer)
 
     def check(self):
         if self.stop.is_set():
             raise Stopped(self.stop_detail)
+
+    def write_ask(self, write):
+        """Write the question under the same lock that admits a stop."""
+        with self.park_lock:
+            self.check()
+            return write()

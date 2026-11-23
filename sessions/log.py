@@ -1,194 +1,460 @@
-"""A session's history: one JSON record per line, append-only, never edited.
+"""An append-only session log and fixed snapshots of its current branch."""
 
-Each record has seq (one more than the record above it; a fork's copied
-records keep their parent's numbers), time and type; a rewind's also names
-its parent, the record the conversation goes on from (core/history.py), so
-the log is a tree and `branch()` its current branch. Every append reaches the
-disk (fsync) before the caller goes on, so what the log says happened did. A
-crash mid-write can leave half a line at the end: reading leaves it out, and the
-next append cuts it off first so the file stays whole. `on_append` hears each
-record once it is on disk: the server hands it to the session's watchers. A new
-session's log is named when it is made and claimed when its first turn starts
-(fresh_log). A Log keeps what it read in memory and later reads only what was
-appended since, by itself or another writer, so a step's look at the log costs
-what is new, not the whole log (design rule 12); the records it hands out are
-the log's, read and never changed.
-"""
-
+import errno
 import json
 import os
 import secrets
+import sys
+import tempfile
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
+from threading import RLock
 
-from core import history
+from core import timeline
+from core.entries import Entry, has
+from core.timeline import LogRecord
+from sessions.entries import build_record, encode_record
 
 # How much of a log's end is read at a time to find its last record
 TAIL_BYTES = 64 * 1024
+SYNC_FILE_RANGE_WRITE = getattr(os, "SYNC_FILE_RANGE_WRITE", 2)
+
+
+def _load_sync_file_range():
+    if sys.platform != "linux":
+        return None
+    if native := getattr(os, "sync_file_range", None):
+        return native
+    try:
+        import ctypes
+
+        syscall = ctypes.CDLL(None, use_errno=True).sync_file_range
+    except (AttributeError, ImportError, OSError):
+        return None
+    syscall.argtypes = (ctypes.c_int, ctypes.c_int64, ctypes.c_int64, ctypes.c_uint)
+    syscall.restype = ctypes.c_int
+
+    def sync_file_range(fd, offset, length, flags):
+        if syscall(fd, offset, length, flags):
+            number = ctypes.get_errno()
+            raise OSError(number, os.strerror(number))
+
+    return sync_file_range
+
+
+_sync_file_range = _load_sync_file_range()
+
+
+def start_writeback(fd, offset, length):
+    """Queue the appended bytes for writeback before any required fsync."""
+    if _sync_file_range is None:
+        return
+    try:
+        _sync_file_range(fd, offset, length, SYNC_FILE_RANGE_WRITE)
+    except OSError as error:
+        # A filesystem or sandbox may decline the optional hint.
+        if error.errno not in (errno.ENOSYS, errno.ENOTSUP, errno.EPERM):
+            raise
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class RecordSlice(Sequence[LogRecord]):
+    """A fixed range in a list whose existing elements never change."""
+
+    _source: list[LogRecord] = field(repr=False)
+    _indices: range = field(repr=False)
+
+    def __len__(self):
+        return len(self._indices)
+
+    def __getitem__(self, index):
+        selected = self._indices[index]
+        if isinstance(index, slice):
+            return RecordSlice(self._source, selected)
+        return self._source[selected]
+
+    def __iter__(self):
+        return (self._source[index] for index in self._indices)
+
+    def __reversed__(self):
+        return (self._source[index] for index in reversed(self._indices))
+
+    def __eq__(self, other):
+        if type(other) is not type(self):
+            return False
+        if self._source is other._source and self._indices == other._indices:
+            return True
+        return len(self) == len(other) and all(a == b for a, b in zip(self, other))
+
+    __hash__ = None
+
+
+EMPTY_RECORDS = RecordSlice([], range(0))
+
+
+@dataclass(slots=True)
+class _BranchState:
+    settings: dict = field(default_factory=dict)
+    running: dict | None = None
+    meter: dict | None = None
+    window_set: bool = False
+    turn_start: int | None = None
+
+    def take(self, record, index):
+        entry = record.entry
+        header = has(entry, "header")
+        switch = timeline.is_switch(record)
+        if (index == 0 and header) or switch:
+            self.settings = timeline.renamed(entry.get("settings") or {})
+        if index == 0 and header:
+            self.running = timeline.starting_settings(record)
+        if switch and self.running is not None:
+            for name in timeline.SWITCHABLE:
+                if name in self.settings and name not in timeline.CORE_SWITCHABLE:
+                    self.running[name] = self.settings[name]
+            self.running.update(timeline.renamed(entry.get("to") or {}))
+        self.meter = timeline.metered(self.meter, record)
+        self.window_set |= header or switch
+        self.turn_start = timeline.open_turn_start(self.turn_start, index, record)
+
+    def running_with(self):
+        return {} if self.running is None else dict(self.running)
+
+    def context_meter(self, compact_at):
+        if not self.meter or not self.meter["tokens"]:
+            return None
+        meter = self.meter.copy()
+        if self.window_set:
+            meter["line"] = timeline.compact_line(meter["line"], compact_at)
+        return meter
+
+
+@dataclass(slots=True)
+class _Cache:
+    stamp: tuple | None = None
+    bytes_read: int = 0
+    lines_read: int = 0
+    last_line: bytes = b""
+    records: list[LogRecord] = field(default_factory=list)
+    by_seq: dict[int, LogRecord] = field(default_factory=dict)
+    branch: list[LogRecord] = field(init=False)
+    branch_state: _BranchState = field(default_factory=_BranchState)
+    has_parent: bool = False
+    has_sequence_gap: bool = False
+
+    def __post_init__(self):
+        self.branch = self.records
+
+    def append(self, record):
+        previous = self.records[-1] if self.records else None
+        follows_previous = (
+            previous is None or timeline.parent_of(record) == previous.seq
+        )
+        starts_branch_graph = record.parent is not None and not self.has_parent
+        self.has_parent |= record.parent is not None
+        rebuild = self.has_parent and (
+            not follows_previous or (starts_branch_graph and self.has_sequence_gap)
+        )
+        self.has_sequence_gap |= previous is not None and record.seq != previous.seq + 1
+        self.records.append(record)
+        self.by_seq[record.seq] = record
+        if rebuild:
+            # Existing slices still own the former branch's list.
+            self.branch = timeline.branch_from(record, self.by_seq)
+            self.branch_state = _BranchState()
+            for index, row in enumerate(self.branch):
+                self.branch_state.take(row, index)
+        else:
+            if self.branch is not self.records:
+                self.branch.append(record)
+            self.branch_state.take(record, len(self.branch) - 1)
+
+
+def _stamp(stat):
+    return (stat.st_dev, stat.st_ino), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def read_last_line(stream):
+    """Return the last whole line by reading backwards from the file's end."""
+    end = stream.seek(0, os.SEEK_END)
+    at = end
+    while at > 0:
+        at = max(0, at - TAIL_BYTES)
+        stream.seek(at)
+        tail = stream.read(end - at)
+        whole = tail[:tail.rfind(b"\n") + 1]
+        start = whole.rfind(b"\n", 0, -1)
+        if whole and (start >= 0 or at == 0):
+            return whole[start + 1:]
+    return b""
 
 
 class Log:
     def __init__(self, path, lock=None, on_append=None, transform=None):
-        self.path = path
+        self.path = Path(path)
         self.lock = lock
         self.on_append = on_append
         self.transform = transform
-        # The newest whole record's seq, read on the first append: a fork's
-        # log holds its parent's records with their numbers, so its seqs can
-        # skip where the parent's branch did
         self.last_seq = None
-        # What was read so far: the file (its inode), the bytes of its whole
-        # lines, how many lines, the last of them, and their records
         self.kept = None
+        self.needs_directory_sync = False
+        self._cache_lock = RLock()
+
+    def _refresh(self):
+        try:
+            stamp = _stamp(self.path.stat())
+        except FileNotFoundError:
+            self.invalidate()
+            return None
+        kept = self.kept
+        if kept is not None and kept.stamp == stamp:
+            return kept
+        try:
+            with open(self.path, "rb") as stream:
+                # The path could have changed between stat and open.
+                stamp = _stamp(os.fstat(stream.fileno()))
+                if kept is None or (
+                    kept.stamp[0] != stamp[0] or stamp[1] <= kept.stamp[1]
+                ):
+                    kept = _Cache()
+                start = kept.bytes_read - len(kept.last_line)
+                stream.seek(start)
+                data = stream.read(stamp[1] - start)
+                if data.startswith(kept.last_line):
+                    data = data[len(kept.last_line):]
+                else:
+                    # The file grew but the cached prefix's final line changed.
+                    kept = _Cache()
+                    stream.seek(0)
+                    data = stream.read(stamp[1])
+        except FileNotFoundError:
+            self.invalidate()
+            return None
+        whole = data[:data.rfind(b"\n") + 1]
+        added = []
+        for number, line in enumerate(whole.split(b"\n")[:-1], kept.lines_read + 1):
+            if line:
+                try:
+                    raw = json.loads(line.decode("utf-8"))
+                    added.append(
+                        timeline.read_record(raw, first=not (kept.records or added))
+                    )
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    raise ValueError(f"broken record at {self.path}:{number}") from None
+        try:
+            for record in added:
+                kept.append(record)
+        except Exception:
+            self.invalidate()
+            raise
+        if whole:
+            kept.bytes_read += len(whole)
+            kept.lines_read += whole.count(b"\n")
+            kept.last_line = whole[whole.rfind(b"\n", 0, -1) + 1:]
+        kept.stamp = stamp
+        self.kept = kept
+        return kept
 
     def records(self):
-        """Every newline-terminated record; broken whole lines are errors.
-        Read from where the last read ended; the whole file again when it
-        was replaced (a new inode), cut shorter (a half line repaired) or
-        changed where it was read (its last line read isn't there)."""
-        try:
-            found = self.path.stat()
-        except FileNotFoundError:
-            self.kept = None
-            return []
-        empty = {"inode": found.st_ino, "size": 0, "lines": 0, "last": b"",
-                 "records": []}
-        kept = self.kept
-        if (kept is None or kept["inode"] != found.st_ino
-                or found.st_size < kept["size"]):
-            kept = empty
-        if found.st_size > kept["size"] or kept is not empty:
-            with open(self.path, "rb") as f:
-                f.seek(kept["size"] - len(kept["last"]))
-                data = f.read()
-            if not data.startswith(kept["last"]):
-                kept = empty
-                data = self.path.read_bytes()
-            else:
-                data = data[len(kept["last"]):]
-            whole = data[: data.rfind(b"\n") + 1]
-            added = []
-            for n, line in enumerate(whole.split(b"\n")[:-1], kept["lines"] + 1):
-                if not line:
-                    continue
-                try:
-                    added.append(json.loads(line.decode("utf-8")))
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    raise ValueError(f"broken record at {self.path}:{n}") from None
-            if whole:
-                kept = {
-                    "inode": kept["inode"], "size": kept["size"] + len(whole),
-                    "lines": kept["lines"] + whole.count(b"\n"),
-                    "last": whole[whole.rfind(b"\n", 0, -1) + 1:],
-                    "records": kept["records"] + added,
-                }
-        self.kept = kept
-        return list(kept["records"])
-
-    def first_record(self):
-        """The log's first record, its header, read alone; None while empty."""
-        if not self.path.exists():
-            return None
-        with open(self.path, "rb") as f:
-            line = f.readline()
-        if not line.endswith(b"\n"):
-            return None
-        return json.loads(line.decode("utf-8"))
-
-    def last_record(self):
-        """The log's last whole record, read from its end alone; None while
-        it has none. What the start compares with the database's rows."""
-        try:
-            stream = open(self.path, "rb")
-        except FileNotFoundError:
-            return None
-        with stream:
-            end = stream.seek(0, os.SEEK_END)
-            tail, at = b"", end
-            while at > 0:
-                at = max(0, at - TAIL_BYTES)
-                stream.seek(at)
-                tail = stream.read(end - at)
-                whole = tail[: tail.rfind(b"\n") + 1]
-                # Its last whole line starts after a newline, or at the top
-                start = whole.rfind(b"\n", 0, -1)
-                if whole and (start >= 0 or at == 0):
-                    line = whole[start + 1:]
-                    try:
-                        record = json.loads(line.decode("utf-8"))
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        record = None
-                    if not isinstance(record, dict):
-                        raise ValueError(f"broken last record at {self.path}")
-                    return record
-        return None
+        """A snapshot of all whole records, including branches left behind."""
+        with self._cache_lock:
+            kept = self._refresh()
+            return (RecordSlice(kept.records, range(len(kept.records)))
+                    if kept is not None else EMPTY_RECORDS)
 
     def branch(self):
-        """The records of the conversation's current branch, in order: all of
-        them in a log no rewind has branched (core/history.py's `branch`)."""
-        return history.branch(self.records())
+        """A snapshot of the present branch in conversation order."""
+        with self._cache_lock:
+            kept = self._refresh()
+            return (RecordSlice(kept.branch, range(len(kept.branch)))
+                    if kept is not None else EMPTY_RECORDS)
 
-    def append(self, type, **fields):
-        """Write one record to disk and return it."""
-        if self.transform is not None:
-            fields = self.transform(fields)
-        self.check_lock()
-        if self.last_seq is None:
-            self.last_seq = self._repair()
-        record = {
-            "seq": self.last_seq + 1,
-            "time": datetime.now().astimezone().isoformat(timespec="seconds"),
-            "type": type,
-            **fields,
-        }
-        record = history.logged_interaction(record, self.path.stem)
-        new = not self.path.exists()
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        if new:
-            # A new file's name lives in its folder, so that reaches the disk too
-            folder = os.open(self.path.parent, os.O_RDONLY)
+    def settings_now(self):
+        """The active settings after the branch's last switch."""
+        with self._cache_lock:
+            kept = self._refresh()
+            return kept.branch_state.settings.copy() if kept is not None else {}
+
+    def running_with(self):
+        """The active model, mode, workspace, effort and judge."""
+        with self._cache_lock:
+            kept = self._refresh()
+            return kept.branch_state.running_with() if kept is not None else {}
+
+    def context_meter(self, compact_at=None):
+        """The active branch's token usage, context line and prompt cache share."""
+        with self._cache_lock:
+            kept = self._refresh()
+            if kept is not None:
+                return kept.branch_state.context_meter(compact_at)
+        return None
+
+    def unfinished_turn(self):
+        """A snapshot of just the current open turn."""
+        with self._cache_lock:
+            kept = self._refresh()
+            if kept is None or kept.branch_state.turn_start is None:
+                return EMPTY_RECORDS
+            return RecordSlice(
+                kept.branch, range(kept.branch_state.turn_start, len(kept.branch)),
+            )
+
+    def _kept_if_current(self):
+        kept = self.kept
+        if kept is None:
+            return None
+        try:
+            return kept if kept.stamp == _stamp(self.path.stat()) else None
+        except FileNotFoundError:
+            self.invalidate()
+            return None
+
+    def first_record(self):
+        """Read the first record without loading the rest of the log."""
+        with self._cache_lock:
+            if (kept := self._kept_if_current()) is not None:
+                return kept.records[0] if kept.records else None
             try:
-                os.fsync(folder)
-            finally:
-                os.close(folder)
-        self.last_seq = record["seq"]
+                with open(self.path, "rb") as stream:
+                    line = stream.readline()
+            except FileNotFoundError:
+                return None
+            if line.endswith(b"\n"):
+                raw = json.loads(line.decode("utf-8"))
+                return timeline.read_record(raw, first=True)
+        return None
+
+    def last_record(self):
+        """Read the last whole record without loading the branch."""
+        with self._cache_lock:
+            if (kept := self._kept_if_current()) is not None:
+                return kept.records[-1] if kept.records else None
+            try:
+                stream = open(self.path, "rb")
+            except FileNotFoundError:
+                return None
+            with stream:
+                header = stream.readline()
+                if not header.endswith(b"\n"):
+                    return None
+                raw_header = json.loads(header.decode("utf-8"))
+                timeline.native_format(raw_header, first=True)
+                line = read_last_line(stream)
+                if not line:
+                    return None
+                try:
+                    raw = (raw_header if line == header else
+                           json.loads(line.decode("utf-8")))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    raise ValueError(f"broken last record at {self.path}") from None
+                return timeline.read_record(raw, first=line == header)
+
+    def append(self, kind, /, *, redact_entry=None, **fields):
+        """Append a declared entry or build one from its fields."""
+        self.check_lock()
+        with self._cache_lock:
+            try:
+                kept = self._repair()
+                last = kept.records[-1].seq if kept is not None and kept.records else 0
+                time = None
+                if not isinstance(kind, Entry):
+                    time = fields.pop("time", None)
+                    fields.pop("seq", None)
+                record = build_record(
+                    last + 1, kind, fields.pop("parent", None), fields=fields,
+                    time=time, session=self.path.stem,
+                )
+                if transform := redact_entry or self.transform:
+                    entry = transform(record.entry)
+                    if entry is not record.entry:
+                        record = replace(record, entry=entry)
+                self._append_line(
+                    record, kept, durable=has(record.entry, "durable_boundary"),
+                )
+            except OSError:
+                # The write may have left a whole line or a partial line.
+                self.invalidate()
+                raise
         if self.on_append is not None:
             self.on_append(record)
         return record
+
+    def _append_line(self, record, kept, *, durable):
+        data = encode_record(record)
+        if kept is None:
+            self.needs_directory_sync = True
+        with open(self.path, "ab") as stream:
+            start = stream.tell()
+            stream.write(data)
+            stream.flush()
+            fd = stream.fileno()
+            start_writeback(fd, start, len(data))
+            if self.needs_directory_sync or not start or durable:
+                os.fsync(fd)
+            stamp = _stamp(os.fstat(fd))
+        if self.needs_directory_sync:
+            sync_folder(self.path.parent)
+            self.needs_directory_sync = False
+        if kept is None and not start:
+            kept = _Cache(stamp=stamp)
+        if (kept is not None and kept.stamp[0] == stamp[0]
+                and kept.bytes_read == start and stamp[1] == start + len(data)):
+            try:
+                kept.append(record)
+            except Exception:
+                self.invalidate()
+                raise
+            kept.stamp = stamp
+            kept.bytes_read += len(data)
+            kept.lines_read += 1
+            kept.last_line = data
+            self.kept = kept
+        else:
+            self.kept = None
+        self.last_seq = record.seq
 
     def check_lock(self):
         if self.lock is not None and not self.lock.held:
             raise RuntimeError("the session lock must be held before writing its log")
 
+    def invalidate(self):
+        with self._cache_lock:
+            self.kept = None
+            self.last_seq = None
+
     def _repair(self):
-        """Cut off a broken last line; return the last whole record's seq (0
-        for none)."""
-        if not self.path.exists():
-            return 0
-        data = self.path.read_bytes()
-        whole = data[: data.rfind(b"\n") + 1]
-        if len(whole) != len(data):
-            with open(self.path, "r+b") as f:
-                f.truncate(len(whole))
-                f.flush()
-                os.fsync(f.fileno())
-        records = self.records()
-        return records[-1].get("seq", len(records)) if records else 0
+        """Drop a torn final line before appending."""
+        kept = self._refresh()
+        if kept is not None and kept.bytes_read < kept.stamp[1]:
+            with open(self.path, "r+b") as stream:
+                stream.truncate(kept.bytes_read)
+                stream.flush()
+                os.fsync(stream.fileno())
+            self.invalidate()
+            return self._refresh()
+        return kept
 
 
 def write_copy(path, records):
-    """A new log at `path` holding `records` as they are, numbers kept (a
-    fork's: its parent's branch up to where it was made); refused when the
-    file exists. Reaches the disk before it returns, as an append does."""
-    data = "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
-    with open(path, "x", encoding="utf-8") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    folder = os.open(Path(path).parent, os.O_RDONLY)
+    """Exclusively create a synced copy of the selected records, with seqs kept."""
+    path = Path(path)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.copy-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            for record in records:
+                stream.write(encode_record(record))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(name, path)
+    finally:
+        Path(name).unlink()
+    sync_folder(path.parent)
+
+
+def sync_folder(path):
+    folder = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(folder)
     finally:
@@ -196,37 +462,35 @@ def write_copy(path, records):
 
 
 class _FreshLog(Log):
-    """Claim a new file exclusively when its first turn actually starts."""
+    """Claim a new file exclusively when its first turn starts."""
 
     def __init__(self, path, model):
         super().__init__(path)
         self.model = model
         self.claimed = False
 
-    def records(self):
-        return super().records() if self.claimed else []
+    def _refresh(self):
+        return super()._refresh() if self.claimed else None
 
     def first_record(self):
-        return super().first_record() if self.claimed else None
+        with self._cache_lock:
+            return super().first_record() if self.claimed else None
 
-    def append(self, type, **fields):
-        new = not self.claimed
-        while not self.claimed:
-            try:
-                with open(self.path, "x", encoding="utf-8"):
-                    pass
-                self.claimed = True
-            except FileExistsError:
-                self.path = _log_path(self.path.parent, self.model)
-        record = super().append(type, **fields)
-        if new:
-            # Log sees an existing file, so sync its newly claimed name here
-            folder = os.open(self.path.parent, os.O_RDONLY)
-            try:
-                os.fsync(folder)
-            finally:
-                os.close(folder)
-        return record
+    def last_record(self):
+        with self._cache_lock:
+            return super().last_record() if self.claimed else None
+
+    def append(self, kind, /, **fields):
+        with self._cache_lock:
+            while not self.claimed:
+                try:
+                    with open(self.path, "x", encoding="utf-8"):
+                        pass
+                    self.claimed = True
+                    self.needs_directory_sync = True
+                except FileExistsError:
+                    self.path = _log_path(self.path.parent, self.model)
+        return super().append(kind, **fields)
 
 
 def _log_path(folder, model):

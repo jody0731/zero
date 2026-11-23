@@ -14,8 +14,9 @@ import re
 import threading
 import time
 import unicodedata
-from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
+
+from core import entries
 
 from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError
 
@@ -24,25 +25,70 @@ class InvalidHistory(ValueError):
     """A model request would split a call from its result."""
 
 
-def check_tool_results(messages):
-    pending = set()
-    for message in messages:
-        if message["role"] == "tool":
-            call = message.get("tool_call_id")
-            if call not in pending:
-                raise InvalidHistory(f"tool result has no matching call: {call}")
-            pending.remove(call)
-        else:
-            if pending:
-                missing = ", ".join(sorted(pending))
-                raise InvalidHistory(f"missing tool results: {missing}")
-            for call in message.get("tool_calls") or ():
-                key = call.get("id")
-                if not isinstance(key, str) or not key or key in pending:
-                    raise InvalidHistory("tool calls need distinct nonempty ids")
-                pending.add(key)
+def tool_entries(entry):
+    calls, results = [], []
+    for node, origin, _, _ in entries.walk(
+        entry, include_private=False, stop_at="tool_result"
+    ):
+        if origin == "model" and entries.has(node, "tool_call"):
+            calls.append(node)
+        if origin == "tool" and entries.has(node, "tool_result"):
+            results.append(node)
+    return tuple(calls), tuple(results)
+
+
+def tool_timeline(conversation, tools_of=tool_entries):
+    """Pair each result to its call in timeline order, using the wire ID."""
+    pending = {}
+    for entry in conversation:
+        calls, results = tools_of(entry)
+        if calls and pending:
+            break
+        for call in calls:
+            call_id = entries.call_id(call)
+            entry_id = call.id or call_id
+            aliases = {entry_id, call_id}
+            if not entries.nonempty(call_id) or aliases & pending.keys():
+                raise InvalidHistory("tool calls need distinct nonempty ids")
+            pending.update((alias, (entry_id, call_id)) for alias in aliases)
+        paired = []
+        for result in results:
+            target = entries.linked_to(result, "answers")
+            if target not in pending:
+                raise InvalidHistory(f"tool result has no matching call: {target}")
+            entry_id, call_id = pending[target]
+            pending.pop(entry_id)
+            pending.pop(call_id, None)
+            paired.append((result, call_id))
+        yield entry, calls, tuple(paired), bool(pending)
     if pending:
-        raise InvalidHistory(f"missing tool results: {', '.join(sorted(pending))}")
+        missing = ", ".join(sorted({call_id for _, call_id in pending.values()}))
+        raise InvalidHistory(f"missing tool results: {missing}")
+
+
+def tool_batches(conversation, tools_of=tool_entries):
+    """Keep all results adjacent to their call message on the Chat API."""
+    batch = None
+    results, intervening = [], []
+    for entry, calls, paired, pending in tool_timeline(conversation, tools_of):
+        if calls:
+            batch = (entry, calls)
+        elif not entries.has(entry, "tool_result"):
+            if batch is None:
+                yield entry, calls, ()
+            else:
+                intervening.append(entry)
+        results.extend(paired)
+        if batch is not None and not pending:
+            yield *batch, tuple(results)
+            yield from ((node, (), ()) for node in intervening)
+            batch, results, intervening = None, [], []
+
+
+def check_tool_results(conversation):
+    """A complete history can always be sent with native results."""
+    for _ in tool_timeline(conversation):
+        pass
 
 
 class CutShort(Exception):
@@ -174,10 +220,13 @@ class Draft:
         # A tool call's index → {"id", "name", "arguments"}, the arguments as
         # far as they have come
         self.calls = {}
-        # Provider-specific continuation data, private to the producing route.
-        self.response_items = {}
-        self.thought_signatures = {}
-        self.reasoning_details = {}
+        # Provider-agnostic continuation items: {kind: {index: fields}}
+        self.continuation_items = {}
+        # Unrecognized output items: index -> fields dict
+        self.unrecognized_outputs = {}
+        # Per-call stream scratchpad, local to this draft
+        self.stream_state = {}
+        self.prefill_progress = False
         self.finish_reason = None
         # Prompt tokens, of those the cache's, and output tokens; None until
         # the API says
@@ -189,103 +238,44 @@ class Draft:
             index, {"id": None, "name": "", "arguments": ""}
         )
 
-    def message(self):
-        """The reply as ZERO keeps it, in the Chat Completions API's shape
-        (each API sends it in its own): reasoning_content kept, for an API
-        that takes a turn's thinking back; no empty fields."""
-        message = {"role": "assistant"}
-        if self.content:
-            message["content"] = self.content
-        if self.reasoning:
-            message["reasoning_content"] = self.reasoning
-        if self.calls:
-            message["tool_calls"] = [
-                {
-                    "id": call["id"],
-                    "type": "function",
-                    "function": {"name": call["name"], "arguments": call["arguments"]},
-                }
-                for _, call in sorted(self.calls.items())
-            ]
-        return message
+    def entry(self, *, route=None, keep_continuation=True):
+        """The model-independent reply, with private items scoped to a route."""
+        return _reply_from_stream(
+            self, route=route, keep_continuation=keep_continuation,
+        )
 
 
-def without_provider_state(message):
-    """A model message without private continuation data."""
-    if "provider_state" not in message:
-        return message
-    return {key: value for key, value in message.items() if key != "provider_state"}
+_reply_from_stream = None
 
 
-def provider_history(messages, route):
-    """Keep continuation data only for the endpoint, API and model that made it."""
-    found = messages
-    for index, message in enumerate(messages):
-        state = message.get("provider_state")
-        if state and state.get("route") != route:
-            if found is messages:
-                found = list(messages)
-            found[index] = {key: value for key, value in message.items()
-                            if key not in ("provider_state", "reasoning_content")}
-    return found
-
-
-def remember_provider_reply(reply, route, *, response_items=True):
-    """Store route-bound continuation on the assistant's local history."""
-    items = reply.response_items if response_items else []
-    if items or reply.thought_signatures or reply.reasoning_details or reply.reasoning:
-        reply.message["provider_state"] = {
-            "route": route, "items": items,
-            "thought_signatures": reply.thought_signatures,
-            "reasoning_details": reply.reasoning_details,
-        }
+def read_replies_with(builder):
+    """Install the model component's converter from stream data to entries."""
+    global _reply_from_stream
+    _reply_from_stream = builder
 
 
 class Reply:
-    """One model reply, reduced to what the loop needs, from its stream."""
+    """A completed reply and its stream measurements."""
 
-    def __init__(self, draft, seconds=0.0):
-        self.message = draft.message()
+    def __init__(self, draft, seconds=0.0, *, route=None, keep_continuation=True):
+        self.entry = draft.entry(route=route, keep_continuation=keep_continuation)
         self.content = draft.content or None
         self.reasoning = draft.reasoning or None
-        self.response_items = [
-            item for _, item in sorted(draft.response_items.items())
-        ]
-        self.thought_signatures = {
-            draft.calls[index]["id"]: {
-                "name": draft.calls[index]["name"],
-                "arguments": draft.calls[index]["arguments"],
-                "extra_content": signature,
-            }
-            for index, signature in draft.thought_signatures.items()
-            if index in draft.calls
-        }
-        self.reasoning_details = [
-            item for _, item in sorted(draft.reasoning_details.items())
-        ]
-        self.tool_calls = [
-            SimpleNamespace(
-                id=call["id"],
-                function=SimpleNamespace(
-                    name=call["name"], arguments=call["arguments"]
-                ),
-            )
-            for _, call in sorted(draft.calls.items())
-        ]
+        self.tool_calls = tuple(entries.tool_calls(self.entry))
         self.finish_reason = draft.finish_reason
+        self.prefill_progress = draft.prefill_progress
         self.seconds = seconds
-        # A server that sends no usage when streamed: nothing to count
         self.prompt_tokens, self.cached_tokens, self.completion_tokens = (
             draft.tokens or (0, 0, 0)
         )
 
 
-def complete(api, client, model, messages, *, silence, check=None,
-             on_delta=None, **request):
+def complete(api, client, model, conversation, *, silence, check=None,
+             on_delta=None, route=None, keep_continuation=True, **request):
     """One streamed model call: its Reply.
 
     `api`: the API the server speaks (model/apis/), which opens the stream on
-    `client` from the messages and the request's standard fields (`tools`,
+    `client` from the entries and the request's standard fields (`tools`,
     `effort`, `json_schema`, `json_mode`, `temperature`,
     `max_output_tokens`) and folds each event into the draft. `silence`:
     seconds the model may send nothing, before its first token and between
@@ -298,14 +288,16 @@ def complete(api, client, model, messages, *, silence, check=None,
     event that carried something. Raises CutShort for a reply that didn't
     complete, and the API's errors as they come (MODEL_ERRORS).
     """
-    check_tool_results(messages)
+    check_tool_results(conversation)
     events = queue.Queue()
     streams = []
     closed = threading.Event()
 
     def read():
         try:
-            stream = api.open_stream(client, model, messages, **request)
+            if route is not None:
+                request["route"] = route
+            stream = api.open_stream(client, model, conversation, **request)
             streams.append(stream)
             if closed.is_set():
                 stream.close()
@@ -346,6 +338,7 @@ def complete(api, client, model, messages, *, silence, check=None,
                     on_delta(draft)
             elif getattr(api, "alive", None) and api.alive(item):
                 # The server is reading the prompt: alive, nothing to show
+                draft.prefill_progress = True
                 heard = time.monotonic()
     finally:
         closed.set()
@@ -356,4 +349,10 @@ def complete(api, client, model, messages, *, silence, check=None,
                 pass
     if draft.finish_reason is None:
         raise CutShort("the stream ended before the reply did")
-    return Reply(draft, time.monotonic() - started)
+    try:
+        reply = Reply(draft, time.monotonic() - started, route=route,
+                      keep_continuation=keep_continuation)
+        entries.ensure_executable(reply.entry)
+    except entries.EntryError as error:
+        raise CutShort(str(error)) from error
+    return reply

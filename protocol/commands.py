@@ -1,32 +1,47 @@
 """Conversation commands shared by the terminal and browser apps."""
 
-COMMANDS = {
+import json
+from pathlib import Path
+
+from protocol.messages import protocol_files
+
+BASE_COMMANDS = {
     "/new": "a new session (asks for its workspace)",
     "/continue": "go on with a turn that ended without an answer",
     "/sessions": "the session list",
     "/rename": "rename this session: /rename TITLE",
-    "/compact": "compact this session's context: now, or before the next step "
-                "while a turn runs; /compact INSTRUCTIONS says what its handoff keeps",
     "/rewind": "go back to before one of your messages, its text back in the "
                "input; what came after is left behind, files stay as they are",
     "/fork": "a new session from this conversation, up to one of your messages "
              "or all of it",
     "/archive": "archive this session (or bring it back)",
     "/delete": "move this session to the trash (asked first)",
-    "/jobs": "this session's background jobs",
     "/copy": "copy ZERO's last answer, as its Markdown",
-    "/permissions": "what runs without asking (a plan's calls aside); "
-                    "/permissions forget N takes one back",
-    "/mode": "the mode, from the next turn: /mode NAME, or pick",
-    "/model": "the model and its thinking, from the next turn: /model NAME, "
-              "or pick",
-    "/cd": "the folder its commands run in, from the next turn: /cd FOLDER",
     "/settings": "this session, new sessions' defaults, models and "
                  "keys, key bindings, Advanced",
-    "/init": "ZERO looks over you and this machine and fills in its ZERO.md",
     "/help": "keys and commands",
     "/quit": "leave; turns and jobs go on in ZERO",
 }
+
+
+def load_commands(root, base=None):
+    """Merge `components/*/protocol.json` commands before `/quit`."""
+    commands = dict(BASE_COMMANDS if base is None else base)
+    has_quit = "/quit" in commands
+    quit_desc = commands.pop("/quit", None)
+    extra = {}
+    for path in protocol_files(root):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for name, about in (data.get("commands") or {}).items():
+            extra[name] = about
+    for name in sorted(extra):
+        commands[name] = extra[name]
+    if has_quit:
+        commands["/quit"] = quit_desc
+    return commands
+
+
+COMMANDS = load_commands(Path(__file__).resolve().parent.parent)
 INIT = (
     "Get to know me and this machine: look around (who I am, from what's here; "
     "the hardware, the system, the main tools and services I use) and add what "

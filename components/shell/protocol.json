@@ -1,0 +1,30 @@
+{
+  "defs": {
+    "command_fields": {
+      "type": "object",
+      "description": "structured fields carried beside a bash command's text",
+      "properties": {
+        "exit_code": {
+          "type": "integer",
+          "description": "its exit code, once it ended"
+        },
+        "wall_seconds": {
+          "type": "number",
+          "description": "how long it ran here"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "the background job it started, or was moved to past its timeout"
+        },
+        "timed_out": {
+          "type": "boolean",
+          "description": "it ran past its timeout"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "commands": {
+    "/cd": "the folder its commands run in, from the next turn: /cd FOLDER"
+  }
+}

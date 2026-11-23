@@ -1,0 +1,31 @@
+{
+  "messages": {
+    "session/compact": {
+      "about": "Compact a session's context: at once when it rests, before the next step when its turn runs.",
+      "fields": {
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "instructions": {
+          "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+          ],
+          "description": "the user's words on what the handoff keeps, beside its fixed form; with them a handoff is written"
+        }
+      },
+      "required": ["session"],
+      "reply": {
+        "compacting": {
+          "type": "string",
+          "enum": ["now", "before_next_step"]
+        }
+      },
+      "changes": true
+    }
+  },
+  "commands": {
+    "/compact": "compact this session's context: now, or before the next step while a turn runs; /compact INSTRUCTIONS says what its handoff keeps"
+  }
+}

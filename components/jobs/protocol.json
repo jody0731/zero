@@ -1,0 +1,152 @@
+{
+  "rows": {
+    "job": {
+      "type": "object",
+      "description": "a background job",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "command": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "running",
+            "ended",
+            "stopped",
+            "lost"
+          ]
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "type": "number"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "due_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "when the model's estimate runs out"
+        },
+        "stopped_by": {
+          "anyOf": [
+            {
+              "enum": [
+                "model",
+                "user"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state_text": {
+          "type": "string",
+          "description": "its state in words, as the model reads it"
+        }
+      }
+    }
+  },
+  "row_extensions": {
+    "session": {
+      "jobs": {
+        "type": "integer",
+        "description": "its running background jobs"
+      }
+    }
+  },
+  "messages": {
+    "job/list": {
+      "about": "A session's background jobs, ended ones too; with none, every running job.",
+      "fields": {
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "reply": {
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/row.job"
+          },
+          "description": "one row a job"
+        }
+      }
+    },
+    "job/read": {
+      "about": "A background job's state and retained output, without changing what the model has read.",
+      "fields": {
+        "job": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job"
+      ],
+      "reply": {
+        "job": {
+          "$ref": "#/$defs/row.job"
+        },
+        "output": {
+          "type": "string"
+        },
+        "omitted_bytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "job/stop": {
+      "about": "Stop a background job.",
+      "fields": {
+        "job": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job"
+      ],
+      "reply": {
+        "stopped": {
+          "type": "boolean"
+        }
+      },
+      "changes": true
+    }
+  },
+  "commands": {
+    "/jobs": "this session's background jobs"
+  }
+}

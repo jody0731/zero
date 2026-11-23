@@ -70,10 +70,11 @@ class Fold(Static):
         """The call's tool record: its outcome, from the data beside its
         text (client/render.py's outcome_of)."""
         ok, code, seconds, lines = outcome_of(record)
+        ran = render.entries.field(record, "ran")
         took = f" {seconds}" if seconds else ""
         if ok:
             mark = f"✓{took}"
-        elif not record.get("ran"):
+        elif not ran:
             mark = "✗ not run"
         elif code is None:
             mark = f"✗{took}"
@@ -248,82 +249,83 @@ class Transcript(VerticalScroll):
     def blocks(self, record, source):
         """The widgets a record adds; a tool or ask record changes its call's
         block in place instead."""
-        kind = record.get("type")
+        entries = render.entries
+        kind = entries.entry_type(record)
+        fields = entries.fields_of(record)
         if record.get("audience") == "model":
-            self.restarts += record.get("kind") == "restarted"
+            self.restarts += fields.get("kind") == "restarted"
             return []
-        if failure := record.get("model_failure"):
+        if failure := entries.model_failure(record):
             return [ModelFailureView(failure)]
-        if kind in ("user", "answer"):
-            if kind == "user" and not record.get("steer"):
+        if entries.is_turn_input(record) or kind == "sessions/answer":
+            if entries.is_turn_input(record) and not fields.get("steer"):
                 self.started, self.restarts = record.get("time"), 0
-            if record.get("notice") or record.get("source") == "job":
-                first = record["text"].partition("\n")[0]
-                sender = (record.get("interaction") or {}).get("sender_session")
+            if entries.is_notice(record):
+                first = entries.message_text(record).partition("\n")[0]
+                sender = (entries.interaction(record) or {}).get("sender_session")
                 text = f"{record['sender_name']} · {first}" if sender else first
                 return [Plain(f"◈ {text}", classes="note")]
-            inbox = record.get("inbox")
+            inbox = fields.get("inbox")
             if inbox is not None and inbox in self.shown:
                 return []
             self.shown.add(inbox)
-            if record.get("continue"):
+            if entries.is_continue(record):
                 return [yours("/continue")]
-            if record.get("interaction"):
+            text = entries.message_text(record)
+            if entries.interaction(record):
                 label = render.interaction_label(record)
-                if record.get("question_text"):
-                    label += " · " + record["question_text"]
+                if fields.get("question_text"):
+                    label += " · " + fields["question_text"]
                 mark = None if label == "You" else label
-                return [yours(record.get("text", ""), mark)]
-            label = who(record.get("source"), source)
+                return [yours(text, mark)]
+            label = who(fields.get("source"), source)
             marks = [] if label == "you" else [label]
-            if record.get("steer") and kind == "user":
+            if fields.get("steer") and entries.is_turn_input(record):
                 marks.append("steer")
-            return [yours(record["text"], " · ".join(marks) or None)]
-        if kind == "assistant":
-            content = record["message"].get("content")
+            return [yours(text, " · ".join(marks) or None)]
+        if kind == "chat/assistant_reply":
+            content = entries.assistant_text(record)
             made = []
             if content:
                 made.append(message("●", Markdown(content), "zero"))
-            for call in record["message"].get("tool_calls") or []:
+            for call in entries.tool_calls(record):
                 block = Fold(header_of(call, record.get("call_summaries")),
                              classes="tool")
                 block.open = self.folds_open
-                self.calls[call["id"]] = block
+                self.calls[entries.call_id(call)] = block
                 made.append(block)
             return made
-        if kind == "tool":
-            block = self.calls.get(record.get("call"))
+        if kind == "tools/result":
+            block = self.calls.get(entries.tool_call_id(record))
             if block is not None:
                 block.finish(record)
                 return []
-            return [Plain(record["result"][:200], classes="note")]
-        if kind == "ask":
-            block = self.calls.get(record.get("call"))
+            return [Plain((fields.get("result") or "")[:200], classes="note")]
+        if kind == "sessions/ask":
+            block = self.calls.get(entries.tool_call_id(record))
             if block is not None:
                 block.waiting()
             return []
-        if kind == "note":
-            self.restarts += record.get("kind") == "restarted"
-            if record.get("kind") == "switch":
-                return [Plain(f"◈ {render.switch_text(record)}", classes="note")]
-            return [Plain(f"◈ {record['text']}", classes="note")]
-        if kind == "switch":
+        if kind in entries.NOTE_TYPES:
+            self.restarts += fields.get("kind") == "restarted"
+            return [Plain(f"◈ {fields.get('text', '')}", classes="note")]
+        if kind == "sessions/switch_note":
             # The judge's: the model doesn't read it, the user sees it
             return [Plain(f"◈ {render.switch_text(record)}", classes="note")]
         if kind in render.COMPACTION_RECORDS:
             return [Plain(f"◈ {render.compaction_text(record)}", classes="note")]
-        if kind == "rewind":
+        if kind == "sessions/rewind_note":
             return [Plain(f"↶ {render.rewind_text(record)}", classes="note")]
-        if kind == "turn_end":
+        if kind == "sessions/turn_end":
             # An answer needs no line of its own; a turn that ended without
             # one says how
-            outcome = record["outcome"]
+            outcome = fields["outcome"]
             if outcome == "answered":
                 return []
             elapsed = duration(record, self.started, self.restarts)
-            why = record.get("detail") or ""
-            if record.get("error"):
-                why = record["error"].strip().splitlines()[-1]
+            why = fields.get("detail") or ""
+            if fields.get("error"):
+                why = fields["error"].strip().splitlines()[-1]
             words = f"{outcome}: {why}" if why else outcome
             return [Plain(f"✗ {words} · {elapsed}", classes="note failed")]
         return []

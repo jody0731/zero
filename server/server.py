@@ -40,7 +40,7 @@ import traceback
 from contextlib import contextmanager
 
 import settings
-from core import history
+from core import timeline
 from server import peers, replies
 from server.credentials import WorkflowCredentials
 from server.idempotency import MessageReplies
@@ -68,7 +68,7 @@ SERVED = ("server/hello", "server/stop", "session/send", "session/submit",
           "session/stop", "session/list", "session/read", "session/watch",
           "session/deliveries",
           "session/mark_seen", "session/rename", "session/archive",
-          "session/unarchive", "session/delete", "session/set", "session/compact",
+          "session/unarchive", "session/delete", "session/set",
           "session/user_messages", "session/rewind", "session/fork",
           "setting/list", "setting/set")
 # Those of them that only look, which ZERO's own commands may send too
@@ -392,9 +392,10 @@ class Server:
 
     @staticmethod
     def protocol_of(request):
-        """The protocol a request is written in (none named: 4), as its
-        reply goes out in it; Refused for one older than the oldest."""
-        asked = request.get("protocol", version.OLDEST)
+        """The protocol a request is written in (none named: 4, refused once
+        OLDEST passes 4), as its reply goes out in it; Refused for one older
+        than the oldest."""
+        asked = request.get("protocol", 4)
         if type(asked) is not int:
             raise Refused("protocol is a whole number")
         protocol = older.answered_in(asked)
@@ -414,9 +415,11 @@ class Server:
 
     def send_event(self, conn, name, event, protocol):
         """One event of a watch (`name`'s), as apps read it: a record's
-        parts an app shows added (replies.event)."""
+        parts an app shows projected to Protocol 8 (replies.event)."""
         if name == "session/watch":
             event = replies.event(event)
+            if event is None:
+                return
         self.send_out(conn, name, event, protocol, "event")
 
     def reply_to(self, name, request, protocol):
@@ -429,12 +432,10 @@ class Server:
             unknown = sorted(field for field in request if field not in known)
         if spec is not None and spec["changes"] and name not in INBOX_KEPT:
             msg_id = request.get("id")
-            if msg_id is None and protocol >= 5:
+            if msg_id is None:
                 reply = error(f"{name} changes something, so it carries an "
                               "id: a string the sender picks, new for each "
                               "message")
-            elif msg_id is None:
-                reply = self.answered(request, protocol)
             elif not isinstance(msg_id, str) or not 0 < len(msg_id) <= 200:
                 reply = error("a message's id is a string of 1 to 200 "
                               "characters")
@@ -539,17 +540,6 @@ class Server:
                 return {"ok": True, **self.runtime.stop_turn(sid, msg_id, source)}
             except Refused as exc:
                 return error(str(exc))
-        if name == "session/compact":
-            sid = request.get("session")
-            if not isinstance(sid, str):
-                return error("session/compact needs a session string")
-            words = request.get("instructions")
-            if words is not None and not isinstance(words, str):
-                return error("session/compact's instructions must be a string")
-            try:
-                return {"ok": True, **self.runtime.compact(sid, words)}
-            except Refused as exc:
-                return error(str(exc))
         if name in ("session/user_messages", "session/rewind", "session/fork"):
             return self.tree_message(name, request)
         if name == "session/continue":
@@ -575,7 +565,11 @@ class Server:
                 return error("before must be an integer")
             sid, after, limit = read_range(request)
             records, earlier_count = self.runtime.history(sid, after, limit, before)
-            return {"ok": True, "records": replies.records(records),
+            shown = [
+                wire for rec, origin in self.runtime.record_sessions(sid, records)
+                if (wire := replies.record(rec, session=origin)) is not None
+            ]
+            return {"ok": True, "records": shown,
                     "earlier_count": earlier_count,
                     "runs_with": self.runtime.runs_with(sid),
                     "context": self.runtime.context_meter(sid)}
@@ -652,10 +646,10 @@ class Server:
         elif name in ("session/archive", "session/unarchive"):
             self.runtime.archive(sid, name == "session/archive")
         elif name == "session/set":
-            values = {name: request.get(name) for name in history.SWITCHABLE}
+            values = {field: request.get(field) for field in timeline.SWITCHABLE}
             if any(v is not None and not isinstance(v, str) for v in values.values()):
                 return error(f"session/set takes "
-                             f"{', '.join(history.SWITCHABLE)}, each a string")
+                             f"{', '.join(timeline.SWITCHABLE)}, each a string")
             return {"ok": True, **self.runtime.set_session(sid, **values)}
         else:
             return {"ok": True, "trash": self.runtime.delete(sid)}
@@ -754,9 +748,9 @@ class Server:
             meter = self.runtime.context_meter(sid)
             if meter is not None:
                 emit({"context": meter})
-            for record in records:
-                emit({"record": record})
-                after = record["seq"]
+            for record, origin in self.runtime.record_sessions(sid, records):
+                emit({"record": record, "record_session": origin})
+                after = record.seq
             if settled is not None:
                 emit({"settled": settled})
             # A watch that starts mid-reply gets the reply so far
@@ -768,9 +762,9 @@ class Server:
                 for event in watcher.take(0.2):
                     record = event.get("record")
                     if record is not None:
-                        if record["seq"] <= after:
+                        if record.seq <= after:
                             continue
-                        after = record["seq"]
+                        after = record.seq
                     drafted = drafted or "draft" in event
                     emit(event)
                 if drafted:
@@ -790,8 +784,8 @@ class Server:
             self.runtime.unsubscribe(sid, token)
 
     def watch_list(self, conn, request, protocol=version.PROTOCOL):
-        """The list, then the whole list again whenever it changed, its changes
-        gathered for a moment; it ends with a `bye` when the server stops."""
+        """The opening session list, then incremental `upsert`/`remove` diffs
+        whenever sessions change, gathered for a moment; ends with a `bye`."""
 
         def emit(event):
             self.send_event(conn, "session/list", event, protocol)
@@ -804,27 +798,67 @@ class Server:
         conn.settimeout(WATCH_SEND_SECONDS)
         peer = select.poll()
         peer.register(conn, select.POLLIN)
-        sent = None
-        version = self.runtime.list_version
+
+        def matches(row):
+            if archived is not None and row["archived"] != archived:
+                return False
+            if workspace is not None and row["workspace"] != workspace:
+                return False
+            return True
+
         try:
+            version, sessions = self.runtime.sessions_snapshot(archived, workspace)
+            shown = {row["id"]: row for row in sessions}
+            emit({"sessions": sessions})
             while True:
-                sessions = self.runtime.sessions(archived, workspace)
-                if sessions != sent:
-                    emit({"sessions": sessions})
-                    sent = sessions
-                while True:
-                    if self.stopping.is_set():
-                        emit({"bye": self.reason})
-                        return
-                    if peer.poll(0):
-                        conn.recv(1)
-                        return
-                    now = self.runtime.wait_list(version, 0.2)
-                    if now != version:
-                        version = now
-                        time.sleep(LIST_GATHER_SECONDS)
-                        version = self.runtime.list_version
-                        break
+                if self.stopping.is_set():
+                    emit({"bye": self.reason})
+                    return
+                if peer.poll(0):
+                    conn.recv(1)
+                    return
+                now = self.runtime.wait_list(version, 0.2)
+                if now == version:
+                    continue
+                time.sleep(LIST_GATHER_SECONDS)
+                next_ver, touched = self.runtime.watcher_hub.list_changes_since(
+                    version,
+                )
+                if touched is None:
+                    next_ver, sessions = self.runtime.sessions_snapshot(
+                        archived, workspace, min_version=next_ver,
+                    )
+                    new_shown = {row["id"]: row for row in sessions}
+                    if new_shown != shown or [
+                        r["id"] for r in sessions
+                    ] != list(shown):
+                        emit({"sessions": sessions})
+                        shown = new_shown
+                    version = next_ver
+                    continue
+                if touched:
+                    current_rows = self.runtime.session_rows_for(
+                        touched, min_version=next_ver,
+                    )
+                    upsert = []
+                    remove = []
+                    for sid in sorted(touched):
+                        row = current_rows.get(sid)
+                        if row is not None and matches(row):
+                            if row != shown.get(sid):
+                                shown[sid] = row
+                                upsert.append(row)
+                        elif sid in shown:
+                            del shown[sid]
+                            remove.append(sid)
+                    diff = {}
+                    if upsert:
+                        diff["upsert"] = upsert
+                    if remove:
+                        diff["remove"] = remove
+                    if diff:
+                        emit(diff)
+                version = next_ver
         except (OSError, ValueError):
             return
 

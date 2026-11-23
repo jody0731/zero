@@ -109,7 +109,7 @@ def write_whole(path, data, mode=None):
     written through: the file it points to is replaced, the link kept (a
     dotfiles repo's, or a dev home's link to the main home's keys)."""
     path = Path(os.path.realpath(path))
-    path.parent.mkdir(parents=True, exist_ok=True)
+    make_folders(path.parent)
     try:
         kept = os.stat(path).st_mode & 0o7777
     except FileNotFoundError:
@@ -138,18 +138,33 @@ def write_whole(path, data, mode=None):
     sync_folder(path.parent)
 
 
-def sync_folder(folder):
+def sync_folder(folder, *, required=False):
     """Sync a folder, so a file moved into it lasts a power cut."""
     try:
-        handle = os.open(folder, os.O_RDONLY)
+        handle = os.open(folder, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     except OSError:
+        if required:
+            raise
         return
     try:
         os.fsync(handle)
     except OSError:
-        pass
+        if required:
+            raise
     finally:
         os.close(handle)
+
+
+def make_folders(folder):
+    """Create folders and sync the parent of each new directory entry."""
+    missing = []
+    current = folder
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    for created in reversed(missing):
+        sync_folder(created.parent, required=True)
 
 
 @contextmanager
@@ -159,7 +174,7 @@ def changing(path, *others):
     folders = sorted({Path(os.path.realpath(file)).parent for file in (path, *others)})
     with ExitStack() as opened:
         for folder in folders:
-            folder.mkdir(parents=True, exist_ok=True)
+            make_folders(folder)
             handle = os.open(folder, os.O_RDONLY)
             opened.callback(os.close, handle)
             fcntl.flock(handle, fcntl.LOCK_EX)
@@ -300,24 +315,6 @@ def shared_skills_folder():
     return Path.home() / ".agents" / "skills"
 
 
-def model_features_file():
-    """What each model was measured to honour of its API's features
-    (model/features.py): ZERO's own record, not the user's to edit. Named
-    from the home alone: finding the socket's folder can fail, and has
-    nothing to do with it."""
-    return home() / "state" / "model_features.json"
-
-
-def model_catalog_file():
-    """The last public token catalog lookup, reused offline."""
-    return home() / "state" / "model_catalog.json"
-
-
-def model_windows_file():
-    """The last token limits an endpoint reported for its models."""
-    return home() / "state" / "model_windows.json"
-
-
 def config_file():
     return home() / "config.toml"
 
@@ -383,8 +380,7 @@ class Paths:
         self.sessions = self.state / "sessions"
         self.trajectories = self.state / "trajectories"
         self.locks = self.state / "locks"
-        # Each job's output (jobs/), and deleted sessions (server/trash.py)
-        self.jobs = self.state / "jobs"
+        # Deleted sessions (server/trash.py)
         self.trash = self.state / "trash"
         # A detached server's output, and the CLI's crashes
         self.server_log = self.state / "server.log"
@@ -422,5 +418,5 @@ class Paths:
             self.home, self.state, self.sessions, self.trajectories,
             self.locks, self.run,
         ):
-            folder.mkdir(parents=True, exist_ok=True)
+            make_folders(folder)
             folder.chmod(0o700)

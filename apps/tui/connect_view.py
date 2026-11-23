@@ -547,9 +547,9 @@ class ServersView(Screen):
         if reply["default_unset"]:
             said += " New sessions have no model: pick one in Default → Model."
             self.zero.defaults["model"] = None
-        self.notify(said)
-        self.fetch()
-        self.draw()
+        self.zero.notify(said)
+        if self.is_attached:
+            self.fetch()
 
     def connected(self, reply, error):
         """The server's answer to a connect (Connecting.connect)."""

@@ -1,0 +1,58 @@
+{
+  "row_extensions": {
+    "ask": {
+      "kind": {
+        "type": "string",
+        "enum": [
+          "secret"
+        ]
+      }
+    }
+  },
+  "messages": {
+    "vault/answer": {
+      "about": "Supply private values directly to a waiting vault request.",
+      "fields": {
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "ask": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cancel": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session",
+        "ask"
+      ],
+      "reply": {
+        "saved": {
+          "type": "boolean"
+        }
+      },
+      "changes": true,
+      "stamp_source": true
+    },
+    "vault/status": {
+      "about": "The vault count and where its encryption key is kept.",
+      "reply": {
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

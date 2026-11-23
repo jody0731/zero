@@ -1,0 +1,143 @@
+{
+  "rows": {
+    "rounds": {
+      "type": "object",
+      "description": "a session's work in rounds",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "round_count": {
+          "type": "integer",
+          "description": "the round under way, or the last"
+        },
+        "estimate_rounds": {
+          "type": "integer"
+        },
+        "estimate_minutes": {
+          "type": "number"
+        },
+        "estimate_dollars": {
+          "type": "number"
+        },
+        "spent_minutes": {
+          "type": "number"
+        },
+        "spent_dollars": {
+          "type": "number"
+        },
+        "last_status": {
+          "anyOf": [
+            {
+              "enum": [
+                "going_on",
+                "done",
+                "stuck"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "type": "number"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "description": "the run in a line"
+        }
+      }
+    }
+  },
+  "row_extensions": {
+    "session": {
+      "rounds": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "its open work in rounds, in a line"
+      }
+    }
+  },
+  "message_extensions": {
+    "session/send": {
+      "fields": {
+        "rounds": {
+          "type": "boolean",
+          "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
+        }
+      }
+    },
+    "session/submit": {
+      "fields": {
+        "rounds": {
+          "type": "boolean",
+          "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
+        }
+      }
+    }
+  },
+  "messages": {
+    "rounds/list": {
+      "about": "A session's work in rounds, ended runs too; with none, every open one.",
+      "fields": {
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "reply": {
+        "rounds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/row.rounds"
+          },
+          "description": "one row a run"
+        }
+      }
+    },
+    "rounds/stop": {
+      "about": "Stop work in rounds: no next round starts; a round under way ends its turn.",
+      "fields": {
+        "rounds": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rounds"
+      ],
+      "reply": {
+        "stopped": {
+          "type": "boolean"
+        }
+      },
+      "changes": true
+    }
+  }
+}

@@ -6,24 +6,23 @@ reply gets a note; an empty reply is never taken as the answer; a malformed
 call gets its error back. Hooks supply limits and decisions.
 """
 
-import copy
 import json
 import secrets
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime
-from types import SimpleNamespace
 
-from core import history, public_reply, tools
+from core import attribution, entries, replay, timeline, tools
 from core.asking import (
     APPROVED, APPROVED_LATE, CANCELLED, DECLINED_STOP, NO, NOT_ASKED, choices,
 )
 from core.control import Stopped
-from core.history import LOG_FORMAT, NewerLog, OldLog, log_format
 from core.hooks import Deny, HookRunner, ModelAsk, Park, Question, Stop
 from core.llm import InvalidHistory, MODEL_ERRORS, failure_text, request_failure
 from core.records import Call, ModelFailure, Step, Turn
+from core.timeline import LOG_FORMAT, NewerLog, OldLog
 
 CUT_OFF = "[Your last reply hit the output limit and was cut off.]"
 INTERRUPTED = "[The user interrupted this turn.]"
@@ -51,7 +50,7 @@ class Parked(Exception):
     written, with no step record and no turn_end yet."""
 
     def __init__(self, record):
-        super().__init__(record["ask"])
+        super().__init__(record.entry.id)
         self.record = record
 
 
@@ -86,26 +85,21 @@ class Session:
         self.code_mark = code_mark
         records = log.branch()
         self.prompt_tokens = 0
-        # Who asked for a compaction before the running turn's next step (the
-        # user, through a server: want_compaction), and their words on what
-        # its handoff keeps, until the context component takes them
-        # (take_wanted_compaction)
-        self.compaction_wanted_by = None
-        self.compaction_instructions = None
         # What its maker adds to its log's first record, its header (a
         # server's: the session's row, so a log with no row is listed again
         # from it)
         self.header_fields = {}
+        self.entries_redaction = None
         if records:
             self.restore(log)
         else:
-            self.messages = [{"role": "system", "content": self.system_text()}]
+            self.entries = (entries.root("system_prompt", "system",
+                                         text=self.system_text()),)
 
     def system_text(self):
         """The system message as it would be written now."""
         start = self.rebuild() if self.rebuild is not None else self.system_start
-        return (start + self.hooks.collect("system_prompt", self)
-                + "\n\n" + public_reply.INSTRUCTIONS)
+        return start + self.hooks.collect("system_prompt", self)
 
     def marked(self):
         """The code mark a record with a system message keeps."""
@@ -116,7 +110,7 @@ class Session:
         on: `why` is "model" (a switch) or "code" (new code)."""
         self.write("system", system_prompt=self.system_text(), why=why,
                    **self.marked())
-        self.messages = history.replay(self.log.branch())
+        self.restore_entries(self.log.branch())
 
     def compact(self, reason, handoff=None, fresh=False, occasion=None,
                 instructions=None):
@@ -136,60 +130,16 @@ class Session:
         self.hooks.errors = errors
         return found
 
-    def want_compaction(self, by, instructions=None):
-        """A compaction before the running turn's next step, asked for by
-        `by` ("user"), with their words on what its handoff keeps
-        (`instructions`, or None), which the context component makes then."""
-        self.compaction_wanted_by = by
-        self.compaction_instructions = instructions
-
-    def take_wanted_compaction(self):
-        """(who asked for a compaction before this step, their words or
-        None), once; else None."""
-        by, self.compaction_wanted_by = self.compaction_wanted_by, None
-        words, self.compaction_instructions = self.compaction_instructions, None
-        return None if by is None else (by, words)
-
-    def compacted(self, *, reason, summary, kept_from, tokens_before=None,
-                  line=None, cleared=None, tokens_after=None, handoff_at=None,
-                  handoff_call=None, saved=None, cleared_only=False,
-                  fresh=False, occasion=None, instructions=None):
-        """Write a compaction, with the system message as things stand now,
-        and take the context it leaves. Its fields, as history replays them:
-        who or what asked (`reason`), the tokens before and after and the
-        `line` the context is kept under, the handoff (`summary`, written at
-        `handoff_at`, by `handoff_call`), the first record kept
-        (`kept_from`), the outputs cleared ({seq: the line in their place})
-        and the files they were saved in (`saved`), whether it only cleared
-        outputs (`cleared_only`) or kept nothing but the handoff (`fresh`,
-        on an `occasion` the model reads), and the askers' words on what the
-        handoff keeps (`instructions`, {"user" or "zero": their words})."""
-        fields = {
-            "reason": reason, "tokens_before": tokens_before, "line": line,
-            "summary": summary, "kept_from": kept_from, "cleared": cleared,
-            "tokens_after": tokens_after, "handoff_at": handoff_at,
-            "handoff_call": handoff_call, "saved": saved,
-            "cleared_only": cleared_only or None, "fresh": fresh or None,
-            "occasion": occasion, "instructions": instructions or None,
-        }
-        # Only what it has, as before; its handoff always, None when it
-        # only cleared outputs and had none to carry
-        fields = {k: v for k, v in fields.items()
-                  if v is not None or k == "summary"}
-        record = self.write("compaction", system_prompt=self.system_text(),
-                            **self.marked(), **fields)
-        self.messages = history.replay(self.log.branch())
-        return record
-
     def rewind(self, seq):
         """Branch before the user's message, retaining concrete side effects."""
-        parent, left = history.left_behind_by(self.log.branch(), seq)
+        parent, left = timeline.left_behind_by(self.log.branch(), seq)
         effects = self.hooks.collect("rewound", self, left)
         record = self.write(
-            "rewind", parent=parent["seq"], left_from=left[0]["seq"],
-            left_to=left[-1]["seq"], text=history.REWOUND.format(effects=effects),
+            "rewind", parent=parent.seq, left_from=left[0].seq,
+            parent_entry_id=parent.entry.id,
+            left_to=left[-1].seq, text=timeline.REWOUND.format(effects=effects),
         )
-        self.messages = history.replay(self.log.branch())
+        self.restore_entries(self.log.branch())
         return record, left
 
     def tool_schemas(self):
@@ -199,17 +149,18 @@ class Session:
     def restore(self, log):
         """Restore the logged prompt and messages without rebuilding hooks."""
         records = log.branch()
-        found = log_format(records) if records else None
-        if found is not None and found > LOG_FORMAT:
+        found = timeline.log_format(records)
+        if found > LOG_FORMAT:
             raise NewerLog(found)
         if found != LOG_FORMAT:
-            raise OldLog("This session needs a log upgrade before it can run")
+            raise OldLog(found)
         self.log = log
-        self.settings = history.settings_now(records)
-        self.messages = history.replay(records)
+        self.settings = entries.thaw(log.settings_now())
+        self.restore_entries(records)
         # Prompt size of the last model call, also after a rebuild
         self.prompt_tokens = next(
-            (r["prompt_tokens"] for r in reversed(records) if r["type"] == "assistant"),
+            (r.entry.get("prompt_tokens") or 0 for r in reversed(records)
+             if entries.has(r.entry, "assistant_reply")),
             0,
         )
 
@@ -220,21 +171,40 @@ class Session:
             "mode": self.settings["mode"],
             "settings": self.settings,
             "hooks": [repr(p) for p in self.hooks.hooks],
-            "system_prompt": self.messages[0]["content"],
+            "system_prompt": entries.project(self.entries[0]),
             **self.marked(),
             **self.header_fields,
         }
 
-    def write(self, type, **fields):
-        """Append once, then project the record into the model's history."""
+    def restore_entries(self, records):
+        self.entries = replay.replay(records, current_branch=True)
+        self.entries_redaction = None
+
+    def safe_entries(self):
+        """Use the current vault generation without rescanning on every call."""
         boundary = self.tool_context.get("tool_boundary")
+        if boundary is None:
+            return self.entries
+        while (version := (boundary, boundary.version)) != self.entries_redaction:
+            self.entries = tuple(map(boundary.redact_entry, self.entries))
+            self.entries_redaction = version
+        return self.entries
+
+    def write(self, type, **fields):
+        """Append a redacted entry and retain the same immutable model data."""
+        boundary = self.tool_context.get("tool_boundary")
+        version = None
         if boundary is not None:
-            fields = boundary.redact(fields)
+            fields["redact_entry"] = boundary.redact_entry
+            if not self.entries:
+                version = (boundary, boundary.version)
         self.log.path.parent.mkdir(parents=True, exist_ok=True)
         record = self.log.append(type, **fields)
-        message = history.message(record)
-        if message is not None:
-            history.append_message(self.messages, message)
+        if entries.has(record.entry, "header"):
+            self.entries = (replay.system_entry(record),)
+            self.entries_redaction = version
+        elif entry := replay.model_entry(record):
+            self.entries += (entry,)
         return record
 
     def open_turn(self, text, inbox=None, source=None, control=None,
@@ -242,7 +212,7 @@ class Session:
         """`continued`: the turn is a server's `continue`, its text a
         harness note the user asked for, not words they typed. `carried`:
         what the message carries beside its text, kept on its record
-        (history.MESSAGE_FIELDS, and the fields a server's parts hand on: a
+        (attribution.MESSAGE_FIELDS, and the fields a server's parts hand on: a
         message sent to be worked on in rounds, which rounds/ tells the
         model)."""
         records = self.log.branch()
@@ -251,14 +221,16 @@ class Session:
             # its code mark is taken too: what was handed to the session's
             # tools since it was built (a server's jobs, rounds and
             # subagents) changes what it says
-            self.messages = [{"role": "system", "content": self.system_text()}]
+            self.entries = (entries.root("system_prompt", "system",
+                                         text=self.system_text()),)
             fields = self.session_record()
-            self.messages = []
+            self.entries = ()
             self.write("session", **fields)
         elif self.code_mark is not None:
             # New code that changes what the model reads: the cache is lost
             # anyway, so the system message is written again
-            if history.system_now(records).get("code_mark") != self.code_mark():
+            system = replay.system_now(records)
+            if system is None or system.entry.get("code_mark") != self.code_mark():
                 self.rebuild_system("code")
         fields = {"text": text}
         if inbox is not None:
@@ -278,9 +250,10 @@ class Session:
         """A new turn runs on the session's own model; one the last turn left
         on the fallback says so, so the note before isn't read as standing."""
         self.model = self.main_model
-        last = next((r for r in reversed(records) if r["type"] == "note"
-                     and r.get("kind") in ("fallback", "main_again")), None)
-        if last is not None and last["kind"] == "fallback":
+        last = next((r.entry.get("kind") for r in reversed(records)
+                     if entries.has(r.entry, "note")
+                     and r.entry.get("kind") in ("fallback", "main_again")), None)
+        if last == "fallback":
             self.write("note", kind="main_again",
                        text=MAIN_AGAIN.format(main=self.main_model.name))
 
@@ -319,51 +292,47 @@ class Session:
 
     def resume(self, inbox=None, control=None):
         """Repair an unfinished turn, returning it ready for run()."""
-        records = history.unfinished_turn(self.log.branch())
+        records = self.log.unfinished_turn()
         if not records:
             raise ValueError("no open turn to resume")
-        user = records[0]
+        user = records[0].entry
         if inbox is not None and user.get("inbox") != inbox:
             raise ValueError("the queued message is not the log's open turn")
-        answer = history.final_answer(records)
-        past_end = answer is None and history.ended_fresh(records) is not None
+        answer = timeline.final_answer(records)
+        fresh_end = timeline.ended_fresh(records) if answer is None else None
+        past_end = fresh_end is not None
         if past_end:
-            answer = history.ended_fresh(records)
+            answer = fresh_end
         if answer is None:
             # What the hooks add, before repair writes anything: the files
             # this turn touched that changed while it was cut off, say
             extra = self.hooks.collect("resumed", self, records)
-            text = history.restart_note(records, extra=extra)
-            self.close_dangling_calls(history.UNKNOWN, "unknown")
-            lost = history.lost_reply(self.log.branch())
+            text = timeline.restart_note(records, extra=extra)
+            self.close_dangling_calls(replay.UNKNOWN, "unknown")
+            lost = timeline.lost_reply(self.log.unfinished_turn(), current_turn=True)
             if lost is not None:
-                self.write_reply(lost)
+                self.write_reply(lost.entry)
             self.write("note", kind="restarted", text=text)
         self.back_to_main(self.log.branch())
-        number = max((r.get("step", 0) for r in records), default=0)
+        number = max((r.entry.get("step", 0) for r in records), default=0)
         turn = Turn(
-            self, user["text"], user.get("inbox"), user.get("source"), number,
+            self, attribution.delivered_text(user), user.get("inbox"),
+            user.get("source"), number,
             control=control,
         )
         # Its time up to the cut, the waits on the user not counted as the
         # agent's; the time it was cut off isn't the turn's
-        cut = datetime.fromisoformat(records[-1]["time"])
-        before = (cut - datetime.fromisoformat(user["time"])).total_seconds()
-        waited = sum(r.get("waited", 0) for r in records if r["type"] == "answer")
+        cut = datetime.fromisoformat(records[-1].time)
+        before = (cut - datetime.fromisoformat(records[0].time)).total_seconds()
+        waited = sum(r.entry.get("waited", 0) for r in records
+                     if entries.has(r.entry, "answer"))
         turn.started -= before
         turn.waiting = waited
         turn.answer = answer
         turn.cut_past_its_end = past_end
         if answer is not None:
-            last = next((r for r in reversed(records) if r["type"] == "assistant"), {})
-            turn.reply = last.get("reply", public_reply.sections(answer))
-        for record in reversed(records):
-            if record["type"] == "user":
-                break
-            if record["type"] == "assistant":
-                if not record.get("invalid_reply"):
-                    break
-                turn.reply_format_errors += 1
+            turn.reply = next((r.entry.get("reply") for r in reversed(records)
+                               if entries.has(r.entry, "assistant_reply")), None)
         return turn
 
     def run(self, turn):
@@ -413,13 +382,11 @@ class Session:
 
     def run_step(self, step):
         """One model call plus its tool calls. Returns a Stop, or None."""
-        if step.turn.reply_format_errors >= 2:
-            return Stop("broken_replies", "The model could not format its reply.")
         stop = self.call_with_retries(step)
         if stop is not None:
             return stop
         reply = step.reply
-        step.read_public_reply()
+        step.read_reply()
         fields = step.assistant_record()
         if self.model is not self.main_model:
             # Its price and its window are the fallback's: the price goes with
@@ -430,12 +397,10 @@ class Session:
                 fields["fallback_price"] = price
         self.write("assistant", **fields)
         bad_calls = bool(step.calls) and all(c.error for c in step.calls)
-        step.malformed = step.invalid_reply or step.cut_off or bad_calls or step.empty
+        step.malformed = step.cut_off or bad_calls or step.empty
         stop = self.run_calls(
             step, step.calls, lambda: self.hooks.notify("after_model", step)
         )
-        if step.invalid_reply:
-            return stop
         if step.cut_off:
             self.write("note", kind="cut_off", text=CUT_OFF)
         elif step.empty:
@@ -443,7 +408,7 @@ class Session:
         elif not step.calls:
             # No tool call means the model is answering
             step.turn.answer = reply.content
-            step.turn.reply = step.sections
+            step.turn.reply = None
             if step.turn.control is not None:
                 if step.turn.control.steers():
                     return None
@@ -455,8 +420,9 @@ class Session:
         decision. A parked call leaves the step open: no record until it ends.
 
         Calls next to each other that may run side by side
-        (tools.runs_side_by_side: a read, a search, a fetch from the
-        internet, none of which asks) are decided one by one, run together,
+        (the "side_by_side" trait and allows_side_by_side hooks: a read, a
+        search, a fetch from the internet, none of which asks) are decided
+        one by one, run together,
         and answered in their order; the same call twice waits for the
         first, as the repeat guard holds it back. Every other call runs
         alone, in its place."""
@@ -485,9 +451,9 @@ class Session:
                 stop = self.hooks.decide("step_end", step)
                 step.errors += self.hooks.take_errors()
                 self.write("step", **step.record())
-        if stop and stop.outcome == "answered" and step.sections is not None:
-            step.turn.reply = step.sections
-            step.turn.answer = public_reply.plain(step.sections)
+        if stop and stop.outcome == "answered" and step.content:
+            step.turn.reply = step.legacy_reply
+            step.turn.answer = step.content
         return stop
 
     def call_with_retries(self, step):
@@ -497,16 +463,16 @@ class Session:
             if step.turn.control is not None:
                 step.turn.control.check()
                 self.take_steers(step.turn)
+            self.safe_entries()
             stop = self.hooks.decide("before_model", step)
             if isinstance(stop, ModelAsk):
-                record = self.write(
-                    "ask", ask=f"ask-{secrets.token_hex(16)}", step=step.number,
+                self.park_turn(
+                    step.turn, ask=f"ask-{secrets.token_hex(16)}", step=step.number,
                     call="", tool="", command=stop.command, why=stop.why,
                     reason="", about=stop.about,
                     notes={**stop.notes, "before_model": True},
                     choices=choices(stop.notes),
                 )
-                raise Parked(record)
             if stop is not None:
                 return stop
             try:
@@ -550,25 +516,23 @@ class Session:
         if turn.control is None:
             return
         for steer in turn.control.steers():
-            turn.reply_format_errors = 0
-            turn.unformatted_reply = None
-            fields = history.steer_fields(steer)
+            fields = attribution.steer_fields(steer)
             if turn.inbox:
                 fields["turn_inbox"] = turn.inbox
-            self.write("user", **self.fitted(fields))
-            turn.control.delivered(steer)
+            fields = self.fitted(fields)
+            turn.control.deliver(steer, lambda: self.write("user", **fields))
 
     def fitted(self, fields):
         """A user record's fields, a notice's text fitted by the hooks first
         (one past its share goes to a file), and marked `left_behind` when the
         record its sender started from (`started_from_seq`) is off the current branch:
         a rewind left it behind."""
-        if not history.is_notice(fields):
+        if not attribution.is_notice(fields):
             return fields
         fields = {**fields, "text": self.hooks.pipe("notice", fields["text"], self)}
         started_from = fields.get("started_from_seq")
         if started_from is not None and started_from not in {
-            record["seq"] for record in self.log.branch()
+            record.seq for record in self.log.branch()
         }:
             fields["left_behind"] = True
         return fields
@@ -587,34 +551,19 @@ class Session:
             def on_delta(draft):
                 control.draft(step.number, draft)
 
-        # The stream's reader may still be sending these after a stop, while
-        # the loop goes on writing
-        messages = copy.deepcopy(self.messages)
-        # A resumed turn keeps its saved wording. Logs from before public
-        # replies still need the contract when we ask the model for one.
-        if not public_reply.has_instructions(messages[0]["content"]):
-            messages[0]["content"] += "\n\n" + public_reply.INSTRUCTIONS
-        if step.turn.reply_format_errors:
-            if step.turn.unformatted_reply:
-                messages.append({"role": "assistant",
-                                 "content": step.turn.unformatted_reply})
-            messages.append({"role": "user", "content": public_reply.CORRECTION})
-            schemas = []
-        else:
-            schemas = self.tool_schemas()
+        conversation = self.safe_entries()
+        schemas = self.tool_schemas()
         boundary = self.tool_context.get("tool_boundary")
         if boundary is not None:
-            messages = boundary.redact(messages)
             schemas = boundary.redact(schemas)
-        stop = self.hooks.decide("before_model_request", step, messages, schemas)
+        stop = self.hooks.decide("before_model_request", step, conversation, schemas)
         if stop is not None:
             return stop
         output = {}
         if step.max_output_tokens is not None:
             output["max_output_tokens"] = step.max_output_tokens
         return self.model.call(
-            messages, schemas, check=check, on_delta=on_delta,
-            reply_schema=public_reply.SCHEMA, **output,
+            conversation, schemas, check=check, on_delta=on_delta, **output,
         )
 
     def run_call(self, call, approved=None):
@@ -632,7 +581,7 @@ class Session:
                     "arguments": call.arguments, "result": answer.text,
                     "fields": answer.fields, "failed": answer.failed,
                 }
-                call.arguments = json.dumps(answer.retry_arguments)
+                call.arguments = json.dumps(entries.thaw(answer.retry_arguments))
                 call.args, call.error = tools.check(call.name, call.arguments)
                 call.key = (call.name, tools.normalise(call.arguments))
                 call.notes = {"attempts": [attempt]}
@@ -675,10 +624,11 @@ class Session:
         return True
 
     def take_answer(self, call, answer):
-        """The tool's Result as the call's: its fields, and its text as the
+        """The tool's Result as the call's: its entries, fields and text as the
         log keeps it, one past its share in a file (the tool_result pipe),
         the hooks' remarks below."""
         call.fields, call.failed = answer.fields, answer.failed
+        call.entries = answer.entries
         call.result = self.hooks.pipe("tool_result", answer.text, call)
         # Where its output starts, while the text is the tool's own
         if answer.head and call.result == answer.text:
@@ -693,9 +643,11 @@ class Session:
 
     def goes_side_by_side(self, call, together):
         """Whether the call joins the calls before it that run side by side:
-        well formed, its tool's and its own say it may (tools.
-        runs_side_by_side), and not the same call as one of them."""
-        return (not call.error and tools.runs_side_by_side(call.name, call.args)
+        well formed, its tool carries `side_by_side`, no hook vetoes parallel
+        execution, and not the same call as one of them."""
+        return (not call.error
+                and tools.has_trait(call.name, "side_by_side")
+                and self.hooks.allows("allows_side_by_side", call)
                 and all(other.key != call.key for other in together))
 
     def run_together(self, calls):
@@ -758,8 +710,8 @@ class Session:
             asked["kind"] = decision.kind
             asked["choice_labels"] = decision.labels
         reason = decision.reason or str(call.args.get("reason") or "").strip()
-        record = self.write(
-            "ask", ask=f"ask-{secrets.token_hex(16)}", step=call.step.number,
+        self.park_turn(
+            call.turn, ask=f"ask-{secrets.token_hex(16)}", step=call.step.number,
             call=call.id, tool=call.name, command=command, why=decision.why,
             reason=reason, notes=call.notes,
             choices=(list(decision.labels) if isinstance(decision, Question)
@@ -767,6 +719,12 @@ class Session:
             arguments=call.arguments,
             **asked,
         )
+
+    def park_turn(self, turn, **fields):
+        def write():
+            return self.write("ask", **fields)
+
+        record = write() if turn.control is None else turn.control.write_ask(write)
         raise Parked(record)
 
     def reply(self, fields, control=None):
@@ -776,70 +734,72 @@ class Session:
         `fields`: ask (its id), yes (a plain yes, from the consent check), inbox,
         source, text, consent (the check's verdict or None).
         """
-        records = self.log.branch()
-        ask = history.parked_ask(records)
-        if ask is None or ask["ask"] != fields["ask"]:
+        pending = self.log.unfinished_turn()
+        parked = timeline.parked_ask(pending, current_turn=True)
+        if parked is None or parked.entry.id != fields["ask"]:
             raise ValueError(f"no open ask {fields['ask']!r} in this session")
-        fields = {**fields, "question_text": ask["command"]}
-        if ask.get("kind"):
-            fields["kind"] = ask["kind"]
-        if history.requires_user(ask):
-            if not history.is_user_source(fields.get("source")):
+        ask = parked.entry
+        notes = ask.get("notes") or {}
+        fields = {**fields, "question_text": ask.get("command")}
+        if kind := ask.get("kind"):
+            fields["kind"] = kind
+        if attribution.requires_user(ask):
+            if not attribution.is_user_source(fields.get("source")):
                 raise ValueError("this change needs an answer from the user")
-            if ask.get("notes", {}).get("requires_choice"):
+            if notes.get("requires_choice"):
                 fields["yes"] = fields.get("choice") == "yes"
             if fields.get("choice") in ("yes", "no"):
                 fields["decision"] = ("approve" if fields["choice"] == "yes"
                                       else "decline")
         if (not fields.get("yes") and fields.get("choice") != NO
                 and ask.get("kind", "permission") == "permission"
-                and not ask.get("notes", {}).get("before_model")):
+                and not notes.get("before_model")):
             fields["as_message"] = True
-        pending = history.unfinished_turn(records)
-        user = pending[0]
-        asked = datetime.fromisoformat(ask["time"])
+        user = pending[0].entry
+        asked = datetime.fromisoformat(parked.time)
         waited = (datetime.now().astimezone() - asked).total_seconds()
-        before = (asked - datetime.fromisoformat(user["time"])).total_seconds()
+        before = (asked - datetime.fromisoformat(pending[0].time)).total_seconds()
+        step_number = ask.get("step")
         turn = Turn(
-            self, user["text"], user.get("inbox"), user.get("source"), ask["step"],
+            self, attribution.delivered_text(user), user.get("inbox"),
+            user.get("source"), step_number,
             control=control,
         )
         # Its wall time from the question; the waits on the user, this one and
         # each earlier park's, not counted as the agent's
-        earlier = sum(r.get("waited", 0) for r in pending if r["type"] == "answer")
+        earlier = sum(r.entry.get("waited", 0) for r in pending
+                      if entries.has(r.entry, "answer"))
         turn.started -= before + waited
         turn.waiting = waited + earlier
-        if ask.get("notes", {}).get("before_model"):
+        if notes.get("before_model"):
             self.write("answer", call="", waited=round(waited, 1), **fields)
             return turn
-        step = Step(turn, ask["step"])
+        step = Step(turn, step_number)
         assistant = next(
             r for r in pending
-            if r["type"] == "assistant" and r["step"] == ask["step"]
+            if entries.has(r.entry, "assistant_reply") and r.entry.get("step")
+            == step_number
         )
-        message = assistant["message"]
-        step.sections = assistant.get("reply")
-        if step.sections is None and message.get("content"):
-            step.sections = public_reply.sections(message["content"])
-        step.calls = [
-            Call(step, SimpleNamespace(id=raw["id"], function=SimpleNamespace(
-                name=raw["function"]["name"], arguments=raw["function"]["arguments"],
-            )))
-            for raw in message["tool_calls"]
-        ]
-        answered = {r["call"] for r in pending if r["type"] == "tool"}
-        index = next(i for i, c in enumerate(step.calls) if c.id == ask["call"])
+        saved_reply = assistant.entry
+        entries.ensure_executable(replace(saved_reply, fields=None))
+        step.content = entries.project(saved_reply)
+        step.legacy_reply = saved_reply.get("reply")
+        step.calls = [Call(step, raw) for raw in replay.calls(assistant)]
+        answered = {replay.result_target(r) for r in pending
+                    if entries.has(r.entry, "tool_result")}
+        target = entries.linked_to(ask, "asks_about")
+        index = next(i for i, c in enumerate(step.calls) if c.id == target)
         call = step.calls[index]
-        if "arguments" in ask:
-            call.arguments = ask["arguments"]
+        if "arguments" in (ask.fields or {}):
+            call.arguments = ask.get("arguments")
             call.args, call.error = tools.check(call.name, call.arguments)
             call.key = (call.name, tools.normalise(call.arguments))
-        call.notes.update(ask.get("notes", {}))
+        call.notes.update(entries.thaw(notes))
         later = [c for c in step.calls[index + 1:] if c.id not in answered]
         # Written once the step is rebuilt, so the log never holds an answer the
         # turn couldn't act on
-        self.write("answer", call=ask["call"], waited=round(waited, 1), **fields)
-        turn.unpark = (step, call, later, {**fields, "waited": waited})
+        answer = self.write("answer", call=target, waited=round(waited, 1), **fields)
+        turn.unpark = (step, call, later, {**fields, "waited": waited}, answer.entry)
         return turn
 
     def finish_parked(self, turn):
@@ -849,27 +809,27 @@ class Session:
         it is declined, the rest are closed unstarted, and the turn ends;
         otherwise the call gets CANCELLED, the rest are closed unstarted, and
         the reply joins the turn."""
-        step, call, later, fields = turn.unpark
+        step, call, later, fields, receipt = turn.unpark
         turn.unpark = None
+        answer_choice, text = fields.get("choice"), fields["text"]
         if "private_input" in call.notes:
             def private_answered():
-                call.ran = fields.get("choice") == "yes"
+                call.ran = answer_choice == "yes"
                 results = self.tool_context.get("private_input_results", {})
-                call.result = results.get(fields.get("choice"), fields["text"])
+                call.result = results.get(answer_choice, text)
                 self.answer(call)
 
             return self.run_calls(step, later, private_answered)
         if "question" in call.notes:
             def answered_question():
                 labels = call.notes["question"]["choice_labels"]
-                answer = labels.get(fields.get("choice"), fields["text"])
-                call.result = history.question_result(
-                    {"type": "answer", **fields}, answer)
+                answer = labels.get(answer_choice, text)
+                call.result = attribution.question_result(receipt, answer)
                 call.ran = True
                 self.answer(call)
 
             return self.run_calls(step, later, answered_question)
-        if fields.get("choice") == NO:
+        if answer_choice == NO:
             def decline():
                 call.result, call.denied = DECLINED_STOP, True
                 self.write("tool", **call.record())
@@ -895,12 +855,14 @@ class Session:
 
         return self.run_calls(step, [], cancel)
 
-    def write_reply(self, fields):
+    def write_reply(self, answer):
         """A reply that wasn't a yes joins the turn as the user's message."""
-        record = {"text": fields["text"], "steer": True, "inbox": fields["inbox"]}
-        if fields.get("source") is not None:
-            record["source"] = fields["source"]
-        self.write("user", **record)
+        fields = {
+            "text": answer.get("text"), "steer": True, "inbox": answer.get("inbox"),
+        }
+        if (source := answer.get("source")) is not None:
+            fields["source"] = source
+        self.write("user", **fields)
 
     def call_context(self, call):
         """What the call's tool gets besides its arguments: the session's
@@ -943,8 +905,8 @@ class Session:
         A call interrupted while running already got its own result in execute;
         the calls left on Ctrl+C never started.
         """
-        records = history.unfinished_turn(self.log.branch())
-        for fields in history.closing_results(records, result, closed):
+        records = self.log.unfinished_turn()
+        for fields in timeline.closing_results(records, result, closed):
             self.write("tool", **fields)
 
 

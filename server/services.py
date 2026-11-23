@@ -38,6 +38,9 @@ class Service:
     # Fields of session/send it reads (the protocol declares them), handed on
     # to the user record of the turn the message opens
     message_fields = ()
+    # Ask kinds that only accept replies through a component's private message:
+    # kind → refusal text shown when a generic reply attempts to answer it
+    private_ask_kinds = {}
 
     def attach(self, runtime):
         """The runtime it is service of, once its store is open."""
@@ -46,6 +49,15 @@ class Service:
     def redact(self, value, partial=False):
         """Transform data before it is persisted or returned to an app."""
         return value
+
+    def redact_entry(self, entry):
+        """Transform a conversation entry before it is persisted."""
+        return entry
+
+    def stream_filter(self):
+        """Factory returning a streaming byte filter `(data, final=False) -> bytes`,
+        or None when this service adds no stream filter."""
+        return None
 
     def messages(self):
         """Its messages: name → handler(request), which returns the reply or

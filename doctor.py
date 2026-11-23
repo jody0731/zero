@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import assembly  # noqa: E402
 import paths  # noqa: E402
+import settings  # noqa: E402
 
 MET, UNMET, NOTE = "✓", "✗", "!"
 
@@ -72,21 +73,22 @@ def http_door_lines(run=subprocess.run):
                    f"{agents}")]
 
 
+def config_notes():
+    """Notes reported when reading ZERO's config.toml."""
+    notes = []
+    try:
+        settings.load(notes=notes)
+    except settings.SettingsError as error:
+        notes.append(f"{error}; ZERO runs on the defaults")
+    return [(NOTE, note) for note in notes]
+
+
 def report():
-    """[(mark, line)]: the machine's needs, ZERO's home, its files' notes."""
+    """[(mark, line)]: Python, ZERO's home, config notes, components, HTTP door."""
     lines = python_lines()
-    for need, check in assembly.MACHINE_CHECKS.items():
-        found = check()
-        lines.append((MET, need) if found is None
-                     else (UNMET, f"{need}: no; {found}"))
     lines.append(home_line())
-    lines += [(NOTE, note) for note in assembly.home_file_notes()]
-    search_available, search_status = assembly.search_service_status()
-    lines.append((MET if search_available else NOTE, search_status))
-    # The skills a session here would find, as the folder it runs in says
-    lines += [(NOTE, note) for note in assembly.skill_notes(Path.cwd())]
-    # The MCP servers listed: what ZERO can't use, a command not found
-    lines += [(NOTE, note) for note in assembly.mcp_server_notes()]
+    lines += config_notes()
+    lines += assembly.doctor_lines(Path.cwd())
     lines += http_door_lines()
     return lines
 

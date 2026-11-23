@@ -1,0 +1,259 @@
+"""Session search's three uses, over the index and the session list:
+
+- `query` alone: the sessions whose records match, best first, each with
+  how many of its records match and its best one; the session that asks
+  after the others, since its own words match;
+- `query` and `session`: that session's matching records, best first;
+- `session` and `around`: the records near one, whole, read from the log,
+  `count` on each side; `session` alone, its first records.
+
+A record matches when it holds every word; when none does, the records
+holding any of them are given instead, and the reply says which
+(`matched_by`): a long query of a model's or a person's still finds its
+nearest records.
+
+A session's log keeps the parts of its conversation a rewind left behind
+(core/timeline.py): a record found there is marked `left_behind`. A fork's
+records copied from the session it came from aren't searched in the fork
+(index.py): they are found in that session.
+
+Each use returns the reply `session/search` gives (protocol/messages.py),
+which the tool puts in words for ZERO (tool.py) and the command in lines
+for a person. Every session the list holds is searched: running or done,
+archived, the one asking; a deleted one isn't listed.
+"""
+
+from core import attribution, entries, replay, timeline
+from components.session_search import SETTINGS
+from components.session_search.index import fts_query, named, searchable
+
+# Session search's limits where none are given (a search made without a
+# session's limits or the server's), as the settings declare them: how many
+# sessions or records a search gives and how many on each side of `around`
+# when the caller names no count, and the words of a match's snippet
+DEFAULT_LIMITS = {s.name: s.default for s in SETTINGS}
+# Where a session named alone is read from: its first record (a log's
+# first, the session's settings, isn't searched, so the next comes)
+FIRST_RECORD = 1
+# A session's fields a reply gives
+SESSION_FIELDS = ("id", "title", "workspace", "state", "mode", "archived",
+                  "updated_at")
+
+
+class SearchError(ValueError):
+    """Why no search was made, in words ZERO and a person both read."""
+
+
+def limit(limits, name):
+    """One of session search's limits, as `limits` stand."""
+    return (limits or {}).get(name, DEFAULT_LIMITS[name])
+
+
+def read_header(path, read_record):
+    try:
+        with path.open("rb") as source:
+            return read_record(source.readline(), seq=1)
+    except (FileNotFoundError, ValueError, KeyError):
+        return None
+
+
+def parent_cutoffs(logs, asking, listed, read_record):
+    """Last inherited record in each ancestor, including a fork of a fork."""
+    def header(sid):
+        if sid in listed:
+            return read_header(logs / f"{sid}.jsonl", read_record)
+        return None
+
+    def records(sid):
+        return log_records(logs / f"{sid}.jsonl", read_record) if sid in listed else ()
+
+    return attribution.ancestor_cutoffs(asking, header(asking), header, records)
+
+
+def find(index, sessions, logs, query=None, session=None, around=None,
+         count=None, asking=None, limits=None, recover_discarded=True):
+    """One search. `sessions`: the session list's rows; `logs`: the folder
+    of their logs; `asking`: the session that searches, marked in the reply
+    (None for a client); `limits`: the searching session's, or the server's
+    settings, as they stand."""
+    checked(query, session, around, count)
+    listed = {row["id"]: shown(row, asking) for row in sessions}
+    read_record = index.read_record
+    cutoffs = (None if recover_discarded else
+               parent_cutoffs(logs, asking, listed, read_record))
+    target = one_session(listed, session) if session is not None else None
+    if around is not None and target is None:
+        raise SearchError("around needs session: the session the record is "
+                          "in.")
+    if target is not None and (around is not None or query is None):
+        # A session named alone is read from its start
+        around = FIRST_RECORD if around is None else around
+        if count is None:
+            count = limit(limits, "session_search_each_side")
+        return near(
+            target, logs / f"{target['id']}.jsonl", around, count, cutoffs, read_record,
+        )
+    if count is None:
+        count = limit(limits, "session_search_count")
+    snippet_words = limit(limits, "session_search_snippet_words")
+    words = fts_query(query)
+    if words is None:
+        raise SearchError("query has no word to find." if query else
+                          "query says what to find; session reads a "
+                          "session, near a record with around.")
+    with index.lock:
+        index.catch_up({sid: logs / f"{sid}.jsonl" for sid in listed})
+        reply = matched(index, listed, target, words, count, asking,
+                        snippet_words, cutoffs)
+        reply["matched_by"] = "every word"
+        either = fts_query(query, any_word=True)
+        if reply["record_count"] == 0 and either != words:
+            reply = matched(index, listed, target, either, count, asking,
+                            snippet_words, cutoffs)
+            reply["matched_by"] = "any word"
+    reply["query"] = query
+    marked(reply, logs, read_record)
+    return reply
+
+
+def off_branch(records):
+    """The seqs of a log's records off its current branch: the parts a
+    rewind left behind."""
+    on = {record.seq for record in timeline.branch(records)}
+    return {record.seq for record in records} - on
+
+
+def marked(reply, logs, read_record):
+    """Each record found on a part a rewind left behind marked so."""
+    if "records" in reply:
+        pairs = [(reply["session"]["id"], record) for record in reply["records"]]
+    else:
+        pairs = [(row["id"], row["best"]) for row in reply.get("sessions", [])
+                 if row.get("best")]
+    left = {}
+    for sid, record in pairs:
+        if sid not in left:
+            left[sid] = off_branch(log_records(logs / f"{sid}.jsonl", read_record))
+        if record.get("seq") in left[sid]:
+            record["left_behind"] = True
+
+
+def matched(index, listed, target, words, count, asking, snippet_words, cutoffs=None):
+    """The records an FTS5 query matches: in one session, or by session;
+    each match's snippet `snippet_words` long at most."""
+    if target is not None:
+        total, hits = index.session_hits(words, target["id"], count,
+                                         snippet_words, cutoffs)
+        return {"session": target, "record_count": total, "records": hits}
+    return matching_sessions(index, listed, words, count, asking,
+                             snippet_words, cutoffs)
+
+
+def checked(query, session, around, count):
+    for name, value, kind in (("query", query, str), ("session", session, str)):
+        if value is not None and not isinstance(value, kind):
+            raise SearchError(f"{name} is a string.")
+    for name, value in (("around", around), ("count", count)):
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool)
+        ):
+            raise SearchError(f"{name} is a whole number.")
+    if count is not None and count < 1:
+        raise SearchError("count is 1 or more.")
+
+
+def shown(row, asking):
+    """A session as a reply gives it."""
+    found = {name: row[name] for name in SESSION_FIELDS}
+    found["archived"] = bool(found["archived"])
+    if asking is not None:
+        found["this_session"] = row["id"] == asking
+    return found
+
+
+def one_session(listed, session):
+    """A session by its id or the start of it."""
+    if session in listed:
+        return listed[session]
+    matches = [sid for sid in listed if sid.startswith(session)]
+    if len(matches) == 1:
+        return listed[matches[0]]
+    if not matches:
+        raise SearchError(f"No session's id starts with {session!r}.")
+    raise SearchError(f"{len(matches)} sessions' ids start with {session!r}; "
+                      "more of the id names one.")
+
+
+def matching_sessions(index, listed, words, count, asking, snippet_words, cutoffs=None):
+    """The sessions whose records match, best first, the one that asks
+    after the others: the first `count`, each with its best match's
+    snippet."""
+    matches = index.sessions_matching(words, cutoffs)
+    found = [(sid, n, rowid) for sid, n, rowid in matches if sid in listed]
+    found.sort(key=lambda item: item[0] == asking)
+    first = found[:count]
+    hits = index.hits(words, [rowid for _, _, rowid in first if rowid is not None],
+                      snippet_words)
+    rows = [{**listed[sid], "record_count": n, "best": hits.get(rowid)}
+            for sid, n, rowid in first]
+    return {"session_count": len(found),
+            "record_count": sum(n for _, n, _ in found), "sessions": rows}
+
+
+def log_records(path, read_record):
+    """A log's whole records; a broken line is left out."""
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return ()
+    records = []
+    whole = data[: data.rfind(b"\n") + 1]
+    for seq, line in enumerate(whole.split(b"\n")[:-1], 1):
+        try:
+            records.append(read_record(line, seq=seq))
+        except timeline.NewerLog:
+            return ()
+        except (UnicodeDecodeError, ValueError, KeyError):
+            continue
+    return tuple(records)
+
+
+def near(target, path, around, each_side, cutoffs, read_record):
+    """The searched records nearest record `around`: `each_side` before it,
+    the one at it (or the first after it), `each_side` after; each on a
+    part a rewind left behind marked so."""
+    records = []
+    whole = log_records(path, read_record)
+    left = off_branch(whole)
+    cutoff = (cutoffs or {}).get(target["id"])
+    origins = attribution.attributed_records(
+        whole, target["id"],
+        lambda parent: read_header(path.with_name(f"{parent}.jsonl"), read_record),
+    )
+    for record in replay.transcript(origins):
+        seq = record.seq
+        if cutoffs is not None and seq in left:
+            continue
+        if cutoff is not None and seq > cutoff:
+            continue
+        found = searchable(record)
+        if found is None or not found[2]:
+            continue
+        kind, tool_or_source, text = found
+        event = entries.thaw(attribution.interaction(record, target["id"]))
+        row = {"seq": seq, "kind": kind, "time": record.time, "text": text}
+        if event is not None:
+            row["interaction"] = event
+            row["sender_name"] = attribution.sender_name(
+                event["sender"], event.get("sender_session"),
+            )
+        row.update(named(kind, tool_or_source))
+        if seq in left:
+            row["left_behind"] = True
+        records.append(row)
+    at = next((i for i, r in enumerate(records) if r["seq"] >= around),
+              len(records) - 1)
+    start = max(0, at - each_side)
+    end = at + each_side + 1
+    return {"session": target, "around": around, "records": records[start:end],
+            "earlier_count": start, "later_count": max(0, len(records) - end)}

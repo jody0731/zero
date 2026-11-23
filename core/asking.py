@@ -111,6 +111,12 @@ def choice_labels(choices, offer_text=None, session_scope=None):
     return labels
 
 
+def as_clause(fact):
+    """A crossing's fact as part of another sentence: its first letter small,
+    without its full stop."""
+    return fact[:1].lower() + fact[1:].rstrip(".")
+
+
 def put_to_user(call, ask, why):
     """Pass on why, then ask. The wait is the user's time, not the
     agent's (its working time, usage/, leaves it out)."""

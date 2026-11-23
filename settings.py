@@ -17,7 +17,7 @@ newer one's, say) is reported, left out of the values and kept in the file.
 import json
 import tomllib
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import paths
@@ -48,7 +48,17 @@ class Setting:
     shown: bool = True
     needs: tuple = ()
     runs_on: str | None = None
+    aliases: tuple = field(default=(), compare=False)
+    switchable: bool = field(default=False, compare=False)
+    empty_means_none: bool = field(default=False, compare=False)
+    validate: object = field(default=None, compare=False)
+    model_visible: bool = field(default=False, compare=False)
 
+
+WIRE_FIELDS = (
+    "name", "group", "label", "default", "kind", "choices", "minimum",
+    "maximum", "unset_means", "shown", "needs", "runs_on",
+)
 
 # Every setting ZERO knows, in the settings view's order (add); by name; what
 # holds without config.toml (model None: the model's default, model/); what
@@ -57,16 +67,13 @@ class Setting:
 SETTINGS = []
 BY_NAME = {}
 DEFAULTS = {}
+ALIASES = {}
 SHOWN = []
-# The settings view's order, by name, as the assembly gives it; the rest after
-ORDER = []
 
 
-def add(*declared, order=None):
-    """Know these settings from now on. `order`: the names in the settings
-    view's order, kept for every later add; a setting it doesn't name comes
-    after, in the order added. Adding the same setting again changes
-    nothing; another one by a known name is an error."""
+def add(*declared):
+    """Know these settings from now on, in the order added. Adding the same
+    setting again changes nothing; another one by a known name is an error."""
     for setting in declared:
         if BY_NAME.get(setting.name) is setting:
             continue
@@ -74,15 +81,14 @@ def add(*declared, order=None):
             raise ValueError(f"setting {setting.name!r} declared twice")
         SETTINGS.append(setting)
         BY_NAME[setting.name] = setting
-    if order is not None:
-        ORDER[:] = order
-    place = {name: i for i, name in enumerate(ORDER)}
-    SETTINGS.sort(key=lambda s: place.get(s.name, len(place)))
     BY_NAME.clear()
     DEFAULTS.clear()
+    ALIASES.clear()
     for setting in SETTINGS:
         BY_NAME[setting.name] = setting
         DEFAULTS[setting.name] = setting.default
+        for alias in setting.aliases:
+            ALIASES[alias] = setting.name
     SHOWN[:] = [s for s in SETTINGS if s.shown]
 
 
@@ -107,10 +113,9 @@ class SettingsError(Exception):
     takes: none of it is taken, rather than half of it."""
 
 
-def check(setting, value, mode=None):
+def check(setting, value):
     """What is wrong with `value` for `setting` (a Setting, or its name);
-    None if nothing. `mode`: the server's check of a mode's name, which raises
-    ValueError; this module knows no modes of its own."""
+    None if nothing."""
     if not isinstance(setting, Setting):
         setting = BY_NAME[setting]
     name = setting.name
@@ -124,32 +129,30 @@ def check(setting, value, mode=None):
             return f"{name} has the wrong type"
         if setting.kind == "choice" and value not in setting.choices:
             return f"{name} is one of {', '.join(setting.choices)}"
-        if setting.kind == "mode" and mode is not None:
-            try:
-                mode(value)
-            except ValueError:
-                return f"{name}: unknown mode {value!r}"
-        return None
-    if setting.kind == "int":
+    elif setting.kind == "int":
         if not isinstance(value, int):
             return f"{name} has the wrong type"
         if value < setting.minimum:
             return f"{name} must be {setting.minimum} or more"
+        if setting.maximum is not None and value > setting.maximum:
+            return f"{name} must be {setting.maximum} or less"
     else:
         if not isinstance(value, (int, float)):
             return f"{name} has the wrong type"
         if value <= 0:
             return f"{name} must be above 0"
-    if setting.maximum is not None and value > setting.maximum:
-        return f"{name} must be {setting.maximum} or less"
+        if setting.maximum is not None and value > setting.maximum:
+            return f"{name} must be {setting.maximum} or less"
+    if setting.validate is not None:
+        return setting.validate(value)
     return None
 
 
-def load(path=None, mode=None, notes=None):
+def load(path=None, notes=None):
     """config.toml's settings over the defaults; no file, the defaults.
-    `mode`: as for check. Its tables are the faces' and left out. What this
-    ZERO doesn't know of the file (a newer format, a setting it has no
-    such name for) goes to `notes`, a list, when one is given."""
+    Its tables are the faces' and left out. What this ZERO doesn't know of
+    the file (a newer format, a setting it has no such name for) goes to
+    `notes`, a list, when one is given."""
     path = Path(path) if path else paths.config_file()
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -170,38 +173,22 @@ def load(path=None, mode=None, notes=None):
         data = {name: value for name, value in data.items()
                 if name not in unknown}
     for name, value in data.items():
-        problem = check(name, value, mode)
+        problem = check(name, value)
         if problem:
             raise SettingsError(f"{path}: {problem}")
     return {**DEFAULTS, **data}
 
 
-# Settings named otherwise before, still read under their old names; the next
-# save writes the new ones. context_stop stopped a turn until 0.6.3, where
-# the context is compacted at compact_at_tokens instead
-RENAMED = {
-    "context_stop": "compact_at_tokens",
-    "effort": "thinking_effort", "judge_effort": "judge_thinking_effort",
-    "idle_minutes": "server_idle_minutes", "max_format_errors": "max_broken_replies",
-    "output_limit": "bash_output_chars", "web_chars": "web_fetch_chars",
-    "web_results": "web_search_results", "retry_base": "model_retry_seconds",
-    "step_grant": "extra_steps", "bash_timeout": "bash_foreground_seconds",
-    "judge_timeout": "judge_silence_seconds", "model_timeout": "model_silence_seconds",
-    "consent_timeout": "consent_silence_seconds",
-}
-
-
-# Settings gone since 0.6.3, read and left out (the next save drops them):
-# fixed caps on what the model reads, where only the context's own room
-# bounds a result now (context/)
-RETIRED = ("bash_output_chars", "read_chars", "web_fetch_chars",
-           "web_search_results", "judge_outputs",
-           # Gone since 0.6.4: a turn's budget (rounds/) in place of its steps
-           "max_steps", "extra_steps",
-           # Gone since 0.6.7: no limit stops a turn's spend, ZERO's own
-           # estimate its yardstick (usage/); max_seconds was read as the
-           # standing amount's minutes
-           "standing_budget_minutes", "standing_budget_dollars", "max_seconds")
+# Settings gone since 0.6.x, read and left out (the next save drops them):
+# fixed caps on what the model reads, step budgets, and spend caps, plus their
+# earlier aliases.
+RETIRED = (
+    "bash_output_chars", "output_limit", "read_chars",
+    "web_fetch_chars", "web_chars", "web_search_results", "web_results",
+    "judge_outputs",
+    "max_steps", "extra_steps", "step_grant",
+    "standing_budget_minutes", "standing_budget_dollars", "max_seconds",
+)
 
 
 class LiveSettings(Mapping):
@@ -239,10 +226,10 @@ class LiveSettings(Mapping):
 def renamed(values):
     """`values` under the settings' names as they are now; a new name beats
     its old one where a file has both; retired ones left out."""
-    out = {RENAMED.get(name, name): value for name, value in values.items()
-           if name in RENAMED}
+    out = {ALIASES[name]: value for name, value in values.items()
+           if name in ALIASES}
     out.update({name: value for name, value in values.items()
-                if name not in RENAMED})
+                if name not in ALIASES})
     return {name: value for name, value in out.items() if name not in RETIRED}
 
 
@@ -274,7 +261,7 @@ def unknown_settings(text):
     except tomllib.TOMLDecodeError:
         return {}
     # The full screen's old top-level ones are kept for it to move
-    known = {*DEFAULTS, *RENAMED, *RETIRED, paths.FILE_FORMAT_KEY}
+    known = {*DEFAULTS, *ALIASES, *RETIRED, paths.FILE_FORMAT_KEY}
     return {name: value for name, value in data.items()
             if name not in known and not isinstance(value, dict)}
 
@@ -330,15 +317,14 @@ class Config:
     keeps the settings it had, and `error` says what is wrong; a file broken
     at the first read starts the server on the defaults, the error said."""
 
-    def __init__(self, path=None, mode=None):
+    def __init__(self, path=None):
         self.path = Path(path) if path else paths.config_file()
-        self.mode = mode
         self.stamp = stamp(self.path)
         self.error = None
         # What the last read didn't know of the file (paths.unknown_note)
         self.notes = []
         try:
-            self.values = load(self.path, mode, self.notes)
+            self.values = load(self.path, self.notes)
             for note in self.notes:
                 print(f"ZERO's server: {note}", flush=True)
         except SettingsError as e:
@@ -352,7 +338,7 @@ class Config:
             self.stamp = now
             try:
                 notes = []
-                self.values = load(self.path, self.mode, notes)
+                self.values = load(self.path, notes)
                 self.notes = notes
                 self.error = None
             except SettingsError as e:
@@ -365,10 +351,14 @@ class Config:
         group, label, default, kind, choices, minimum, unset_means, shown, needs and
         runs_on."""
         values = self()
-        return [{**asdict(s), "choices": list(s.choices),
-                 "needs": [list(pair) for pair in s.needs],
-                 "value": values[s.name]}
-                for s in SETTINGS]
+        rows = []
+        for s in SETTINGS:
+            row = {field: getattr(s, field) for field in WIRE_FIELDS}
+            row["choices"] = list(s.choices)
+            row["needs"] = [list(pair) for pair in s.needs]
+            row["value"] = values[s.name]
+            rows.append(row)
+        return rows
 
     def set(self, name, value):
         """Write one setting; what is wrong with it, or None once written."""
@@ -377,7 +367,7 @@ class Config:
         self()
         if self.error is not None:
             return "config.toml can't be read: fix it first"
-        problem = check(name, value, self.mode)
+        problem = check(name, value)
         if problem:
             return problem
         save({**self.values, name: value}, self.path)

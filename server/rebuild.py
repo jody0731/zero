@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from core import asking, history
+from core import asking, attribution, entries, timeline
 
 # A turn's outcomes that leave its session failed
 FAILED = ("crashed", "cut_off", "failed")
@@ -40,27 +40,28 @@ def adopted_row(sid, records, title):
     before 7.5.2) its first message's words and sender, `title(text)` its
     title (its id, with no message); what it runs with as the log says.
     None for a log with no header, not a session's."""
-    if not records or records[0].get("type") != "session":
+    if not records or not entries.has(records[0].entry, "header"):
         return None
-    header = records[0]
+    header = records[0].entry
     row = dict(header.get("row") or {})
     if "title" not in row or "source" not in row:
-        first = next((r for r in records if r["type"] == "user"
-                      and not r.get("steer")), None)
-        text = (first or {}).get("text", "").strip()
+        first = next((r.entry for r in records if attribution.is_turn_input(r.entry)
+                      and not r.entry.get("steer")), None)
+        text = attribution.delivered_text(first).strip() if first else ""
+        source = first.get("source") if first else None
         row.setdefault("title", title(text) if text else sid)
-        row.setdefault("source", (first or {}).get("source") or ADOPTED_SOURCE)
+        row.setdefault("source", source or ADOPTED_SOURCE)
     forked = header.get("forked_from") or {}
     if forked:
         row.setdefault("parent", forked.get("session"))
         row.setdefault("started_by", forked.get("started_by"))
     settings = header.get("settings") or {}
-    now = history.running_with(records)
+    now = timeline.running_with(records)
     row["model"] = now.get("model") or header.get("model")
     row["mode"] = now.get("mode") or header.get("mode") or settings.get("mode")
     row["workspace"] = (now.get("workspace") or settings.get("workspace") or "/")
-    row.setdefault("created_at", timestamp(header.get("time")))
-    row["updated_at"] = timestamp(records[-1].get("time"))
+    row.setdefault("created_at", timestamp(records[0].time))
+    row["updated_at"] = timestamp(records[-1].time)
     return row
 
 
@@ -72,7 +73,7 @@ class KernelRows:
     end_seq: int = 0
     log_seq: int = 0
     # The original message that owns the current unfinished turn.
-    open_turn: dict | None = None
+    open_turn: timeline.LogRecord | None = None
     # Every ask the log holds, as the asks table keeps it
     asks: list = field(default_factory=list)
     # Each inbox message the log names: id → delivered or done
@@ -82,11 +83,12 @@ class KernelRows:
 def labels_of(ask):
     """An `ask` record's answers with their words, as the asks table keeps
     them (JSON)."""
-    if ask.get("kind") in ("question", "secret"):
-        return json.dumps(ask["choice_labels"])
-    labels = asking.choice_labels(ask.get("choices") or asking.PLAIN_CHOICES,
-                                  (ask.get("notes") or {}).get("offer_text"),
-                                  (ask.get("notes") or {}).get("session_scope"))
+    entry = ask.entry
+    if entry.get("kind") not in (None, "permission"):
+        return json.dumps(entries.thaw(entry.get("choice_labels")))
+    notes = entry.get("notes") or {}
+    labels = asking.choice_labels(entry.get("choices") or asking.PLAIN_CHOICES,
+                                  notes.get("offer_text"), notes.get("session_scope"))
     return json.dumps(labels)
 
 
@@ -97,10 +99,13 @@ def timestamp(iso):
 def state_of(records):
     """What the branch's last turn left the session: waiting on an ask,
     running (cut off), failed, or idle."""
-    if history.unfinished_turn(records):
-        return "waiting" if history.parked_ask(records) else "running"
-    ends = [r for r in records if r["type"] == "turn_end"]
-    return "failed" if ends and ends[-1].get("outcome") in FAILED else "idle"
+    pending = timeline.unfinished_turn(records)
+    if pending:
+        ask = timeline.parked_ask(pending, current_turn=True)
+        return "waiting" if ask is not None else "running"
+    end = next((r.entry for r in reversed(records) if entries.has(r.entry, "turn_end")),
+               None)
+    return "failed" if end and end.get("outcome") in FAILED else "idle"
 
 
 def kernel_rows(records):
@@ -109,41 +114,42 @@ def kernel_rows(records):
     rows = KernelRows()
     if not records:
         return rows
-    branch = history.branch(records)
+    branch = timeline.branch(records)
     rows.state = state_of(branch)
-    rows.log_seq = records[-1].get("seq", 0)
-    parked = history.parked_ask(branch)
+    rows.log_seq = records[-1].seq
+    pending = timeline.unfinished_turn(branch)
+    parked = timeline.parked_ask(pending, current_turn=True)
     answers = {}
     for record in records:
-        if record["type"] == "answer":
-            answers.setdefault(record.get("ask"), record)
+        if entries.has(record.entry, "answer"):
+            answers.setdefault(entries.linked_to(record.entry, "answers"), record)
     begun, done = [], set()
     # The inbox id of the turn under way, as the log is read
     turn = None
-    inherited = (records[0].get("forked_from") or {}).get("seq", 0)
-    pending = history.unfinished_turn(branch)
-    if pending and pending[0].get("seq", 0) > inherited and pending[0].get("inbox"):
+    inherited = (records[0].entry.get("forked_from") or {}).get("seq", 0)
+    if pending and pending[0].seq > inherited and pending[0].entry.get("inbox"):
         rows.open_turn = pending[0]
     for record in records:
-        if record.get("seq", 0) <= inherited:
+        if record.seq <= inherited:
             continue
-        kind, inbox = record["type"], record.get("inbox")
-        if kind == "user" and not record.get("steer"):
-            turn = inbox
-            if inbox is not None:
-                begun.append(inbox)
-        elif kind == "user" and inbox is not None:
-            done.add(inbox)
-        elif kind == "turn_end":
-            rows.end_seq = max(rows.end_seq, record.get("seq", 0))
+        entry = record.entry
+        inbox = entry.get("inbox")
+        if attribution.is_turn_input(entry):
+            if not entry.get("steer"):
+                turn = inbox
+                if inbox is not None:
+                    begun.append(inbox)
+            elif inbox is not None:
+                done.add(inbox)
+        elif entries.has(entry, "turn_end"):
+            rows.end_seq = max(rows.end_seq, record.seq)
             if inbox is not None:
                 done.add(inbox)
             turn = None
-        elif kind == "answer" and inbox is not None:
+        elif entries.has(entry, "answer") and inbox is not None:
             done.add(inbox)
-        elif kind == "ask":
-            rows.asks.append(ask_row(record, turn, answers.get(record["ask"]),
-                                     parked))
+        elif entries.has(entry, "ask"):
+            rows.asks.append(ask_row(record, turn, answers.get(entry.id), parked))
     rows.inbox = {id: "delivered" for id in begun}
     rows.inbox.update({id: "done" for id in done})
     return rows
@@ -153,23 +159,25 @@ def ask_row(ask, turn, answer, parked):
     """An `ask` record as the asks table keeps it: closed by its answer; open
     while its turn waits on it; else cancelled (its turn ended without
     one)."""
-    if answer is not None:
-        status = ("answered" if ask.get("kind") in ("question", "secret") else
-                  "approved" if answer.get("yes") else "cancelled")
-    elif parked is not None and parked["ask"] == ask["ask"]:
+    entry = ask.entry
+    answered = answer.entry if answer is not None else None
+    if answered is not None:
+        status = ("answered" if entry.get("kind") not in (None, "permission") else
+                  "approved" if answered.get("yes") else "cancelled")
+    elif parked is not None and parked.entry.id == entry.id:
         status = "open"
     else:
         status = "cancelled"
     return {
-        "id": ask["ask"], "call": ask.get("call") or "", "turn": turn or "",
-        "tool": ask.get("tool") or "", "command": str(ask.get("command", "")),
-        "why": ask.get("why") or "", "reason": ask.get("reason") or "",
-        "about": ask.get("about"), "status": status,
-        "created_at": timestamp(ask.get("time")) or 0.0,
-        "closed_at": timestamp(answer.get("time")) if answer else None,
-        "reply": answer.get("inbox") if answer else None,
-        "source": answer.get("source") if answer else None,
+        "id": entry.id, "call": entries.linked_to(entry, "asks_about") or "",
+        "turn": turn or "", "tool": entry.get("tool") or "",
+        "command": str(entry.get("command", "")), "why": entry.get("why") or "",
+        "reason": entry.get("reason") or "", "about": entry.get("about"),
+        "status": status, "created_at": timestamp(ask.time) or 0.0,
+        "closed_at": timestamp(answer.time) if answer else None,
+        "reply": answered.get("inbox") if answered else None,
+        "source": answered.get("source") if answered else None,
         "choice_labels": labels_of(ask),
-        "kind": ask.get("kind", "permission"),
-        "requires_user": history.requires_user(ask),
+        "kind": entry.get("kind", "permission"),
+        "requires_user": attribution.requires_user(entry),
     }

@@ -4,9 +4,9 @@ Every app goes through it: the full screen, the plain commands (each mirrors
 one message), other agents (through `zero mcp serve`) and apps to come, in any
 language. A client sends one JSON object on one line and gets one line back:
 
-    {"message": "server/hello", "protocol": 6}
-        → {"ok": true, "protocol": 6, "version": "0.7.7.4.12", "pid": 1234, ...}
-    {"message": "session/submit", "protocol": 6, "id": "<uuid>", "text": "...",
+    {"message": "server/hello", "protocol": 8}
+        → {"ok": true, "protocol": 8, "version": "0.7.9.3", "pid": 1234, ...}
+    {"message": "session/submit", "protocol": 8, "id": "<uuid>", "text": "...",
      "source": "cli", "workspace": "/a/folder", "when_busy": "steer"}
         → {"ok": true, "admitted": true, "session": "<id>",
            "handled_as": "started" | "steered" | "queued" | "reply"}
@@ -20,9 +20,9 @@ of them. Each message that changes something carries an `id` the sender
 picks, and the server runs an id once: sent again, the first reply comes back
 (`replayed`), so a retry after a dropped connection is safe. MESSAGES below
 holds each one's fields and reply as JSON Schema, the rows and records its
-replies carry as named types (ROWS, RECORDS); protocol/schema.json, which
-ships, is written from it (protocol/schema.py), so an app in any language is
-built against that file.
+replies carry as named types (ROWS, RECORD, ENTRY); protocol/schema.json,
+which ships, is written from it (protocol/schema.py), so an app in any
+language is built against that file.
 
 Where the server's Unix socket can tell who connects, it proves its peer;
 where it can't, a request proves the user with `token`, the text of the token
@@ -33,8 +33,10 @@ Two messages stay open and stream events, one JSON object a line:
 `withdrawn`, what a stop gave back; `settled`, nothing more happens on its
 own, also sent after the catch-up when it holds already; and `draft`, the
 model's reply as it streams in, whole so far, ten a second at most, never
-logged), and `session/list` with `watch` (the list, then the whole list again
-each time it changes). Each ends with a `bye` and its reason when the server
+logged), and `session/list` with `watch` (the opening `sessions` snapshot,
+then incremental `upsert`/`remove` diffs as sessions change, or a full
+`sessions` resync if a slow watcher falls past the diff ring buffer). Each
+ends with a `bye` and its reason when the server
 closes it ("stopped": stay down until the user types; "restart": a newer
 build, reconnect at once; "behind": the client read too slowly and the
 events waiting for it passed their cap, so it watches again from its last
@@ -48,6 +50,10 @@ registry and runs in its own folder; so a client imports this, and never a
 component. Which messages only look, so that ZERO's own commands may send
 them, is said by whoever serves them (server/server.py, a part's `looking`).
 """
+
+import copy
+import json
+from pathlib import Path
 
 # The variable every command ZERO runs finds its session's id in: a
 # workflow's zero names that session in `for_session` (subagent/send)
@@ -110,7 +116,8 @@ MESSAGE_ID = {**STRING, "minLength": 1, "maxLength": 200,
 SOURCE = {**STRING, "description": "who sends it: a client's own name"}
 # What every request may carry besides its message's own fields
 PROTOCOL_FIELD = {**INTEGER, "description": "the protocol the request is "
-                  "written in; none: 4, the last before requests named it"}
+                  "written in; omitted requests are read as 4 and refused "
+                  "by servers with OLDEST > 4"}
 TOKEN_FIELD = {**STRING, "description": "the user's token, the token file's "
                "text: needed where the socket can't tell who connects; a "
                "wrong one is refused"}
@@ -136,7 +143,7 @@ UNKNOWN_FIELDS = {**STRINGS, "description": "the request's fields this "
                   "server's protocol doesn't have, left out"}
 
 
-# The user's meter of a session's context (core/history.py's context_meter):
+# The user's meter of a session's context (core/timeline.py's context_meter):
 # null before its first model call
 CONTEXT_METER = maybe({
     "type": "object",
@@ -147,16 +154,6 @@ CONTEXT_METER = maybe({
                    "share of that call's prompt the cache served",
 })
 
-# What a command's call carries beside its text, as its tool declares it
-# (its output schema, MCP's structuredContent): the ones an app shows
-COMMAND_FIELDS = {
-    "exit_code": {**INTEGER, "description": "its exit code, once it ended"},
-    "wall_seconds": {**NUMBER, "description": "how long it ran here"},
-    "job_id": {**STRING, "description": "the background job it started, or "
-               "was moved to past its timeout"},
-    "timed_out": {**BOOLEAN, "description": "it ran past its timeout"},
-}
-
 # What an ask's answers are, each with the words its box shows
 CHOICE_LABELS = {
     "type": "object", "additionalProperties": STRING,
@@ -164,12 +161,11 @@ CHOICE_LABELS = {
                    "ask's box shows for it",
 }
 
-# The rows replies carry, each built from the store by one function in the
-# server (server/replies.py, a service's own rows), so a column renamed
-# there changes no reply: schema.json names them row.<name>
+# The kernel's own rows (component `protocol.json` files add theirs and extend
+# these via `rows` / `row_extensions`): schema.json names them row.<name>
 ROWS = {
     "ask": shape("a question waiting for the user's answer", {
-        "kind": {"type": "string", "enum": ["permission", "question", "secret"]},
+        "kind": {"type": "string", "enum": ["permission", "question"]},
         "id": {**STRING, "description": "the ask's id: session/send's "
                "reply_to"},
         "tool": STRING,
@@ -206,80 +202,59 @@ ROWS = {
         "pending": {**STRINGS, "description": "what a set changed that a "
                     "running or waiting turn still holds from before"},
         "ask": maybe(row("ask")),
-        "jobs": {**INTEGER, "description": "its running background jobs"},
-        "rounds": {**maybe(STRING), "description": "its open work in rounds, "
-                   "in a line"},
-    }),
-    "mode": shape("one of the modes a session runs in", {
-        "name": STRING,
-        "about": {**STRING, "description": "its sandbox and who answers its "
-                  "asks, in a line"},
-        "in_cycle": {**BOOLEAN, "description": "a key that steps through the "
-                     "modes lands on it (false: chosen by its name only)"},
-    }),
-    "job": shape("a background job", {
-        "id": STRING, "session": SESSION, "command": STRING,
-        "pid": INTEGER,
-        "state": one_of("running", "ended", "stopped", "lost"),
-        "exit_code": maybe(INTEGER),
-        "started_at": NUMBER, "ended_at": maybe(NUMBER),
-        "due_at": {**maybe(NUMBER), "description": "when the model's "
-                   "estimate runs out"},
-        "stopped_by": maybe(one_of("model", "user")),
-        "state_text": {**STRING, "description": "its state in words, as the "
-                       "model reads it"},
-    }),
-    "rounds": shape("a session's work in rounds", {
-        "id": STRING, "session": SESSION, "objective": STRING,
-        "state": STRING,
-        "round_count": {**INTEGER, "description": "the round under way, or "
-                        "the last"},
-        "estimate_rounds": INTEGER, "estimate_minutes": NUMBER,
-        "estimate_dollars": NUMBER,
-        "spent_minutes": NUMBER, "spent_dollars": NUMBER,
-        "last_status": maybe(one_of("going_on", "done", "stuck")),
-        "started_at": NUMBER, "ended_at": maybe(NUMBER),
-        "summary": {**STRING, "description": "the run in a line"},
     }),
 }
 
-MODEL_FAILURE = {
+ENTRY_REF = {"$ref": "#/$defs/entry"}
+ENTRY_TYPE = {**STRING, "pattern": r"^[^/\s]+/[^/\s]+$"}
+ENTRY_ID = {**STRING, "pattern": r"\S"}
+ENTRY_ORIGIN = one_of("user", "system", "model", "tool")
+ENTRY_TIME = {**STRING, "format": "date-time"}
+ENTRY = {
     "type": "object",
-    "description": "What happened on a model request, with provider details redacted",
-    "required": ["operation", "server", "server_title", "next_action"],
+    "description": "A conversation entry. Nested entries inherit origin and time.",
+    "required": ["type"],
     "additionalProperties": False,
     "properties": {
-        "operation": one_of("generate_reply", "test_model", "compact_context"),
-        "server": STRING,
-        "server_title": STRING,
-        "http_status": INTEGER,
-        "provider_code": STRING,
-        "provider_message": STRING,
-        "observation": STRING,
-        "next_action": one_of("retry", "fallback", "stop"),
-        "fallback": STRING,
+        "type": ENTRY_TYPE,
+        "id": maybe(ENTRY_ID),
+        "origin": maybe(ENTRY_ORIGIN),
+        "created_at": maybe(ENTRY_TIME),
+        "links": maybe({"type": "array", "items": {
+            "type": "object", "required": ["relation", "target_id"],
+            "additionalProperties": False,
+            "properties": {"relation": ENTRY_ID, "target_id": ENTRY_ID},
+        }}),
+        "fields": maybe(OBJECT),
+        "entries": maybe({"type": "array", "items": ENTRY_REF}),
     },
 }
-MODEL_FAILURE_REF = {"$ref": "#/$defs/model_failure"}
+TIMELINE_ENTRY = {
+    "allOf": [ENTRY_REF, {
+        "type": "object", "required": ["id", "origin", "created_at"],
+        "properties": {"id": ENTRY_ID, "origin": ENTRY_ORIGIN,
+                       "created_at": ENTRY_TIME},
+        "additionalProperties": True,
+    }],
+}
 
-# A log record's own fields, which every record has; a record holds more,
-# which an app may skip, and an older log's records have only what they had
-# then (a field below that is missing says nothing)
+# Protocol 8 wire record: a native timeline Entry with its log position and
+# server-computed display hints (zero flat Protocol 4-7 fields at top level).
 RECORD_FIELDS = {
     "seq": {**INTEGER, "description": "its place in the session's log"},
-    "type": STRING,
-    "interaction": {"type": "object", "required": ["sender", "action", "target"],
-                    "properties": {"sender": STRING, "action": STRING,
-                                   "sender_session": STRING, "target": OBJECT}},
-    "sender_name": STRING,
-    "audience": {**STRING, "description": "model: internal context, not "
-                 "shown in a person's conversation"},
-    "model_failure": MODEL_FAILURE_REF,
     "time": {**STRING, "description": "when it was written (ISO 8601, with "
              "its offset)"},
+    "entry": {"$ref": "#/$defs/entry.timeline"},
+    "parent": {**INTEGER, "description": "the seq a rewind returns to"},
+    "audience": {**STRING, "description": "model: internal context, not "
+                 "shown in a person's conversation"},
+    "sender_name": STRING,
+    "notice_source": {**STRING, "description": "what sent this notice; "
+                      "it is not a person's message"},
+    "call_summaries": {"type": "object", "additionalProperties": STRING,
+                       "description": "each of its tool calls by id, as "
+                       "an ask shows it"},
 }
-# What an app reads of each kind of record, as session/read's rows and
-# session/watch's events carry them: schema.json names them record.<type>
 PUBLIC_REPLY = {
     "type": "object", "required": ["answer", "why", "next"],
     "additionalProperties": False,
@@ -288,113 +263,41 @@ PUBLIC_REPLY = {
         "additionalProperties": False, "properties": {"user": STRING, "zero": STRING},
     }},
 }
-RECORDS = {
-    "session": {
-        "note": {**STRING, "description": "a line the session's start "
-                 "carries (a fork's)"},
-    },
-    "user": {
-        "text": STRING, "source": maybe(STRING),
-        "notice": BOOLEAN,
-        "reference": STRING,
-        "notice_source": {**STRING, "description": "what sent this notice; "
-                          "it is not a person's message"},
-        "inbox": {**STRING, "description": "the message's id"},
-        "steer": {**BOOLEAN, "description": "sent while a turn ran"},
-        "continue": {**BOOLEAN, "description": "a turn went on with no new "
-                     "message"},
-    },
-    "assistant": {
-        "reply": PUBLIC_REPLY,
-        "message": {**OBJECT, "description": "the model's message: content "
-                    "and tool_calls"},
-        "call_summaries": {"type": "object", "additionalProperties": STRING,
-                           "description": "each of its tool calls by id, as "
-                           "an ask shows it"},
-        "prompt_tokens": maybe(INTEGER), "cached_tokens": maybe(INTEGER),
-        "completion_tokens": maybe(INTEGER),
-    },
-    "tool": {
-        "tool": {**STRING, "description": "the tool's name"},
-        "arguments": {**STRING, "description": "the call's arguments, as "
-                      "the model wrote them (JSON); for a call made through "
-                      "another tool, those it gave for this one"},
-        "called_through": {**STRING, "description": "the tool the model "
-                           "called, which called this one by its name "
-                           "(missing: it called this one itself)"},
-        "result": {**STRING, "description": "the answer the model read"},
-        "ran": {**BOOLEAN, "description": "the tool ran"},
-        "denied": {**BOOLEAN, "description": "it was refused, so never ran"},
-        "bad_call": {**BOOLEAN, "description": "the call was malformed"},
-        "failed": {**BOOLEAN, "description": "it ran and failed (missing: "
-                   "it didn't)"},
-        "output_at": {**INTEGER, "description": "where the tool's own output "
-                      "starts in `result`, after its head (missing: no such "
-                      "split)"},
-        "fields": {"type": "object", "properties": COMMAND_FIELDS,
-                   "description": "what its tool declares beside its text; "
-                   "a command's are listed"},
-        "saved_path": {**STRING, "description": "the file its whole result "
-                       "was saved in, past its share of the context "
-                       "(missing: none)"},
-    },
-    "ask": {
-        "kind": STRING,
-        "ask": {**STRING, "description": "the ask's id"},
-        "tool": STRING, "command": STRING, "why": STRING, "reason": STRING,
-        "about": STRING,
-        "choices": STRINGS,
-        "choice_labels": CHOICE_LABELS,
-    },
-    "answer": {
-        "question_text": STRING, "text": STRING, "choice": STRING,
-        "kind": STRING,
-        "ask": STRING, "yes": BOOLEAN, "source": maybe(STRING),
-    },
-    "note": {
-        "kind": STRING, "text": STRING,
-    },
-    "retry": {
-        "step": INTEGER, "retry": INTEGER, "error": STRING, "delay": NUMBER,
-    },
-    "switch": {
-        "from": OBJECT, "to": {**OBJECT, "description": "what changed, by "
-                               "name, to its new value"},
-    },
-    "compaction": {
-        "reason": STRING, "tokens_before": INTEGER, "tokens_after": INTEGER,
-        "summary": maybe(STRING),
-        "instructions": {**OBJECT, "description": "what its askers said the "
-                         "handoff keeps, by who asked"},
-    },
-    "compaction_failed": {"reason": STRING, "error": STRING},
-    "nothing_to_compact": {"reason": STRING},
-    "rewind": {
-        "left_from": {**INTEGER, "description": "the first record it left "
-                      "behind"},
-        "left_to": {**INTEGER, "description": "the last record it left "
-                    "behind"},
-    },
-    "turn_end": {
-        "reply": PUBLIC_REPLY,
-        "outcome": STRING, "answer": maybe(STRING),
-        "detail": maybe(STRING), "error": maybe(STRING),
-        "seconds": NUMBER,
-    },
-}
-# What an app reads of a tool call's record (record.tool), kept under its
-# old name for the readers of 7.1's
-TOOL_RECORD = shape("a tool call and its answer", {
-    "type": {"const": "tool"}, **RECORDS["tool"],
-}, open_to_more=True)
 RECORD = {
-    "type": "object", "description": "a record of a session's log: what an "
-    "app reads of each kind is record.<type>",
-    "properties": RECORD_FIELDS, "required": ["seq", "type"],
-    "additionalProperties": True,
+    "type": "object",
+    "description": "a record of a session's log as a native timeline Entry",
+    "properties": RECORD_FIELDS,
+    "required": ["seq", "time", "entry"],
 }
 RECORD_ROWS = {"type": "array", "items": RECORD, "description": "the log's "
                "records"}
+SESSION_LIST_STREAM = {
+    "description": "opening snapshot, incremental diffs, or bye",
+    "oneOf": [
+        {
+            "type": "object",
+            "properties": {"sessions": rows("session", "the whole list")},
+            "required": ["sessions"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "upsert": rows("session", "sessions added or changed"),
+                "remove": {**STRINGS, "description": "session ids removed "
+                           "or filtered out"},
+            },
+            "minProperties": 1,
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"bye": STRING},
+            "required": ["bye"],
+            "additionalProperties": False,
+        },
+    ],
+}
 
 ADMITTED = {
     "admitted": {**BOOLEAN, "description": "false: this id was sent before "
@@ -403,13 +306,9 @@ ADMITTED = {
     "handled_as": one_of("started", "steered", "queued", "reply"),
 }
 CHOICES = ("yes", "session", "saved", "no")
-# What a session's next turn runs with
+# What a session's next turn runs with (extended by component `protocol.json`).
 RUNS_WITH = shape("what a session's next turn runs with", {
     "mode": STRING, "model": STRING, "workspace": STRING,
-    "thinking_effort": STRING,
-    "judge_model": {**maybe(STRING), "description": "null: the session's "
-                    "own model"},
-    "judge_thinking_effort": STRING,
 })
 # What keeps the server up, by kind: the sessions or jobs each names
 BUSY_WITH = {"type": "object", "additionalProperties": STRINGS,
@@ -429,11 +328,12 @@ SETTLED = {
 
 
 def message(about, fields=None, required=(), reply=None, stream=None,
-            changes=False):
+            changes=False, *, timeout_seconds=30, stamp_source=False):
     """One message: what it does, its fields (name → schema), which of them
     it must carry, its reply's fields (besides "ok"), for a message that
-    stays open the events it streams, and whether it changes something:
-    then it carries an `id`, which the server runs once."""
+    stays open the events it streams, whether it changes something (then it
+    carries an `id`, which the server runs once), its client timeout, and
+    whether the client stamps its own source on outgoing requests."""
     fields = dict(fields or {})
     required = tuple(required)
     reply = dict(reply or {})
@@ -445,21 +345,16 @@ def message(about, fields=None, required=(), reply=None, stream=None,
     return {
         "about": about, "fields": fields, "required": required,
         "reply": reply, "stream": stream, "changes": changes,
+        "timeout_seconds": timeout_seconds, "stamp_source": stamp_source,
     }
 
 
+# Extra JSON Schema `$defs` contributed by component `protocol.json` files.
+DEFS = {}
+
+# The 21 kernel messages; component messages and extensions load from
+# `components/*/protocol.json` below without importing any component code.
 MESSAGES = {
-    "vault/answer": message(
-        "Supply private values directly to a waiting vault request.",
-        {"session": SESSION, "ask": STRING, "source": SOURCE,
-         "values": {"type": "object", "additionalProperties": STRING},
-         "cancel": BOOLEAN}, required=("session", "ask"),
-        reply={"saved": BOOLEAN}, changes=True,
-    ),
-    "vault/status": message(
-        "The vault count and where its encryption key is kept.",
-        reply={"status": STRING},
-    ),
     "server/hello": message(
         "The server's versions and what keeps it busy; a client's first look.",
         {"protocol": {**INTEGER, "description": "the client's protocol; the "
@@ -500,8 +395,6 @@ MESSAGES = {
             "title": {**STRING, "description": "initial title for a new session"},
             "text": STRING, "session": maybe(SESSION),
             "mode": maybe(STRING), "model": maybe(STRING), "source": SOURCE,
-            "thinking_effort": {**maybe(STRING), "description": "a new session's "
-                                "thinking effort: off, low, high or max"},
             "reply_to": {**maybe(STRING), "description": "the open ask's id: "
                          "this text answers it"},
             "workspace": {**maybe(STRING), "description": "a new session's "
@@ -509,9 +402,6 @@ MESSAGES = {
             "when_busy": one_of("steer", "queue"),
             "choice": {**STRING, "description": "one of the open ask's "
                        "`choices`, as picked at its box"},
-            "rounds": {**BOOLEAN, "description": "the message is to be worked "
-                       "on in rounds: ZERO is told, and its estimate goes to "
-                       "the user"},
         },
         required=("text", "source"),
         reply=ADMITTED,
@@ -536,8 +426,8 @@ MESSAGES = {
         changes=True,
     ),
     "session/list": message(
-        "The sessions, each with its open ask; with `watch`, the list again "
-        "at each change (archived ones left out).",
+        "The sessions, each with its open ask; with `watch`, the opening "
+        "snapshot then incremental `upsert`/`remove` diffs as sessions change.",
         {
             "archived": {**maybe(BOOLEAN), "description": "only the archived "
                          "(true), the others (false), or all (null)"},
@@ -546,7 +436,7 @@ MESSAGES = {
             "keeps_server_up": KEEPS_SERVER_UP,
         },
         reply={"sessions": rows("session", "one row a session")},
-        stream={"sessions": rows("session", "the whole list"), "bye": STRING},
+        stream=SESSION_LIST_STREAM,
     ),
     "session/deliveries": message(
         "Delivery status of the named messages in this session.",
@@ -573,7 +463,7 @@ MESSAGES = {
         stream={"record": RECORD, "settled": SETTLED,
                 "draft": shape("the current model step as it streams", {
                     "step": INTEGER, "text": STRING, "reasoning": INTEGER,
-                    "calls": STRINGS, "reply": PUBLIC_REPLY,
+                    "calls": STRINGS,
                 }),
                 "withdrawn": OBJECT, "earlier_count": INTEGER,
                 "context": CONTEXT_METER, "bye": STRING},
@@ -604,18 +494,6 @@ MESSAGES = {
         "Delete a session: its files to the desktop's trash or ZERO's.",
         {"session": SESSION}, required=("session",),
         reply={"trash": STRING},
-        changes=True,
-    ),
-    "session/compact": message(
-        "Compact a session's context: at once when it rests, before the next "
-        "step when its turn runs.",
-        {"session": SESSION,
-         "instructions": {**maybe(STRING), "description": "the user's words "
-                          "on what the handoff keeps, beside its fixed form; "
-                          "with them a handoff is written"}},
-        required=("session",),
-        reply={"compacting": {"type": "string",
-                              "enum": ["now", "before_next_step"]}},
         changes=True,
     ),
     "session/user_messages": message(
@@ -660,264 +538,12 @@ MESSAGES = {
         "Change a session's mode, model, workspace, thinking effort or judge "
         "from its next turn.",
         {"session": SESSION, "mode": STRING, "model": STRING,
-         "workspace": STRING, "thinking_effort": STRING,
-         "judge_model": {**STRING, "description": "empty: the session's own "
-                         "model"},
-         "judge_thinking_effort": STRING},
+         "workspace": STRING},
         required=("session",),
         reply={"set": {"type": "object", "additionalProperties": maybe(STRING),
                        "description": "what was set, by name"},
                "next_turn": {**BOOLEAN, "description": "a running or waiting "
                              "turn holds the old values"}},
-        changes=True,
-    ),
-    "session/search": message(
-        "Search what every session's log holds, running or done: with query "
-        "alone, the sessions whose records match, best first, each with its "
-        "best record; with query and session, that session's matching "
-        "records; with session and around, the records near one, whole.",
-        {
-            "query": {**STRING, "description": "words a record holds, each "
-                      "whole; OR, \"a phrase\" and word* as FTS5 reads them"},
-            "session": {**STRING, "description": "a session's id or the start "
-                        "of it"},
-            "around": {**INTEGER, "description": "a record's seq in that "
-                       "session"},
-            "count": {**INTEGER, "description": "how many sessions, or "
-                      "records, at most (10); with no query, how many on each "
-                      "side (5)"},
-        },
-        reply={
-            "query": maybe(STRING),
-            "session": shape("the session searched or read", {
-                "id": SESSION, "title": STRING, "workspace": STRING,
-                "state": STRING, "mode": STRING, "archived": BOOLEAN,
-                "updated_at": NUMBER,
-            }, open_to_more=True),
-            "sessions": open_rows("the matching sessions, best first: a "
-                                  "session's fields, record_count and its "
-                                  "best record"),
-            "records": open_rows("records: seq, kind (user, notice, reply, "
-                                 "call, handoff), a call's tool or a notice's "
-                                 "source, sender, action, target, time and a snippet "
-                                 "(a match marked « ») or, near around, the whole text"),
-            "session_count": INTEGER, "record_count": INTEGER,
-            "matched_by": {**one_of("every word", "any word"),
-                           "description": "what the records hold: every word, "
-                           "or, when no record does, any of them"},
-            "around": INTEGER, "earlier_count": INTEGER, "later_count": INTEGER,
-        },
-    ),
-    "subagent/send": message(
-        "A workflow's message: a new subagent of for_session, text its task, "
-        "or text to one of its subagents (session). A subagent runs in its "
-        "session's workspace, mode and model; its asks go where that "
-        "session's other subagents' go, and its answer to whoever follows "
-        "it. The one message besides those that only look that one of "
-        "ZERO's own commands may send, and only for the session whose "
-        "command it is.",
-        {
-            "text": STRING,
-            "mode": maybe(STRING),
-            "model": maybe(STRING),
-            "for_session": {**SESSION, "description": "the session the "
-                            "workflow works for: its commands find its id in "
-                            f"${SESSION_ID_ENV}"},
-            "session": {**maybe(SESSION), "description": "one of for_session's "
-                        "subagents, at any level; none: a new subagent"},
-            "title": {**maybe(STRING), "description": "a new subagent's title; "
-                      "none: its task's first words"},
-            "source": SOURCE,
-        },
-        required=("text", "for_session", "source"),
-        reply={"session": SESSION, "inbox": STRING,
-               "started": {**BOOLEAN, "description": "a new subagent was started"}},
-        changes=True,
-    ),
-    "job/list": message(
-        "A session's background jobs, ended ones too; with none, every "
-        "running job.",
-        {"session": SESSION},
-        reply={"jobs": rows("job", "one row a job")},
-    ),
-    "job/read": message(
-        "A background job's state and retained output, without changing "
-        "what the model has read.",
-        {"job": STRING}, required=("job",),
-        reply={"job": row("job"), "output": STRING, "omitted_bytes": INTEGER},
-    ),
-    "job/stop": message(
-        "Stop a background job.",
-        {"job": STRING}, required=("job",),
-        reply={"stopped": BOOLEAN},
-        changes=True,
-    ),
-    "rounds/list": message(
-        "A session's work in rounds, ended runs too; with none, every open "
-        "one.",
-        {"session": SESSION},
-        reply={"rounds": rows("rounds", "one row a run")},
-    ),
-    "rounds/stop": message(
-        "Stop work in rounds: no next round starts; a round under way ends its "
-        "turn.",
-        {"rounds": STRING}, required=("rounds",),
-        reply={"stopped": BOOLEAN},
-        changes=True,
-    ),
-    "grant/list": message(
-        "The grants that hold in a session: what an ask's \"don't ask "
-        "again\" allowed.",
-        {"session": SESSION}, required=("session",),
-        reply={"grants": open_rows("id, by, scope, grant, description")},
-    ),
-    "grant/forget": message(
-        "Take a grant back.",
-        {"session": SESSION, "grant": STRING},
-        required=("session", "grant"),
-        reply={"forgot": STRING},
-        changes=True,
-    ),
-    "workspace/list": message(
-        "Folders for a person's workspace picker; no file contents are read.",
-        {"path": STRING, "after": STRING},
-        reply={"path": STRING, "parent": maybe(STRING),
-               "folders": {"type": "array", "items": {
-                   "type": "object", "properties": {"name": STRING,
-                                                       "path": STRING},
-                   "required": ["name", "path"], "additionalProperties": False}},
-               "next_after": maybe(STRING)},
-    ),
-    "model/list": message(
-        "Every server the server can reach, with its models by the names a "
-        "session takes, or why it lists none. Pass server for one directory, "
-        "or cached to reuse directories already read for this connection.",
-        {"server": STRING, "cached": BOOLEAN},
-        reply={"servers": open_rows("server, title, models, any resolved model_limits "
-                                    "by model name, and an error if the read failed")},
-    ),
-    "model/window": message(
-        "The selected model's effective context window, null if it is unknown. "
-        "A connection can name its server and proposed API URL.",
-        {"model": STRING, "name": STRING, "url": STRING},
-        required=("model",),
-        reply={"url": STRING, "context_window": maybe(INTEGER),
-               "max_input_tokens": INTEGER, "max_output_tokens": INTEGER},
-    ),
-    "model/window/set": message(
-        "Remember a context window for one model on its current endpoint.",
-        {"model": STRING, "url": STRING, "context_window": {**INTEGER, "minimum": 1}},
-        required=("model", "url", "context_window"),
-        changes=True,
-    ),
-    "model/features": message(
-        "What a model honours of its API's features (thinking_off, "
-        "thinking_on, strict_json, json_mode), as measured: each true or "
-        "false, null where never measured. Measured now when none are kept "
-        "or `test` is true, a few small calls to the model. With "
-        "`cached_only`, read the route's declared or measured support with no "
-        "model calls. Pass tools for choices on a normal tool-equipped turn.",
-        {"model": STRING, "test": BOOLEAN, "cached_only": BOOLEAN, "tools": BOOLEAN},
-        required=("model",),
-        reply={"model": STRING, "api": STRING, "measured_at": maybe(STRING),
-               "features": OBJECT, "thinking_efforts": OBJECT, "tools_error": STRING},
-        changes=True,
-    ),
-    "model/server/list": message(
-        "Every model server the server knows, whether its key is there, the "
-        "default model and its server, and why a session on it couldn't "
-        "start (null: it can).",
-        reply={"servers": open_rows("name, title, url, key_state, needs_key, "
-                                    "has_saved_key, model_prefix, user_added, "
-                                    "in_catalog, context_window, models"),
-               "default": maybe(STRING),
-               "default_server": {**maybe(STRING), "description": "the server "
-                                  "the default model goes to"},
-               "not_ready_reason": maybe(STRING)},
-    ),
-    "model/server/probe": message(
-        "A server's models, for a pick list. A typed url takes the typed key "
-        "or none; a name alone, its own url and stored key.",
-        {"name": STRING, "url": STRING, "key": STRING},
-        reply={"url": STRING, "models": open_rows(
-            "id, context_window, any maximum input and output, and whether it "
-            "reports its window on load",
-        )},
-    ),
-    "model/server/connect": message(
-        "A server's model tested with a call of a few tokens, then saved: "
-        "the key in keys.toml, the server in models.toml; the first model "
-        "connected "
-        "becomes the default.",
-        {"name": STRING, "url": STRING, "key": STRING, "model": STRING,
-         "context_window": {**INTEGER, "minimum": 1}, "title": STRING,
-         "default": BOOLEAN},
-        required=("name", "model"),
-        reply={"model": STRING, "default": BOOLEAN},
-        changes=True,
-    ),
-    "model/server/key/set": message(
-        "Save a key and read that server's model directory. A null key "
-        "removes the saved value. A directory error accompanies a successful "
-        "key save and can be retried with model/list.",
-        {"name": STRING, "key": maybe(STRING)}, required=("name", "key"),
-        reply={"has_saved_key": BOOLEAN,
-               "directory": {**OBJECT, "description": "a model/list server row"}},
-        changes=True,
-    ),
-    "model/server/test": message(
-        "Send a short test call to a model on a configured server. The "
-        "provider may charge for it.",
-        {"name": STRING, "model": STRING}, required=("name", "model"),
-        reply={"model": STRING}, changes=True,
-    ),
-    "model/server/disconnect": message(
-        "A server's key and the user's lines for it taken out.",
-        {"name": STRING}, required=("name",),
-        reply={"removed": STRING, "default_unset": BOOLEAN},
-        changes=True,
-    ),
-    "mcp/list": message(
-        "The MCP servers whose tools ZERO's sessions use, as the user listed "
-        "them, each with its state (starting, ready, failed, gone, stopped), "
-        "its error and how many tools it offers; and what the list says that "
-        "ZERO can't use. Values of env and headers are left out.",
-        reply={"servers": open_rows("name, transport, command, args, env, "
-                                    "cwd, url, headers, tools, start_seconds, "
-                                    "call_seconds, state, error, "
-                                    "protocol_version"),
-               "notes": STRINGS},
-    ),
-    "mcp/get": message(
-        "One MCP server: its list row, its tools as the model calls them, what "
-        "of its listing can't be offered, and its last words on stderr.",
-        {"name": STRING}, required=("name",),
-        reply={"server": {"type": "object", "additionalProperties": True}},
-    ),
-    "mcp/add": message(
-        "An MCP server listed (a command ZERO starts, or a url), or copied "
-        "from another agent's list (`from`: claude or codex; `tools` may "
-        "narrow it); then started, the reply saying how its start went. One "
-        "that fails stays listed.",
-        {"name": STRING, "command": STRING,
-         "args": STRINGS,
-         "env": {"type": "object", "additionalProperties": STRING},
-         "cwd": STRING, "url": STRING,
-         "headers": {"type": "object", "additionalProperties": STRING},
-         "tools": STRINGS,
-         "start_seconds": NUMBER, "call_seconds": NUMBER,
-         "outside_sandbox": BOOLEAN,
-         "from": one_of("claude", "codex")},
-        required=("name",),
-        reply={"server": {"type": "object", "additionalProperties": True},
-               "notes": STRINGS},
-        changes=True,
-    ),
-    "mcp/remove": message(
-        "An MCP server taken off the list and stopped; its tools offered no "
-        "more.",
-        {"name": STRING}, required=("name",),
-        reply={"removed": STRING},
         changes=True,
     ),
     "setting/list": message(
@@ -938,10 +564,89 @@ MESSAGES = {
 }
 # A distinct wire name makes older servers refuse new submissions before admission.
 MESSAGES["session/submit"] = {
-    **MESSAGES["session/send"],
+    **copy.deepcopy(MESSAGES["session/send"]),
     "about": "Submit a message. Only reply_to answers a question. Other messages "
              "queue while the session waits for a reply.",
 }
+
+
+def protocol_files(root):
+    """Return sorted `components/*/protocol.json` paths under `root`."""
+    parent = Path(root) / "components"
+    if not parent.is_dir():
+        return []
+    return [
+        path for path in sorted(parent.glob("*/protocol.json"))
+        if not path.parent.name.startswith((".", "_"))
+    ]
+
+
+def _merge_field_extension(target, field_name, ext):
+    if field_name in target and isinstance(ext, dict) and isinstance(
+        target[field_name], dict
+    ):
+        existing = target[field_name]
+        if "enum" in ext and "enum" in existing:
+            merged = list(existing["enum"])
+            for value in ext["enum"]:
+                if value not in merged:
+                    merged.append(value)
+            existing["enum"] = merged
+            return
+        if "properties" in ext and "properties" in existing:
+            for key, schema in ext["properties"].items():
+                existing["properties"][key] = copy.deepcopy(schema)
+            return
+    target[field_name] = copy.deepcopy(ext)
+
+
+def load_protocol_files(root, *, defs=DEFS, rows=ROWS, messages=MESSAGES):
+    """Load pure-data component `protocol.json` files into `defs`, `rows`,
+    and `messages` without importing component code."""
+    for path in protocol_files(root):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for name, schema in (data.get("defs") or {}).items():
+            defs[name] = copy.deepcopy(schema)
+        for name, schema in (data.get("rows") or {}).items():
+            rows[name] = copy.deepcopy(schema)
+        for name, spec in (data.get("messages") or {}).items():
+            messages[name] = message(
+                spec["about"],
+                copy.deepcopy(spec.get("fields")),
+                required=tuple(spec.get("required") or ()),
+                reply=copy.deepcopy(spec.get("reply")),
+                stream=copy.deepcopy(spec.get("stream")),
+                changes=bool(spec.get("changes", False)),
+                timeout_seconds=spec.get("timeout_seconds", 30),
+                stamp_source=bool(spec.get("stamp_source", False)),
+            )
+        for row_name, extensions in (data.get("row_extensions") or {}).items():
+            props = rows[row_name]["properties"]
+            for field_name, ext in extensions.items():
+                _merge_field_extension(props, field_name, ext)
+        for msg_name, ext in (data.get("message_extensions") or {}).items():
+            target = messages[msg_name]
+            for field_name, schema in (ext.get("fields") or {}).items():
+                _merge_field_extension(target["fields"], field_name, schema)
+            if extra_req := ext.get("required"):
+                req = list(target["required"])
+                for field_name in extra_req:
+                    if field_name not in req:
+                        req.append(field_name)
+                target["required"] = tuple(req)
+            for reply_key, schema in (ext.get("reply") or {}).items():
+                _merge_field_extension(target["reply"], reply_key, schema)
+            if ext.get("stream") and isinstance(target.get("stream"), dict):
+                for stream_key, schema in ext["stream"].items():
+                    _merge_field_extension(target["stream"], stream_key, schema)
+
+
+load_protocol_files(Path(__file__).resolve().parent.parent)
+
+# Re-exported from component `protocol.json` definitions for callers and tests.
+MODEL_FAILURE = DEFS["model_failure"]
+MODEL_FAILURE_REF = {"$ref": "#/$defs/model_failure"}
+COMMAND_FIELDS = DEFS["command_fields"]["properties"]
 
 # The messages that change something, each carrying an id run once
 CHANGING = tuple(name for name, spec in MESSAGES.items() if spec["changes"])

@@ -5,37 +5,19 @@ change at different times, a layer translates and states its version).
 Each step is one function, `STEPS[n]`, turning protocol n's reply to a
 message (or one of its stream's events) into protocol n-1's; `reply_in`
 walks a reply down to the protocol a request is written in, as Stripe walks
-a reply back through its version changes. A request needs no step: what an
-older protocol lacks (an id on a message that changes something) the server
-reads as that protocol had it.
+a reply back through its version changes.
 
-Protocol 5 (0.7.6.1): every request names its protocol; each message that
-changes something carries an id; hello's modes are rows, each with what it
-is and whether a key steps to it; replies typed, rows built from the store
-in one place. Protocol 4's modes were names.
+Protocol 8 retires the Protocol 4–7 flat record projection: timeline records
+travel solely as native `Entry` envelopes (`seq`, `time`, `entry`, plus
+server-computed display hints) and `session/list` watches stream incremental
+`upsert`/`remove` diffs after the opening snapshot. `OLDEST = 8`, so `STEPS`
+is empty until Protocol 9 adds a `9 -> 8` step.
 """
 
 from protocol import version
 
-
-def hello_in_4(reply):
-    """Protocol 4's hello: the modes by name."""
-    modes = reply.get("modes")
-    if isinstance(modes, list):
-        reply = {**reply, "modes": [mode["name"] if isinstance(mode, dict)
-                                    else mode for mode in modes]}
-    return reply
-
-
-def step_to_4(name, reply):
-    if name == "server/hello":
-        return hello_in_4(reply)
-    return reply
-
-
 # protocol n → the step that turns its replies into protocol n-1's
-# Protocol 6 adds an explicit submission verb. Its replies retain version 5's shape.
-STEPS = {6: lambda name, reply: reply, 5: step_to_4}
+STEPS = {}
 
 
 def reply_in(protocol, name, reply):

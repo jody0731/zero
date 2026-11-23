@@ -1,0 +1,363 @@
+"""The permissions memory: calls that run without an ask because someone
+already said yes to them.
+
+Three kinds of grant, each read from where it is kept, never held in memory
+alone, so a restart, a switch of mode or a second client sees the same:
+  plan     the calls of an approved plan (tool.py), each exactly as
+           listed, until the user's next message: from the log
+  session  "Yes, and don't ask again this session for …", picked by the user
+           (an `answer` record's choice) or by the judge (its verdict on the
+           call): from the log; a `forget` record takes one back
+  saved    the same, saved by the user: from ~/.zero/permissions.toml
+           (paths.permissions_file), for every session
+A call a grant covers is green: its ask (asks.py, or auto+'s
+Permissions) isn't put to anyone, and the repeat guard lets it through; the
+caps' asks still hold. The judge's grants count only where the judge is the
+approver. The model is told why a call ran unasked, in a remark.
+
+What "don't ask again" offers is each tool's own (its Grant, core/tools.py;
+from Codex, OpenCode and Claude Code): for bash, each part's prefix
+(shell/commands.py: `git push`, `rm`, `docker compose up`); for a local fetch,
+its server; for a file tool, its path. A later call is covered when every item
+it would be granted already is. A grant is {"tool", <its field>: [items]}, as
+the user's saved file keeps it.
+"""
+
+import json
+import re
+import secrets
+import sys
+import tomllib
+from datetime import datetime
+from pathlib import Path
+
+import paths
+from core import attribution, entries, tools
+from core.asking import SAVED, waiting_ask
+from core.hooks import Hook
+
+PLAN = "propose_plan"
+SAVED_HEAD = (
+    "# Permissions saved from an ask in ZERO: calls these cover run in "
+    "every\n# session without asking. /permissions lists them; delete a block "
+    "to take one back.\n"
+)
+# permissions.toml's format, a line under its head (paths.FILE_FORMAT_KEY)
+FILE_FORMAT = 1
+
+PLAN_REMARK = "(Run without review: one of the calls of the plan {who} approved.)"
+SESSION_REMARK = "(Run without review: {who} allowed {what} for this session.)"
+SAVED_REMARK = "(Run without review: the user saved a permission for {what}.)"
+
+
+def declared_grant(name):
+    """The tool's grant descriptor dict, or None for a tool that offers none."""
+    meta = tools.metadata_of(name, "permissions") or {}
+    return meta.get("grant")
+
+
+def grant_fields():
+    """The lists a grant may keep, as the tools declare them."""
+    fields = []
+    for _, meta in tools.tools_with_metadata("permissions"):
+        grant = meta.get("grant")
+        while grant is not None:
+            if grant["field"] not in fields:
+                fields.append(grant["field"])
+            grant = grant.get("previous")
+    return fields
+
+
+def offer(call):
+    """The grant "don't ask again" would make for this call, or None."""
+    declared = declared_grant(call.name)
+    if declared is None:
+        return None
+    found = declared["of"](call.args or {})
+    return {"tool": call.name, declared["field"]: found} if found else None
+
+
+def covered(grants, call):
+    """Whether these grants (all for the call's tool) cover the call."""
+    return covering_grant(grants, call) is not None
+
+
+def covering_grant(grants, call):
+    """The scope that covers this call, including an older narrow grant."""
+    declared = declared_grant(call.name)
+    while declared is not None:
+        field = declared["field"]
+        wanted = declared["of"](call.args or {})
+        have = {x for g in grants for x in g.get(field, ())}
+        if wanted and set(wanted) <= have:
+            return {"tool": call.name, field: list(wanted)}
+        declared = declared.get("previous")
+    return None
+
+
+def describe(grant):
+    """A grant in a few words, its tool's ("`cd` and `git push` commands")."""
+    if grant.get("handoffs"):
+        return "handing work off"
+    declared = declared_grant(grant["tool"])
+    while declared is not None:
+        if declared["field"] in grant:
+            return declared["words"](grant)
+        declared = declared.get("previous")
+    # A saved grant for a tool this ZERO doesn't have
+    return f"{grant['tool']} to " + ", ".join(sorted(items(grant)))
+
+
+def items(grant):
+    """What a grant names: its prefixes, servers or paths."""
+    return {x for field in grant_fields() for x in grant.get(field, ())}
+
+
+def call_key(name, arguments):
+    """A call as the loop keys it (core/records.py's Call.key)."""
+    return (name, tools.normalise(arguments))
+
+
+def plan_grants(records):
+    """The calls of plans approved since the user's last message: key → who
+    approved ("the user" or "the judge")."""
+    approved = {}
+    for record in records:
+        entry = record.entry
+        if attribution.is_turn_input(entry) and not attribution.is_notice(entry):
+            approved = {}
+        elif (entries.has(entry, "tool_result") and entry.get("tool") == PLAN
+              and entry.get("ran") and not entry.get("denied")):
+            who = "the judge" if (entry.get("notes") or {}).get("judge") else (
+                "the user"
+            )
+            try:
+                calls = json.loads(entry.get("arguments"))["calls"]
+            except (ValueError, KeyError, TypeError):
+                continue
+            for call in calls:
+                arguments = json.dumps(call["arguments"])
+                approved[call_key(call["tool"], arguments)] = who
+    return approved
+
+
+def is_revocation(entry):
+    return entries.has(entry, "note") and entry.get("record_type") == "forget"
+
+
+def records_for_session(records, session):
+    """Grant history in time order, excluding hand-offs for other sessions."""
+    elsewhere = {
+        record.entry.id for record in records
+        if entries.has(record.entry, "ask")
+        and (record.entry.get("notes") or {}).get("handoff_scope") not in (
+            None, session,
+        )
+    }
+
+    def in_scope(record):
+        entry = record.entry
+        if entries.has(entry, "ask"):
+            return entry.id not in elsewhere
+        if entries.has(entry, "answer"):
+            return entries.linked_to(entry, "answers") not in elsewhere
+        return True
+
+    return sorted(filter(in_scope, records), key=lambda record: record.time)
+
+
+def session_grants(records):
+    """This session's grants, oldest first: {id, by, scope, grant, time}."""
+    offers, grants, forgotten = {}, {}, set()
+    for record in records:
+        entry = record.entry
+        notes = entry.get("notes") or {}
+        if entries.has(entry, "ask"):
+            if notes.get("handoff"):
+                offers[entry.id] = {"tool": "", "handoffs": True}
+            elif notes.get("offer"):
+                offers[entry.id] = notes["offer"]
+        elif entries.has(entry, "answer") and entry.get("yes"):
+            ask = entries.linked_to(entry, "answers")
+            choice = entry.get("choice")
+            if choice in ("session", "saved") and ask in offers:
+                grants[ask] = {
+                    "id": ask, "by": "user", "scope": choice,
+                    "grant": entries.thaw(offers[ask]), "time": record.time,
+                }
+        elif entries.has(entry, "tool_result") and entry.get("ran"):
+            verdict = notes.get("judge") or {}
+            if verdict.get("decision") == "session" and notes.get("offer"):
+                call = entries.linked_to(entry, "answers")
+                grants[call] = {
+                    "id": call, "by": "judge", "scope": "session",
+                    "grant": entries.thaw(notes["offer"]), "time": record.time,
+                }
+        elif is_revocation(entry):
+            forgotten.add(entry.get("grant"))
+    return [g for key, g in grants.items() if key not in forgotten]
+
+
+def read_saved(path, notes=None):
+    """The user's saved grants: {id, by, scope, grant, time}. A file that
+    can't be read counts as none (fewer grants only means more asks)."""
+    if path is None:
+        return []
+    try:
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        note = f"{path} can't be read, so no saved permission holds: {e}"
+        if notes is not None:
+            notes.append(note)
+        else:
+            print(f"ZERO: {note}", file=sys.stderr, flush=True)
+        return []
+    found = data.get(paths.FILE_FORMAT_KEY, FILE_FORMAT)
+    if isinstance(found, int) and found > FILE_FORMAT:
+        note = paths.newer_note(path, found, FILE_FORMAT)
+        if notes is not None:
+            notes.append(note)
+        else:
+            print(f"ZERO: {note}", file=sys.stderr, flush=True)
+    saved = []
+    for entry in data.get("allow", []):
+        if not isinstance(entry, dict) or not isinstance(entry.get("tool"), str):
+            continue
+        grant = {"tool": entry["tool"]}
+        for field in grant_fields():
+            if isinstance(entry.get(field), list):
+                grant[field] = [str(x) for x in entry[field]]
+        saved.append({
+            "id": str(entry.get("id", "")), "by": "user", "scope": "saved",
+            "grant": grant, "time": entry.get("saved"),
+        })
+    return saved
+
+
+def save(path, grant, session=None):
+    """Add a grant to the user's file; returns its id."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    grant_id = f"p-{secrets.token_hex(3)}"
+    lines = [
+        "", "[[allow]]", f"id = {json.dumps(grant_id)}",
+        f"tool = {json.dumps(grant['tool'])}",
+    ]
+    for field in grant_fields():
+        if field in grant:
+            items = ", ".join(json.dumps(x, ensure_ascii=False) for x in grant[field])
+            lines.append(f"{field} = [{items}]")
+    lines.append(f"saved = {json.dumps(datetime.now().astimezone().isoformat())}")
+    if session is not None:
+        lines.append(f"session = {json.dumps(session)}")
+    with paths.changing(path):
+        text = path.read_text(encoding="utf-8") if path.exists() else (
+            f"{SAVED_HEAD}{paths.FILE_FORMAT_KEY} = {FILE_FORMAT}\n")
+        paths.write_whole(
+            path, text.rstrip("\n") + "\n" + "\n".join(lines) + "\n",
+            mode=0o600)
+    return grant_id
+
+
+def save_grant(path, ask, choice, session):
+    """A "saved" answer to an ask: its grant to the user's file at `path`
+    (None: no file, as in the evals, where it counts for the session)."""
+    if choice == SAVED and path is not None:
+        save(path, ask["notes"]["offer"], session=session)
+
+
+def forget_saved(path, grant_id):
+    """Remove a saved grant's block; whether it was there."""
+    path = Path(path)
+    if not path.exists():
+        return False
+    with paths.changing(path):
+        blocks = re.split(r"(?m)^(?=\[\[allow\]\])",
+                          path.read_text(encoding="utf-8"))
+        marker = f"id = {json.dumps(grant_id)}"
+        kept = [b for b in blocks if marker not in b.splitlines()]
+        if len(kept) == len(blocks):
+            return False
+        paths.write_whole(path, "".join(kept))
+    return True
+
+
+def listing(records, saved_path, judged):
+    """Every grant that holds in a session: its plan's calls aside. A "saved"
+    answer counts from the user's file; without one (the evals), for the
+    session."""
+    grants = []
+    for grant in session_grants(records):
+        if grant["by"] == "judge" and not judged:
+            continue
+        if grant["scope"] == "saved":
+            if saved_path is not None:
+                continue
+            grant = {**grant, "scope": "session"}
+        grants.append(grant)
+    return grants + read_saved(saved_path)
+
+
+class GrantCheck(Hook):
+    """Marks what a call's "don't ask again" would grant (`offer`), and a call
+    a grant covers (`granted`), which core/asking.py's ask_of() then passes
+    over. `saved`: the user's file, None for none (evals, tests); `judged`:
+    whether the judge is this session's approver, so its grants count."""
+
+    def __init__(self, saved=None, judged=False):
+        self.saved = saved
+        self.judged = judged
+
+    def before_tool(self, call):
+        if call.error or call.name == PLAN:
+            return None
+        found = offer(call)
+        if found is not None:
+            call.notes["offer"] = found
+            # The words the box and the consent check put to the user
+            call.notes["offer_text"] = describe(found)
+        granted = self._granted(call)
+        if granted is not None:
+            call.notes["granted"] = granted
+        return None
+
+    def approve(self, call):
+        """A green call's ask was passed over: the model is told why."""
+        granted = call.notes.get("granted")
+        if granted is None or waiting_ask(call.notes, granted=False) is None:
+            return None
+        if granted["scope"] == "plan":
+            text = PLAN_REMARK.format(who=granted["by"])
+        elif granted["scope"] == "saved":
+            text = SAVED_REMARK.format(what=describe(granted["grant"]))
+        else:
+            who = "the judge" if granted["by"] == "judge" else "the user"
+            text = SESSION_REMARK.format(who=who, what=describe(granted["grant"]))
+        call.remarks.append(text)
+        return None
+
+    def _granted(self, call):
+        records = call.turn.session.log.branch()
+        who = plan_grants(records).get(call.key)
+        if who is not None:
+            return {"scope": "plan", "by": who}
+        declared = declared_grant(call.name)
+        entries = [e for e in listing(records, self.saved, self.judged)
+                   if e["grant"]["tool"] == call.name
+                   or (declared is not None and declared.get("across_tools")
+                       and declared["field"] in e["grant"])]
+        want = covering_grant([e["grant"] for e in entries], call)
+        if want is None:
+            return None
+        # The grants that cover some part of it: one, or several together
+        wanted = items(want)
+        used = [e for e in entries if any(
+            set(e["grant"].get(field, ())) & wanted
+            for field in want if field != "tool"
+        )]
+        scope = "saved" if all(e["scope"] == "saved" for e in used) else "session"
+        by = "judge" if any(e["by"] == "judge" for e in used) else "user"
+        return {"scope": scope, "by": by, "grant": want,
+                "ids": [e["id"] for e in used]}

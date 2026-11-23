@@ -1,0 +1,38 @@
+{
+  "messages": {
+    "workspace/list": {
+      "about": "Folders for a person's workspace picker; no file contents are read.",
+      "fields": {
+        "path": {"type": "string"},
+        "after": {"type": "string"}
+      },
+      "reply": {
+        "path": {"type": "string"},
+        "parent": {
+          "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+          ]
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "path": {"type": "string"}
+            },
+            "required": ["name", "path"],
+            "additionalProperties": false
+          }
+        },
+        "next_after": {
+          "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+          ]
+        }
+      }
+    }
+  }
+}

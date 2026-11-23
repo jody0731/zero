@@ -2,10 +2,11 @@
 
 The protocol is a number: adding a message, a field or an event keeps it,
 removing one or changing its meaning bumps it. Every request names the
-protocol it is written in (none: 4, the last before requests named it), and
-the server answers in it, from OLDEST to its own, its replies walked back one
-step at a time (protocol/older.py); so an app keeps working across a server's
-update, and a client never has to stop a newer server to talk to it.
+protocol it is written in (none: read as 4, the last before requests named it,
+and refused once OLDEST passes 4), and the server answers in it, from OLDEST to
+its own, its replies walked back one step at a time (protocol/older.py); so an
+app keeps working across a server's update, and a client never has to stop a
+newer server to talk to it.
 
 The release is ZERO's version, its CHANGELOG's newest section: a client
 restarts an idle server of an older release (or of the same release on other
@@ -25,10 +26,10 @@ import re
 import sys
 from pathlib import Path
 
-PROTOCOL = 6
-# The oldest protocol the server still answers in: 4 is what a request
-# naming none is written in
-OLDEST = 4
+PROTOCOL = 8
+# The oldest protocol the server still answers in: Protocol 8 retires the
+# pre-8 flat record projection and switches session/list watches to diffs
+OLDEST = 8
 # A CHANGELOG section's heading: the release it is for
 RELEASE_HEADING = re.compile(r"(?m)^## (\d+(?:\.\d+)*)\b")
 # ZERO's folder

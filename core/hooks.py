@@ -35,7 +35,9 @@ DECIDE = {"before_model", "before_model_request", "model_error", "before_tool",
 # (a job's end) before it is logged (the context component saves one past
 # its share to a file)
 PIPE = {"tool_result", "notice"}
-EVENTS = WATCH | COLLECT | DECIDE | PIPE
+# allows_side_by_side: veto parallel execution of a side_by_side tool call
+VETO = {"allows_side_by_side"}
+EVENTS = WATCH | COLLECT | DECIDE | PIPE | VETO
 
 
 class Hook:
@@ -172,6 +174,15 @@ class HookRunner:
         if retries:
             return max(retries, key=lambda d: d.delay)
         return None
+
+    def allows(self, name, *args) -> bool:
+        """True unless any hook returns False or crashes (fail closed)."""
+        assert name in VETO, name
+        allowed = True
+        for _, answer, crash in self._each(name, *args):
+            if crash or answer is False:
+                allowed = False
+        return allowed
 
 
 def fail_closed(name, crash):

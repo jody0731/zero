@@ -3,14 +3,20 @@ the assembly adds the components' tools (`add`); a component's door adds the
 tools it finds at run time and takes them back (`add_found`, an MCP server's);
 calls are checked, then run.
 
-A found tool a session can call may not be sent with its requests, for room
-(`deferred`): a tool that declares `calls_by_name` calls it, and such a call
-is the named tool's own from the start (`unwrapped`), so every check, ask and
+A tool carries generic capability traits (`traits`) and namespaced subsystem
+metadata (`metadata`) queried through `has_trait`, `tools_with_trait`,
+`metadata_of`, and `tools_with_metadata`. A found tool a session can call may
+not be sent with its requests, for room (`deferred`): a tool whose
+`found_tools` metadata declares `calls_by_name` calls it, and such a call is
+the named tool's own from the start (`unwrapped`), so every check, ask and
 record reads the tool that runs."""
 
 import inspect
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+
+from core.entries import Entry, EntryError, freeze, walk
 
 # The tools a session may offer, by name, in the order the model reads them:
 # what the assembly added (`add`), never what a module's import declared
@@ -21,127 +27,74 @@ TOOLS = {}
 FOUND = {}
 
 
-@dataclass(frozen=True)
-class Grant:
-    """What "don't ask again" grants for a tool's calls. `field`: the list a
-    grant keeps its items under (the user's saved file names it too);
-    `of(args)`: a call's items, or None for a call no grant may cover;
-    `words(grant)`: a grant in a few words, for the ask and the remark.
-    `across_tools`: items cover other tools declaring this same field.
-    `previous`: an older declaration still read, without widening its scope."""
+@dataclass(frozen=True, slots=True)
+class Result:
+    """A tool's output, optional heading, and declared data."""
 
-    field: str
-    of: object
-    words: object
-    across_tools: bool = False
-    previous: object = None
+    output: str
+    head: str = ""
+    fields: Mapping = field(default_factory=dict)
+    failed: bool = False
+    # A tool's one requested retry passes through all checks and approval.
+    # This is harness data, never part of a found tool's returned fields.
+    retry_arguments: Mapping | None = None
+    entries: tuple[Entry, ...] = ()
 
-
-class Result(str):
-    """A tool's answer (MCP's tool result): the text the model reads, `head`
-    then `output`, so a caller that takes text takes it as it is; `head` is
-    what a tool puts above its output (bash's status and time), so a screen
-    can show the output alone. `fields`: data beside the text, as the tool
-    declares them (its `fields`), which others read in place of its words;
-    `failed`: the call didn't do what it was asked (MCP's isError)."""
-
-    def __new__(cls, output, head="", fields=None, failed=False,
-                retry_arguments=None):
-        answer = super().__new__(cls, head + output)
-        answer.output, answer.head = output, head
-        answer.fields = dict(fields or {})
-        answer.failed = failed
-        # A tool's one requested retry passes through all checks and approval.
-        # This is harness data, never part of a found tool's returned fields.
-        answer.retry_arguments = retry_arguments
-        return answer
+    def __post_init__(self):
+        if not isinstance(self.output, str) or not isinstance(self.head, str):
+            raise TypeError("tool result text must be a string")
+        if self.fields is not None and not isinstance(self.fields, Mapping):
+            raise EntryError("tool result fields must be an object")
+        fields = dict(self.fields) if self.fields is not None else {}
+        object.__setattr__(self, "fields", freeze(fields))
+        if self.retry_arguments is not None:
+            if not isinstance(self.retry_arguments, Mapping):
+                raise EntryError("tool retry arguments must be an object")
+            object.__setattr__(self, "retry_arguments", freeze(self.retry_arguments))
+        if not isinstance(self.entries, (tuple, list)):
+            raise EntryError("tool result entries must be an array")
+        children = tuple(self.entries)
+        for child in children:
+            if not isinstance(child, Entry):
+                raise EntryError("tool result entries must be Entry objects")
+            for _ in walk(child, origin="tool"):
+                pass
+        object.__setattr__(self, "entries", children)
 
     @property
-    def text(self):
-        return str(self)
+    def text(self) -> str:
+        return self.head + self.output
 
 
-def tool(description, /, optional=(), summary=None, ready=None,
-         needs_permission=None, validate=None, changing=False, starts_job=None,
-         crossing=None, grant=None, written_files=None, means=None,
-         fields=None, result_summary=None, reads_records=False,
-         reads_in_parts=None, never_cleared=False, side_by_side=False,
-         calls_by_name=None, hands_off=False, user_approval=None,
-         asks_user=False, **params):
+def _copy_metadata(metadata):
+    if not metadata:
+        return {}
+    return {
+        ns: dict(val) if isinstance(val, Mapping) else val
+        for ns, val in metadata.items()
+    }
+
+
+def tool(description, /, optional=(), fields=None, validate=None, ready=None,
+         summary=None, traits=(), metadata=None, **params):
     """Declare a function as a tool the model can call: the function comes
     back marked with its declaration (`declared`), which the assembly adds to
     the registry (`add`); declaring registers nothing.
 
     Each keyword is one argument: name=(json_type, description), where
     json_type is a type's name or a whole JSON schema (an array's items, say).
-    Arguments named
-    in `optional` may be left out; the rest are required. `description`, the
-    tool's or an argument's, may be a function of the session's limits and
-    its context (bash's timeout, how deep subagents go, a search's default
-    count), written at each call.
-    `summary(args)`: the call in a line or a few, for an ask and the judge
-    (bash's command, a write's path and its content); by default the raw
-    arguments. One that cuts long text for an ask's screen takes `whole`,
-    which the judge passes to read it uncut. `ready(context)`: whether a
-    session offers the tool, from what it hands its tools; by default always.
-    `needs_permission(args)`: False for a call that changes nothing on the
-    machine (a job's list, a read, a search, a fetch from the internet), which
-    auto+ lets run unasked (permissions/approval.py, Permissions); by default
-    every call needs it.
-    `validate(args)`: what is wrong with well-formed arguments, or None; a
-    call it faults is refused before any check or ask (a plan's calls).
-    `changing`: True for a tool whose answer changes on its own (a running
-    job's output), so the same call made again runs again.
-    `hands_off`: True, or a predicate of the arguments, when this call starts
-    unattended work. Permission hooks use this declaration for user consent.
-    `user_approval(args, context)`: returns the exact proposal's display text
-    and state binding. A question records user approval before this call runs.
-    `asks_user`: this tool collects questions and exact-call approvals.
-    `starts_job`: the argument that, true, starts the call as a background
-    job, which counts against the session's cap on running jobs (bash's
-    `background`); by default none does. Texts about jobs name it as the
-    tool declares it (`job_starter`).
-    `crossing(args)`: what a call crosses that is asked about first (leaving
-    the sandbox, reaching the local network), or None: a dict of its "rule",
-    the one sentence that says what is crossed ("fact") and the model's
-    reason ("why"; left out by a tool with no reason argument, an MCP
-    server's). Whoever answers the ask (the user, the consent check, the
-    judge) reads the same sentence (`as_clause` puts it inside theirs); the
-    tool says what is crossed, in its words.
-    `grant`: a Grant, what "don't ask again" grants for its calls; None
-    offers none.
-    `written_files(args)`: the files a call writes, as the call names them (a
-    write's or an edit's path), so files no tool may change can be refused by
-    whoever keeps them; by default none.
-    `means`: for a tool that is a means of carrying out a task (a background
-    job, rounds, a subagent), what the means is for, in a line the system
-    message lists beside the others' (`means_lines`); or a function of the
-    session's context that returns the line, None where the session hasn't
-    the means. By default the tool is none.
+    Arguments named in `optional` may be left out; the rest are required.
+    `description`, the tool's or an argument's, may be a function of the
+    session's limits and its context, written at each call.
     `fields`: the data its answer carries beside its text (a Result's
-    `fields`), as MCP's outputSchema: name=(json_type, description) each;
-    others read these, never the text. `result_summary(fields)`: a call
-    that ran, as its fields say what it came to, in a few words for the
-    judge's view (a command that became a job), or None.
-    `reads_records`: True for the tool that reads a session's log by its
-    record numbers (`record_reader`), so a text naming records can say how
-    to read them. `reads_in_parts`: the two arguments that read a file in
-    parts, where to start and how many lines (`part_reader`), so a text
-    naming a saved file can say how to read it.
-    `never_cleared`: True for a tool whose answer the session goes on
-    following (a skill's instructions), so clearing old outputs to make
-    room leaves it whole (context/compaction.py); a handoff still sums it up.
-    `side_by_side`: True for a tool whose calls may run beside the step's
-    other such calls next to them (a read, a search, a fetch): it changes
-    nothing and holds nothing another call could change. A call runs so only
-    where it needs no permission and crosses nothing either
-    (`runs_side_by_side`), so no call that could ask is in flight with
-    another.
-    `calls_by_name`: for a tool that calls a found tool by its name (one a
-    session can call but doesn't send, `deferred`), the two arguments that
-    hold the name and the arguments, an object. A well-formed call is the
-    named tool's own from the start (`unwrapped`): its checks, its ask and
-    its record are that tool's, so the tool itself never runs.
+    `fields`), as MCP's outputSchema: name=(json_type, description) each.
+    `validate(args)`: what is wrong with well-formed arguments, or None.
+    `ready(context)`: whether a session offers the tool, from what it hands
+    its tools; by default always.
+    `summary(args)`: the call in a line or a few, for an ask and the judge;
+    one that cuts long text takes `whole`.
+    `traits`: capability trait strings (e.g. "side_by_side", "changing").
+    `metadata`: namespaced dicts for subsystem hooks and components.
     """
 
     def declare(fn):
@@ -178,34 +131,18 @@ def tool(description, /, optional=(), summary=None, ready=None,
             "found": False,
             # Arguments its schema doesn't list are refused
             "extra_arguments": False,
-            "side_by_side": side_by_side,
-            "calls_by_name": calls_by_name,
-            "hands_off": hands_off,
-            "user_approval": user_approval,
-            "asks_user": asks_user,
             # A found tool's (found_tool); ZERO's own are sent wherever ready
             "reachable": None,
-            "source": None,
-            "name_at_source": None,
             "output_schema": output_schema,
-            "result_summary": result_summary,
-            "reads_records": reads_records,
-            "reads_in_parts": reads_in_parts,
-            "never_cleared": never_cleared,
             "describe": describe,
             "described_arguments": described,
             "summary": summary,
             "summary_cuts": summary is not None
             and "whole" in inspect.signature(summary).parameters,
             "ready": ready,
-            "needs_permission": needs_permission,
             "validate": validate,
-            "changing": changing,
-            "starts_job": starts_job,
-            "crossing": crossing,
-            "grant": grant,
-            "written_files": written_files,
-            "means": means,
+            "traits": frozenset(traits),
+            "metadata": _copy_metadata(metadata),
             "schema": {
                 "type": "function",
                 "function": {
@@ -239,53 +176,34 @@ def add(*declared):
         TOOLS[name] = entry
 
 
-def found_tool(name, description, parameters, run, *, ready, reachable=None,
-               source=None, name_at_source=None, summary=None, crossing=None,
-               grant=None, extra_arguments=True, output_schema=None,
-               needs_permission=None):
+def found_tool(name, description, parameters, run, *, ready=None, summary=None,
+               validate=None, output_schema=None, extra_arguments=True,
+               reachable=None, traits=(), metadata=None):
     """A tool found at run time, as `add_found` takes it: told to the model
     as `name`, `description` and `parameters` (a JSON schema of an object,
     the arguments), run as `run(args, context)`, which gives its Result.
-    `ready(context)`: whether a session sends it with its requests now (its
-    door is there, its server connected, room for it). `reachable(context)`:
-    whether a session can call it now where `ready` says it isn't sent (a
-    search finds it, `deferred`); None: only where it is sent. `source`:
-    whose it is, in a few words ("the MCP server rea"), and
-    `name_at_source`, its name there, which a search's listing groups and
-    names it by. Every call needs permission unless the owning component's
-    `needs_permission` says otherwise from enforced confinement; a tool's own
-    hint isn't trusted. `extra_arguments`: whether arguments its schema
-    doesn't list go through (its schema says so), for its own side to judge.
-    The rest as `tool` declares them."""
+    `ready(context)`: whether a session sends it with its requests now.
+    `reachable(context)`: whether a session can call it now where `ready`
+    says it isn't sent (`deferred`); None: only where it is sent.
+    `extra_arguments`: whether arguments its schema doesn't list go through.
+    Found tools carry the `changing` trait by default since their own side
+    may change between identical calls."""
     return {
         "fn": run,
         "found": True,
         "extra_arguments": extra_arguments,
-        "side_by_side": False,
-        "calls_by_name": None,
         "reachable": reachable,
-        "source": source,
-        "name_at_source": name_at_source or name,
         "output_schema": output_schema or {"type": "object", "properties": {}},
-        "result_summary": None,
-        "reads_records": False,
-        "reads_in_parts": None,
-        "never_cleared": False,
         "describe": None,
         "described_arguments": {},
         "summary": summary,
-        "summary_cuts": False,
+        "summary_cuts": summary is not None
+        and "whole" in inspect.signature(summary).parameters,
         "ready": ready,
-        "needs_permission": needs_permission,
-        "validate": None,
-        # What it does is its own side's, so its answer may change on its
-        # own: the same call made again runs again
-        "changing": True,
-        "starts_job": None,
-        "crossing": crossing,
-        "grant": grant,
-        "written_files": None,
-        "means": None,
+        "validate": validate,
+        # What it does is its own side's, so its answer may change on its own
+        "traits": frozenset({"changing", *traits}),
+        "metadata": _copy_metadata(metadata),
         "schema": {
             "type": "function",
             "function": {
@@ -327,15 +245,48 @@ def entry_of(name):
     return found if found is not None else FOUND.get(name)
 
 
-def question_tool():
-    """The declared question tool's name, if registered."""
-    return next((name for name, entry in entries() if entry.get("asks_user")),
-                None)
-
-
 def entries():
     """(name, declaration) of every tool, ZERO's own first, then the found."""
     return [*TOOLS.items(), *FOUND.items()]
+
+
+def offered(context=None):
+    """(name, entry) of each tool a session offers: those ready in its
+    `context`, every one without a context."""
+    for name, entry in entries():
+        if (context is None or entry["ready"] is None
+                or entry["ready"](context)):
+            yield name, entry
+
+
+def has_trait(name, trait):
+    """Whether a registered or found tool declares `trait`."""
+    found = entry_of(name)
+    return found is not None and trait in found["traits"]
+
+
+def tools_with_trait(trait, context=None):
+    """(name, entry) of each offered tool declaring `trait`."""
+    return [(name, entry) for name, entry in offered(context)
+            if trait in entry["traits"]]
+
+
+def metadata_of(name, namespace, default=None):
+    """A tool's metadata under `namespace`, or `default` if absent."""
+    found = entry_of(name)
+    if found is None:
+        return default
+    return found["metadata"].get(namespace, default)
+
+
+def tools_with_metadata(namespace, context=None):
+    """(name, metadata) of each offered tool carrying `namespace` metadata."""
+    found = []
+    for name, entry in offered(context):
+        meta = entry["metadata"].get(namespace)
+        if meta is not None:
+            found.append((name, meta))
+    return found
 
 
 def deferred(context=None):
@@ -391,65 +342,19 @@ def named_call(arguments, held_in):
 
 def unwrapped(name, arguments):
     """For a well-formed call to a tool that calls a found tool by its name
-    (`calls_by_name`): (that tool's name, its arguments as JSON), the call
-    it is; None for any other call."""
+    (`calls_by_name` in its `found_tools` metadata): (that tool's name, its
+    arguments as JSON), the call it is; None for any other call."""
     entry = TOOLS.get(name)
-    if entry is None or entry["calls_by_name"] is None:
+    if entry is None:
         return None
-    found, _ = named_call(arguments, entry["calls_by_name"])
+    held_in = (entry["metadata"].get("found_tools") or {}).get("calls_by_name")
+    if held_in is None:
+        return None
+    found, _ = named_call(arguments, held_in)
     if found is None:
         return None
     inner, given = found
     return inner, json.dumps(given, ensure_ascii=False)
-
-
-def means_lines(context=None):
-    """What each means of carrying out a task is for, a line a means, as the
-    tools a session offers say it (`means`), in the order registered: only
-    the means the session has, from what it hands its tools (`context`)."""
-    context = context or {}
-    lines = []
-    for _, t in entries():
-        line = t["means"]
-        if line is None or (t["ready"] is not None and not t["ready"](context)):
-            continue
-        if callable(line):
-            line = line(context)
-        if line:
-            lines.append(line)
-    return lines
-
-
-def offered(context=None):
-    """(name, entry) of each tool a session offers: those ready in its
-    `context`, every one without a context."""
-    for name, entry in entries():
-        if (context is None or entry["ready"] is None
-                or entry["ready"](context)):
-            yield name, entry
-
-
-def job_starter(context=None):
-    """(the tool, its argument) that starts a call as a background job, as
-    the tool declares it (`starts_job`); None where no tool offered does."""
-    return next(((name, entry["starts_job"])
-                 for name, entry in offered(context) if entry["starts_job"]),
-                None)
-
-
-def record_reader(context=None):
-    """The tool that reads a session's log by its record numbers
-    (`reads_records`), or None where no tool offered does."""
-    return next((name for name, entry in offered(context)
-                 if entry["reads_records"]), None)
-
-
-def part_reader(context=None):
-    """(the tool, where to start, how many lines) that reads a file in parts
-    (`reads_in_parts`), or None where no tool offered does."""
-    return next(((name, *entry["reads_in_parts"])
-                 for name, entry in offered(context)
-                 if entry["reads_in_parts"]), None)
 
 
 def schemas(limits=None, context=None):
@@ -477,83 +382,6 @@ def schemas(limits=None, context=None):
             }}
         told.append(schema)
     return told
-
-
-def never_cleared(name):
-    """Whether the tool's answer stays whole when old outputs are cleared;
-    False for an unknown one."""
-    found = entry_of(name)
-    return found is not None and found["never_cleared"]
-
-
-def changing(name):
-    """Whether the tool's answer changes on its own; False for an unknown one."""
-    found = entry_of(name)
-    return found is not None and found["changing"]
-
-
-def starts_job(name, args):
-    """Whether the call starts a background job (its tool's `starts_job`
-    argument is true); False for an unknown tool."""
-    found = entry_of(name)
-    return (found is not None and found["starts_job"] is not None
-            and args.get(found["starts_job"]) is True)
-
-
-def result_summary(name, fields):
-    """What a call that ran came to, from its result's fields, in its
-    tool's words (`result_summary`), or None."""
-    found = entry_of(name)
-    if not fields or found is None or found["result_summary"] is None:
-        return None
-    return found["result_summary"](fields)
-
-
-def crossing(name, args):
-    """What the call crosses (its tool's `crossing`), or None."""
-    found = entry_of(name)
-    if found is None or found["crossing"] is None:
-        return None
-    return found["crossing"](args)
-
-
-def written_files(name, args):
-    """The files the call writes (its tool's `written_files`); [] for none."""
-    found = entry_of(name)
-    if found is None or found["written_files"] is None:
-        return []
-    return list(found["written_files"](args) or [])
-
-
-def as_clause(fact):
-    """A crossing's fact as part of another sentence: its first letter small,
-    without its full stop."""
-    return fact[:1].lower() + fact[1:].rstrip(".")
-
-
-def declared_grant(name):
-    """The tool's Grant, or None for a tool that offers none."""
-    found = entry_of(name)
-    return None if found is None else found["grant"]
-
-
-def grant_fields():
-    """The lists a grant may keep, as the tools declare them."""
-    fields = []
-    for _, t in entries():
-        grant = t["grant"]
-        while grant is not None:
-            if grant.field not in fields:
-                fields.append(grant.field)
-            grant = grant.previous
-    return fields
-
-
-def needs_permission(name, args):
-    """Whether a checked call needs permission (`tool`'s `needs_permission`);
-    True for a tool that says nothing and for an unknown one."""
-    check = (entry_of(name) or {}).get("needs_permission")
-    return True if check is None else bool(check(args))
 
 
 def summary(name, args, arguments, whole=False):
@@ -693,16 +521,6 @@ def run_checked(name, args, context=None, expected_entry=None):
         return answer
     except Exception as e:
         return Result(f"{ERROR}{type(e).__name__}: {e}", failed=True)
-
-
-def runs_side_by_side(name, args):
-    """Whether a checked call may run beside the step's other such calls next
-    to it: its tool says its calls may (`side_by_side`), and this one needs
-    no permission and crosses nothing, so it asks nobody."""
-    found = entry_of(name)
-    return (found is not None and found["side_by_side"]
-            and not needs_permission(name, args)
-            and crossing(name, args) is None)
 
 
 def normalise(arguments):

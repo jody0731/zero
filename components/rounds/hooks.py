@@ -1,0 +1,222 @@
+"""A round's end, and ZERO told once when work in rounds passes its estimate.
+
+Rounds: at a round's end, its handoff becomes the next round's fresh
+context (a compaction that keeps nothing, context/), and the server's
+rounds queue the next round's message (service.py). A turn compacted twice
+is told that work can go on in rounds. Nobody watches work in rounds: in
+default mode the judge answers what would have asked the user
+(permissions/approval.py's DefaultApproval, which asks `running_round`).
+ZERO's estimate is its own yardstick: past it, one note says so and
+the work goes on; nothing stops at it.
+"""
+
+from core import entries, replay
+from core.hooks import Hook, Stop
+from components.rounds import tool as roundtools
+from components.usage.spend import (
+    call_weighted_tokens, tokens_text, turn_dollars, turn_weighted_tokens,
+)
+
+# A turn's second compaction: the fact that long work can run in rounds
+OFFERED = (
+    "[Harness note: this turn's context has been compacted twice. Work that "
+    "goes on can also run in rounds (start_rounds): each round a turn whose "
+    "context starts fresh from the last round's handoff.]"
+)
+# A message the user sent with --rounds (session/send's `rounds`)
+ASKED = (
+    "[Harness note: the user sent this message to be worked on in rounds. No "
+    "work in rounds is under way yet: start_rounds starts it, with its "
+    "estimate and done check.]"
+)
+# Once, when the work passes ZERO's estimate
+PAST_ESTIMATE = (
+    "[Harness note: {id}, toward \"{objective}\", has used {spent}, past the "
+    "{passed} of your estimate. The work goes on.]"
+)
+# A round's end compacts the context to its handoff: the reason its record
+# keeps, and what the model reads happened there
+COMPACTION_REASON = "round"
+ROUND_ENDED = "a round ended"
+# Turn outcomes that end a round as failed, not by the user's say
+FAILED = ("model_error", "crashed", "broken_replies", "judge_refusals",
+          "hook_error", "failed", "cut_off")
+# Turn outcomes by the user's say: the work in rounds stops
+STOPPED = ("interrupted", "declined")
+
+
+def round_end(records, run):
+    """The round's end as its last end_round left it, or None."""
+    found = None
+    for record in records:
+        entry = record.entry
+        if not entries.has(entry, "tool_result") or not entry.get("ran"):
+            continue
+        end = (entry.get("notes") or {}).get("round_end")
+        if end and end.get("run") == run:
+            found = end
+    return found
+
+
+def started_in(records, run):
+    """Whether the turn started or gave a new estimate to this run."""
+    return any(
+        entries.has(record.entry, "tool_result") and record.entry.get("ran")
+        and (record.entry.get("notes") or {}).get("rounds_started") == run
+        for record in records
+    )
+
+
+def running_round(turn):
+    """The run this turn is a round of while the run goes on, or None: the
+    turn that started it (round 1), or one its next round's message
+    opened."""
+    rounds = turn.session.tool_context.get("session_rounds")
+    run = rounds.open() if rounds is not None else None
+    if run is None or run["state"] != "running":
+        return None
+    if turn.inbox == run["round_inbox"]:
+        return run
+    records = turn.session.log.unfinished_turn()
+    return run if started_in(records, run["id"]) else None
+
+
+def round_cut(records):
+    """A turn's round-end compaction, the newest; None if it has none."""
+    return next((r for r in reversed(records)
+                 if entries.has(r.entry, "compaction_handoff")
+                 and r.entry.get("reason") == COMPACTION_REASON), None)
+
+
+class Rounds(Hook):
+    """A round's end, the user's ask for rounds told, the offer of rounds to
+    a turn compacted twice, and the note when the work passes its
+    estimate."""
+
+    def turn_start(self, turn):
+        session = turn.session
+        rounds = session.tool_context.get("session_rounds")
+        if rounds is None:
+            return
+        records = session.log.unfinished_turn()
+        # What this turn's calls used so far, for the estimate
+        self._spent = turn_weighted_tokens(
+            records, session.settings.get("price"),
+            session.settings.get("fallback_price"))
+        run = running_round(turn)
+        if run is not None and run["round_count"] > run["estimate_rounds"]:
+            self._past(turn, run, 0.0)
+        if not records or not records[0].entry.get("rounds"):
+            return
+        if not any(entries.has(r.entry, "note")
+                   and r.entry.get("kind") == "rounds_asked" for r in records):
+            session.write("note", kind="rounds_asked", text=ASKED)
+
+    def after_model(self, step):
+        reply = step.reply
+        model = step.turn.session.model
+        price = getattr(getattr(model, "server", None), "price", None)
+        self._spent = getattr(self, "_spent", 0.0) + call_weighted_tokens(
+            reply.prompt_tokens, reply.cached_tokens, reply.completion_tokens,
+            price)
+
+    def _past(self, turn, run, minutes):
+        """Tell ZERO once that the work passed its estimate."""
+        if run["past_estimate_at"] is not None:
+            return
+        estimate_tokens = run["estimate_weighted_tokens"]
+        spent_minutes = run["spent_minutes"] + minutes
+        spent_tokens = (None if estimate_tokens is None else
+                        run["spent_weighted_tokens"] + getattr(self, "_spent", 0.0))
+        spent = roundtools.estimate_text(run["round_count"], spent_minutes,
+                                         spent_tokens)
+        # Only what was passed is named (usage/spend.py, passed_text)
+        passed = []
+        if run["round_count"] > run["estimate_rounds"]:
+            passed.append(f"{run['estimate_rounds']} rounds")
+        if spent_minutes > run["estimate_minutes"]:
+            passed.append(roundtools.duration(run["estimate_minutes"]))
+        if spent_tokens is not None and spent_tokens > estimate_tokens:
+            passed.append(tokens_text(estimate_tokens))
+        turn.session.write("note", kind="past_estimate", run=run["id"],
+                           text=PAST_ESTIMATE.format(
+                               id=run["id"], objective=run["objective"],
+                               spent=spent, passed=" and ".join(passed)))
+        turn.session.tool_context["session_rounds"].mark_past(run["id"])
+
+    def before_model(self, step):
+        session = step.turn.session
+        rounds = session.tool_context.get("session_rounds")
+        if rounds is None:
+            return None
+        compactions = 0
+        for record in session.log.unfinished_turn():
+            entry = record.entry
+            if entries.has(entry, "note") and entry.get("kind") == "rounds_offered":
+                return None
+            compactions += entries.has(entry, "compaction_handoff")
+        if compactions >= 2 and rounds.open() is None:
+            session.write("note", kind="rounds_offered", text=OFFERED)
+        return None
+
+    def step_end(self, step):
+        """A round that goes on ends its turn with the step that called
+        end_round: the next round starts fresh from that handoff, so no work
+        is done after it that it leaves out. Done and stuck leave the turn
+        to its closing reply. Work past its estimate is told once."""
+        for call in step.calls:
+            end = call.notes.get("round_end")
+            if end and end["status"] == "going_on":
+                return Stop("answered", None)
+        run = running_round(step.turn)
+        if run is not None and run["past_estimate_at"] is None:
+            minutes = step.turn.agent_seconds() / 60
+            tokens = run["spent_weighted_tokens"] + getattr(self, "_spent", 0.0)
+            estimate_tokens = run["estimate_weighted_tokens"]
+            # A run from before 0.6.8 has no estimate in tokens
+            if (run["spent_minutes"] + minutes > run["estimate_minutes"]
+                    or (estimate_tokens is not None and tokens > estimate_tokens)):
+                self._past(step.turn, run, minutes)
+        return None
+
+    def turn_end(self, turn):
+        """A round's end: its spend, then the next round or the run's end. A
+        turn that isn't one of its rounds (the user's message between them)
+        changes nothing."""
+        session = turn.session
+        rounds = session.tool_context.get("session_rounds")
+        if rounds is None:
+            return
+        run = rounds.open()
+        if run is None:
+            return
+        records = session.log.unfinished_turn()
+        if not started_in(records, run["id"]) and turn.inbox != run["round_inbox"]:
+            return
+        # The row moved on to the next round's message: this round's end was
+        # written whole before the turn was cut off (a turn that resumes past
+        # its fresh compaction)
+        if run["round_inbox"] not in (None, turn.inbox):
+            return
+        end = round_end(records, run["id"])
+        minutes = turn.agent_seconds() / 60
+        price = session.settings.get("price")
+        fallback_price = session.settings.get("fallback_price")
+        weighted_tokens = turn_weighted_tokens(records, price, fallback_price)
+        money = turn_dollars(records, price, fallback_price)
+        state = rounds.next_state(run, turn.outcome, end)
+        fresh = False
+        if state == "running" and turn.outcome not in FAILED:
+            # Its compaction once: a turn cut off after it has it already,
+            # and its row is what is left to write
+            if round_cut(records) is None:
+                session.compact(COMPACTION_REASON, end["handoff"] if end else None,
+                                fresh=True, occasion=ROUND_ENDED)
+            cut = round_cut(session.log.unfinished_turn())
+            fresh = cut is not None
+            if fresh and end is None:
+                # The handoff the model wrote, kept as the round's own
+                end = {"status": "going_on",
+                       "handoff": replay.boundary_summary(cut.entry)}
+        rounds.finish_round(run["id"], state, turn.outcome, end, minutes,
+                            weighted_tokens, money, fresh)

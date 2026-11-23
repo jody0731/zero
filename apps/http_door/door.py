@@ -39,18 +39,19 @@ from urllib.parse import urlencode, parse_qs, urlsplit
 from apps.http_door.guard import Guard, Refused
 from apps.mcp.server import McpServer, ZeroTools, answer_text
 from client import launcher
-from client.connection import (
-    CONNECT_WAIT_SECONDS, FEATURES_WAIT_SECONDS, Connection, NotRunning,
-    ProtocolError,
-)
+from client.connection import Connection, NotRunning, ProtocolError
 from protocol.messages import MESSAGES, SESSION_ID_ENV, request as build
 
 # The web UI's files, served as they are
 WEB_UI = Path(__file__).resolve().parents[1] / "web_ui"
+COMPONENTS_ROOT = Path(__file__).resolve().parents[2]
 FILE_TYPES = {".html": "text/html; charset=utf-8",
               ".css": "text/css; charset=utf-8",
               ".js": "text/javascript; charset=utf-8",
               ".svg": "image/svg+xml"}
+COMPONENT_FILE_TYPES = {".css": "text/css; charset=utf-8",
+                        ".js": "text/javascript; charset=utf-8",
+                        ".svg": "image/svg+xml"}
 # Minutes with nothing to do before the door leaves (the server's own
 # default idle time)
 IDLE_SECONDS = 300
@@ -62,12 +63,6 @@ MAX_BODY = 1 << 20
 PING_SECONDS = 15
 # While the server is asleep, how often an open page's stream looks for one
 WAKE_LOOK_SECONDS = 2.0
-# How long a request may wait on the server, by message; the rest the
-# client's default
-MESSAGE_SECONDS = {"model/features": FEATURES_WAIT_SECONDS,
-                   "model/server/connect": CONNECT_WAIT_SECONDS,
-                   "model/server/test": CONNECT_WAIT_SECONDS,
-                   "mcp/add": CONNECT_WAIT_SECONDS}
 # What every response carries: the page loads only its own files, runs no
 # inline script, is framed by no one, and sends no referrer
 SECURITY_HEADERS = (
@@ -114,6 +109,34 @@ def environ_session(pid):
     return None
 
 
+def component_ui_roots(root=None):
+    """Return {name: web_ui_dir} for every component with web_ui/ui.js."""
+    parent = (Path(root) if root is not None else COMPONENTS_ROOT) / "components"
+    if not parent.is_dir():
+        return {}
+    roots = {}
+    for folder in sorted(parent.iterdir()):
+        if not folder.is_dir() or folder.name.startswith((".", "_")):
+            continue
+        ui_dir = folder / "web_ui"
+        if ui_dir.is_dir() and (ui_dir / "ui.js").is_file():
+            roots[folder.name] = ui_dir.resolve()
+    return roots
+
+
+def discover_web_ui(root=None):
+    """Return JSON descriptors for discovered component web UI bundles."""
+    found = []
+    for name, ui_dir in component_ui_roots(root).items():
+        has_style = (ui_dir / "style.css").is_file()
+        found.append({
+            "name": name,
+            "module": f"/ui/components/{name}/ui.js",
+            "style": f"/ui/components/{name}/style.css" if has_style else None,
+        })
+    return found
+
+
 class Door(ThreadingHTTPServer):
     """The door's HTTP server: its guard, its count of what keeps it up, and
     how it reaches ZERO's server."""
@@ -123,9 +146,13 @@ class Door(ThreadingHTTPServer):
     request_queue_size = 64
 
     def __init__(self, paths, port, listener=None, idle_seconds=IDLE_SECONDS,
-                 ensure=None, guard=None):
+                 ensure=None, guard=None, components_root=None):
         self.paths = paths
         self.idle_seconds = idle_seconds
+        self.components_root = (
+            Path(components_root) if components_root is not None
+            else COMPONENTS_ROOT
+        )
         self.ensure = ensure or (lambda: launcher.ensure_server(paths))
         self.mcp = McpServer(self.mcp_tools)
         self.busy_lock = threading.Lock()
@@ -259,6 +286,14 @@ class Handler(BaseHTTPRequestHandler):
         guard = self.server.guard
         if path == "/" and method == "GET":
             return self.page(parse_qs(url.query))
+        if path == "/ui/components.json" and method == "GET":
+            guard.place(self.headers)
+            return self.send_json(
+                200, discover_web_ui(self.server.components_root),
+            )
+        if path.startswith("/ui/components/") and method == "GET":
+            guard.place(self.headers)
+            return self.component_file(path[len("/ui/components/"):])
         if path.startswith("/ui/") and method == "GET":
             guard.place(self.headers)
             return self.file(path[len("/ui/"):])
@@ -326,12 +361,30 @@ class Handler(BaseHTTPRequestHandler):
         return self.file("index.html")
 
     def file(self, name):
+        root = WEB_UI.resolve()
         found = (WEB_UI / name).resolve()
-        if (found.parent != WEB_UI.resolve() or found.suffix not in FILE_TYPES
+        if (not found.is_relative_to(root) or found.suffix not in FILE_TYPES
                 or not found.is_file()):
             return self.refuse(404, "nothing here")
         self.send_body(200, found.read_bytes(), FILE_TYPES[found.suffix],
                        cache="no-cache")
+
+    def component_file(self, tail):
+        name, sep, relpath = tail.partition("/")
+        if not name or not sep or not relpath or name in (".", ".."):
+            return self.refuse(404, "nothing here")
+        ui_dir = component_ui_roots(self.server.components_root).get(name)
+        if ui_dir is None:
+            return self.refuse(404, "nothing here")
+        found = (ui_dir / relpath).resolve()
+        if (not found.is_relative_to(ui_dir)
+                or found.suffix not in COMPONENT_FILE_TYPES
+                or not found.is_file()):
+            return self.refuse(404, "nothing here")
+        self.send_body(
+            200, found.read_bytes(), COMPONENT_FILE_TYPES[found.suffix],
+            cache="no-cache",
+        )
 
     # One message, whole
 
@@ -372,7 +425,7 @@ class Handler(BaseHTTPRequestHandler):
             payload["source"] = WEB_SOURCE
         try:
             reply = connection.reply_to(
-                payload, MESSAGE_SECONDS.get(name, 30))
+                payload, MESSAGES[name].get("timeout_seconds", 30))
         except NotRunning as error:
             reply = {"ok": False, "error": str(error)}
         except ProtocolError as error:

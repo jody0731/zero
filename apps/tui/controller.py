@@ -116,7 +116,8 @@ def choices(ask):
     """The answers an ask's box offers, as (choice, its words), picked with
     ↑/↓ and Enter or their number; words typed instead go to the consent
     check. The server names them (the ask's `choice_labels`)."""
-    return list((ask.get("choice_labels") or {}).items())
+    data = render.entries.fields_of(ask) if "entry" in ask else ask
+    return list((data.get("choice_labels") or {}).items())
 
 
 def command(text):
@@ -129,10 +130,11 @@ def command(text):
 
 
 def completions(text):
-    """The slash commands a typed start could be."""
+    """The slash commands a typed start could be (exact match first)."""
     if not text.startswith("/") or " " in text:
         return []
-    return [name for name in COMMANDS if name.startswith(text)]
+    matches = [name for name in COMMANDS if name.startswith(text)]
+    return sorted(matches, key=lambda name: name != text)
 
 
 def status_pieces(client, row, defaults, home=None, older=False, now=None):
@@ -192,11 +194,12 @@ def progress(client, row, now=None):
             pieces.append(f"writing {seconds} s")
         else:
             pieces.append(f"thinking {seconds} s")
-        if client.retry is not None and not client.retry.get("model_failure"):
-            error = " ".join(str(client.retry.get("error", "")).split())
+        if client.retry is not None and not render.entries.model_failure(client.retry):
+            retry_fields = render.entries.fields_of(client.retry)
+            error = " ".join(str(retry_fields.get("error", "")).split())
             if len(error) > 60:
                 error = error[:59] + "…"
-            pieces.append(f"retry {client.retry.get('retry')}: {error}")
+            pieces.append(f"retry {retry_fields.get('retry')}: {error}")
     jobs = (row or {}).get("jobs", 0)
     if jobs:
         pieces.append(f"{jobs} job{'' if jobs == 1 else 's'} running")

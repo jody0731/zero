@@ -15,5 +15,5 @@ from settings import Setting
 
 SETTINGS = (
     Setting("server_idle_minutes", "Server", "Minutes idle before the server leaves", 5,
-            "number"),
+            "number", aliases=("idle_minutes",)),
 )

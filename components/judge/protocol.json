@@ -1,0 +1,38 @@
+{
+  "message_extensions": {
+    "session/set": {
+      "fields": {
+        "judge_model": {
+          "type": "string",
+          "description": "empty: the session's own model"
+        },
+        "judge_thinking_effort": {
+          "type": "string"
+        }
+      }
+    },
+    "session/read": {
+      "reply": {
+        "runs_with": {
+          "type": "object",
+          "properties": {
+            "judge_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "null: the session's own model"
+            },
+            "judge_thinking_effort": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

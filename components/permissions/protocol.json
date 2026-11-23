@@ -1,0 +1,71 @@
+{
+  "rows": {
+    "mode": {
+      "type": "object",
+      "description": "one of the modes a session runs in",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "about": {
+          "type": "string",
+          "description": "its sandbox and who answers its asks, in a line"
+        },
+        "in_cycle": {
+          "type": "boolean",
+          "description": "a key that steps through the modes lands on it (false: chosen by its name only)"
+        }
+      }
+    }
+  },
+  "messages": {
+    "grant/list": {
+      "about": "The grants that hold in a session: what an ask's \"don't ask again\" allowed.",
+      "fields": {
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "reply": {
+        "grants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "id, by, scope, grant, description"
+        }
+      }
+    },
+    "grant/forget": {
+      "about": "Take a grant back.",
+      "fields": {
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "grant": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "grant"
+      ],
+      "reply": {
+        "forgot": {
+          "type": "string"
+        }
+      },
+      "changes": true
+    }
+  },
+  "commands": {
+    "/permissions": "what runs without asking (a plan's calls aside); /permissions forget N takes one back",
+    "/mode": "the mode, from the next turn: /mode NAME, or pick"
+  }
+}

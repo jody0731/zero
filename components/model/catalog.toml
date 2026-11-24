@@ -159,10 +159,13 @@ chat_tool_efforts = []
 [google]
 models_dev_provider = "google"
 title = "Google Gemini"
-url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+url = "https://generativelanguage.googleapis.com/v1beta"
 key_env = "GEMINI_API_KEY"
-# This URL serves Google’s OpenAI Chat compatibility API.
-reply_api = "chat_completions"
+reply_api = "google_interactions"
+requests_reasoning_summary = true
+accepts_zero_temperature = false
+refuses_overlong_requests = true
+suggested_models = ["gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon"]
 
 [google.models]
 "gemini-2.5-flash" = { reasoning_efforts = ["off", "low", "high"] }

@@ -11,7 +11,9 @@ show it send `reasoning_content` (llama-server, DeepSeek) or `reasoning`
 (Ollama, vLLM, OpenRouter), and both are read.
 """
 
-from openai import Stream
+from collections.abc import Mapping
+
+from openai import OpenAI, Stream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from core import entries
@@ -20,6 +22,7 @@ from core.replay import tool_output
 from components.model.apis.conversation import (
     project_entries, provider_items, reasoning,
 )
+from components.model.limits import TokenLimits, model_id, token_count
 
 # Its name in a server's entry (the line `api`), and in words
 NAME = "chat_completions"
@@ -33,6 +36,8 @@ TITLE = "the Chat Completions API"
 FEATURES = ("thinking_off", "thinking_on", "strict_json", "json_mode",
             "prefill_progress")
 MIN_OUTPUT_TOKENS = 1
+RETRY_V1_PREFIX = True
+TOTAL_FIELDS = ("max_model_len", "context_length", "max_context_length")
 # ZERO's thinking efforts as the API's reasoning_effort
 EFFORTS = {"off": "none", "low": "low", "high": "high", "max": "max"}
 # The API's finish reasons, in ZERO's words (core/llm.py, Draft); any other
@@ -44,6 +49,36 @@ FINISHED = {
     "function_call": "tool_calls",
     "content_filter": "content_filter",
 }
+
+
+def make_client(url, key, timeout):
+    """Create an OpenAI SDK client with retries disabled."""
+    return OpenAI(base_url=url, api_key=key, timeout=timeout, max_retries=0)
+
+
+def list_models(url, key, timeout):
+    """List OpenAI-compatible models with normalized token limits."""
+    with make_client(url, key, timeout) as client:
+        items = client.models.list().data
+    found = []
+    for item in items:
+        if not model_id(item.id):
+            continue
+        data = item.model_dump()
+        window, loads_window = runtime_context_window(data)
+        window = token_count(window)
+        if not loads_window:
+            window = next((count for name in TOTAL_FIELDS
+                           if (count := token_count(data.get(name)))), None)
+        limits = TokenLimits.read({**data, "context_window": window})
+        row = {"id": item.id, "context_window": window, **limits.as_dict()}
+        reasoning_meta = data.get("reasoning")
+        if isinstance(reasoning_meta, dict):
+            row["reasoning"] = reasoning_meta
+        if loads_window:
+            row["context_reported_on_load"] = True
+        found.append(row)
+    return found
 
 
 def assistant_message(entry, calls, route, content):
@@ -68,7 +103,12 @@ def assistant_message(entry, calls, route, content):
             if signature is not None and all(
                 signature.get(key) == value for key, value in function.items()
             ):
-                item["extra_content"] = entries.thaw(signature.get("extra_content"))
+                if signature.get("extra_content") is not None:
+                    item["extra_content"] = entries.thaw(
+                        signature.get("extra_content"),
+                    )
+                if signature.get("thought_signature") is not None:
+                    item["thought_signature"] = signature.get("thought_signature")
             wire.append(item)
         found["tool_calls"] = wire
     return found
@@ -203,7 +243,101 @@ def fold_reasoning_details(draft, details):
                 item[name] = data
 
 
-def remember_call_fields(draft, piece, call):
+def _record_unrecognized(draft, item):
+    slot = max(draft.unrecognized_outputs, default=-1) + 1
+    draft.unrecognized_outputs[slot] = item
+
+
+def _fold_content_blocks(draft, blocks):
+    heard = False
+    for raw in blocks:
+        part = (
+            raw.model_dump(mode="json") if hasattr(raw, "model_dump")
+            else dict(raw) if isinstance(raw, Mapping) else None
+        )
+        if part is None:
+            _record_unrecognized(draft, {"item": raw})
+            continue
+        ptype = part.get("type")
+        if ptype == "text":
+            text = part.get("text")
+            if isinstance(text, str):
+                if text:
+                    draft.content += text
+                    heard = True
+            elif text is not None:
+                _record_unrecognized(draft, part)
+        elif ptype == "thinking":
+            thinking = part.get("thinking")
+            if isinstance(thinking, list):
+                for sub in thinking:
+                    if (isinstance(sub, Mapping) and sub.get("type") == "text"
+                            and isinstance(sub.get("text"), str)):
+                        if sub["text"]:
+                            draft.reasoning += sub["text"]
+                            heard = True
+                    else:
+                        _record_unrecognized(draft, part)
+                        break
+            elif isinstance(thinking, str):
+                if thinking:
+                    draft.reasoning += thinking
+                    heard = True
+            elif isinstance(part.get("text"), str):
+                if part["text"]:
+                    draft.reasoning += part["text"]
+                    heard = True
+            else:
+                _record_unrecognized(draft, part)
+        elif ptype == "reasoning":
+            text = part.get("text")
+            if text is None:
+                text = part.get("reasoning")
+            if isinstance(text, str):
+                if text:
+                    draft.reasoning += text
+                    heard = True
+            else:
+                _record_unrecognized(draft, part)
+        else:
+            _record_unrecognized(draft, part)
+    return heard
+
+
+def _tool_call_slot(draft, piece):
+    slots_by_id = draft.stream_state.setdefault("slots_by_id", {})
+    slots_by_wire = draft.stream_state.setdefault("slots_by_wire_index", {})
+    wire_index = piece.index if type(piece.index) is int else None
+    last_slot = draft.stream_state.get("last_slot")
+    piece_id = piece.id or ""
+    if piece_id:
+        if piece_id in slots_by_id:
+            slot = slots_by_id[piece_id]
+        elif wire_index is not None and (
+            wire_index not in draft.calls or not draft.calls[wire_index]["id"]
+        ):
+            slot = wire_index
+        elif (wire_index is None and last_slot in draft.calls
+              and not draft.calls[last_slot]["id"]):
+            slot = last_slot
+        else:
+            slot = max(draft.calls, default=-1) + 1
+        slots_by_id[piece_id] = slot
+        if wire_index is not None:
+            slots_by_wire[wire_index] = slot
+        draft.stream_state["last_slot"] = slot
+        return slot
+    if wire_index is not None:
+        slot = slots_by_wire.get(wire_index, wire_index)
+    else:
+        slot = last_slot
+        if slot is None:
+            slot = max(draft.calls, default=-1) + 1
+    draft.stream_state["last_slot"] = slot
+    return slot
+
+
+def remember_call_fields(draft, piece, call, slot):
     fields = piece.model_dump(mode="json", exclude_unset=True)
     extra = {key: value for key, value in fields.items()
              if key not in ("index", "id", "type", "function")}
@@ -214,25 +348,26 @@ def remember_call_fields(draft, piece, call):
                       if key not in ("name", "arguments")}
     if function_extra:
         extra["function"] = function_extra
-    extra_content = extra.get("extra_content")
     signatures = draft.continuation_items.get("thought_signature")
+    extra_content = extra.get("extra_content")
     if isinstance(extra_content, dict) and extra_content.keys() == {"google"}:
         google = extra_content["google"]
         if (isinstance(google, dict) and google.keys() == {"thought_signature"}
                 and entries.nonempty(google["thought_signature"])):
-            signature = {
-                "name": call["name"],
-                "arguments": call["arguments"],
-                "extra_content": extra.pop("extra_content"),
-            }
-            if call["id"] is not None:
-                signature["call_id"] = call["id"]
             signatures = draft.continuation_items.setdefault(
                 "thought_signature", {},
             )
-            signatures[piece.index] = signature
-    if signatures is not None and piece.index in signatures:
-        signature = signatures[piece.index]
+            signatures.setdefault(slot, {})["extra_content"] = extra.pop(
+                "extra_content",
+            )
+    top_signature = extra.get("thought_signature")
+    if entries.nonempty(top_signature):
+        signatures = draft.continuation_items.setdefault("thought_signature", {})
+        signatures.setdefault(slot, {})["thought_signature"] = extra.pop(
+            "thought_signature",
+        )
+    if signatures is not None and slot in signatures:
+        signature = signatures[slot]
         if call["id"] is not None:
             signature["call_id"] = call["id"]
         signature["name"] = call["name"]
@@ -256,9 +391,15 @@ def fold(draft, chunk):
     for choice in chunk.choices or []:
         delta = choice.delta
         if delta is not None:
-            if delta.content:
-                draft.content += delta.content
-                heard = True
+            if isinstance(delta.content, str):
+                if delta.content:
+                    draft.content += delta.content
+                    heard = True
+            elif isinstance(delta.content, list):
+                if _fold_content_blocks(draft, delta.content):
+                    heard = True
+            elif delta.content is not None:
+                _record_unrecognized(draft, {"content": delta.content})
             extra = delta.model_extra or {}
             reasoning = extra.get("reasoning_content") or extra.get("reasoning")
             if reasoning:
@@ -269,13 +410,14 @@ def fold(draft, chunk):
                 fold_reasoning_details(draft, details)
                 heard = True
             for piece in delta.tool_calls or []:
-                call = draft.call(piece.index)
+                slot = _tool_call_slot(draft, piece)
+                call = draft.call(slot)
                 if piece.id:
                     call["id"] = piece.id
                 if piece.function is not None:
                     call["name"] += piece.function.name or ""
                     call["arguments"] += piece.function.arguments or ""
-                remember_call_fields(draft, piece, call)
+                remember_call_fields(draft, piece, call, slot)
                 heard = True
         if choice.finish_reason is not None:
             reason = FINISHED.get(choice.finish_reason)
@@ -283,6 +425,8 @@ def fold(draft, chunk):
                 raise CutShort(
                     f"the reply didn't complete ({choice.finish_reason})"
                 )
+            if reason == "stop" and draft.calls:
+                reason = "tool_calls"
             draft.finish_reason = reason
             heard = True
     return heard

@@ -30,7 +30,8 @@ from core.llm import MODEL_ERRORS, failure_text
 # Error phrases and codes for a request that exceeds the server's context.
 TOO_LONG = re.compile(
     r"context.{0,40}(length|size|window)|exceeds?.{0,40}context|too long|"
-    r"context_length_exceeded|exceed_context_size",
+    r"context_length_exceeded|exceed_context_size|"
+    r"input token count.{0,40}exceeds|exceeds the maximum number of tokens",
     re.IGNORECASE | re.DOTALL,
 )
 SAVED = (

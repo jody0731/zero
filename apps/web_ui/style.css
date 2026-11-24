@@ -339,6 +339,14 @@ details.call pre { background: var(--panel); padding: 8px 10px;
 .workspace-path {
   flex: 1; min-width: 0; overflow-wrap: anywhere; font: 12px monospace;
 }
+.context-window-value { flex: 1; min-width: 0; font-size: 13px; }
+.window-dialog-info { margin: 8px 18px; }
+.setting-note { margin-top: 6px; }
+.setting-note:empty { display: none; }
+.feature-summary { margin: 8px 0 0; padding: 8px 10px;
+  border-left: 2px solid var(--line); background: var(--panel); font-size: 13px; }
+.feature-summary ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.feature-summary li { margin: 2px 0; font-family: var(--mono); font-size: 12px; }
 .workspace-line button { flex: none; }
 .save-status:empty { display: none; }
 .command-list { scroll-padding: 4px; overscroll-behavior: contain; }

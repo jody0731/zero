@@ -93,10 +93,6 @@ max_output_tokens = 65536
 context_window = 1048576
 max_output_tokens = 65536
 
-[google."gemini-2.5-computer-use-preview-10-2025"]
-context_window = 128000
-max_output_tokens = 64000
-
 [google."gemini-2.5-flash"]
 context_window = 1048576
 max_output_tokens = 65536
@@ -104,6 +100,7 @@ max_output_tokens = 65536
 [google."gemini-2.5-flash-image"]
 context_window = 32768
 max_output_tokens = 32768
+reasoning = false
 
 [google."gemini-2.5-flash-lite"]
 context_window = 1048576
@@ -111,6 +108,7 @@ max_output_tokens = 65536
 
 [google."gemini-2.5-flash-preview-tts"]
 context_window = 8192
+reasoning = false
 
 [google."gemini-2.5-pro"]
 context_window = 1048576
@@ -118,6 +116,7 @@ max_output_tokens = 65536
 
 [google."gemini-2.5-pro-preview-tts"]
 context_window = 8192
+reasoning = false
 
 [google."gemini-3-flash-preview"]
 context_window = 1048576
@@ -138,10 +137,6 @@ max_output_tokens = 65536
 [google."gemini-3.1-flash-lite-image"]
 context_window = 65536
 max_output_tokens = 4096
-
-[google."gemini-3.1-flash-lite-preview"]
-context_window = 1048576
-max_output_tokens = 65536
 
 [google."gemini-3.1-flash-live-preview"]
 context_window = 131072
@@ -169,6 +164,7 @@ max_output_tokens = 65536
 [google."gemini-3.5-live-translate-preview"]
 context_window = 16384
 max_output_tokens = 16384
+reasoning = false
 
 [google."gemini-3.6-flash"]
 context_window = 1048576
@@ -201,10 +197,12 @@ max_output_tokens = 65536
 [google."gemini-embedding-001"]
 context_window = 2048
 max_output_tokens = 1
+reasoning = false
 
 [google."gemini-embedding-2"]
 context_window = 8192
 max_output_tokens = 1
+reasoning = false
 
 [google."gemini-flash-latest"]
 context_window = 1048576
@@ -212,10 +210,6 @@ max_output_tokens = 65536
 
 [google."gemini-flash-lite-latest"]
 context_window = 1048576
-max_output_tokens = 65536
-
-[google."gemini-omni-flash-preview"]
-context_window = 131072
 max_output_tokens = 65536
 
 [google."gemini-pro-latest"]
@@ -233,10 +227,12 @@ max_output_tokens = 32768
 [google."lyria-3-clip-preview"]
 context_window = 1048576
 max_output_tokens = 65536
+reasoning = false
 
 [google."lyria-3-pro-preview"]
 context_window = 1048576
 max_output_tokens = 65536
+reasoning = false
 
 [kimi."kimi-k2.6"]
 context_window = 262144
@@ -262,49 +258,35 @@ max_output_tokens = 1048576
 context_window = 1048576
 max_output_tokens = 1048576
 
-[openai."gpt-3.5-turbo"]
-context_window = 16385
-max_output_tokens = 4096
-
-[openai."gpt-4"]
-context_window = 8192
-max_output_tokens = 8192
-
-[openai."gpt-4-turbo"]
-context_window = 128000
-max_output_tokens = 4096
-
 [openai."gpt-4.1"]
 context_window = 1047576
 max_output_tokens = 32768
+reasoning = false
 
 [openai."gpt-4.1-mini"]
 context_window = 1047576
 max_output_tokens = 32768
-
-[openai."gpt-4.1-nano"]
-context_window = 1047576
-max_output_tokens = 32768
+reasoning = false
 
 [openai."gpt-4o"]
 context_window = 128000
 max_output_tokens = 16384
-
-[openai."gpt-4o-2024-05-13"]
-context_window = 128000
-max_output_tokens = 4096
+reasoning = false
 
 [openai."gpt-4o-2024-08-06"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openai."gpt-4o-2024-11-20"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openai."gpt-4o-mini"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openai."gpt-5"]
 context_window = 400000
@@ -345,11 +327,6 @@ max_output_tokens = 128000
 context_window = 400000
 max_input_tokens = 272000
 max_output_tokens = 128000
-
-[openai."gpt-5.3-codex-spark"]
-context_window = 128000
-max_input_tokens = 100000
-max_output_tokens = 32000
 
 [openai."gpt-5.4"]
 context_window = 1050000
@@ -446,24 +423,7 @@ context_window = 400000
 max_input_tokens = 272000
 max_output_tokens = 128000
 
-[openai."gpt-realtime-2.1"]
-context_window = 128000
-max_input_tokens = 96000
-max_output_tokens = 32000
-
-[openai."o1"]
-context_window = 200000
-max_output_tokens = 100000
-
-[openai."o1-pro"]
-context_window = 200000
-max_output_tokens = 100000
-
 [openai."o3"]
-context_window = 200000
-max_output_tokens = 100000
-
-[openai."o3-mini"]
 context_window = 200000
 max_output_tokens = 100000
 
@@ -471,21 +431,20 @@ max_output_tokens = 100000
 context_window = 200000
 max_output_tokens = 100000
 
-[openai."o4-mini"]
-context_window = 200000
-max_output_tokens = 100000
-
 [openai."text-embedding-3-large"]
 context_window = 8191
 max_output_tokens = 3072
+reasoning = false
 
 [openai."text-embedding-3-small"]
 context_window = 8191
 max_output_tokens = 1536
+reasoning = false
 
 [openai."text-embedding-ada-002"]
 context_window = 8192
 max_output_tokens = 1536
+reasoning = false
 
 [openrouter."aion-labs/aion-2.0"]
 context_window = 131072
@@ -510,6 +469,7 @@ max_output_tokens = 32768
 [openrouter."aion-labs/aion-rp-llama-3.1-8b"]
 context_window = 32768
 max_output_tokens = 29491
+reasoning = false
 
 [openrouter."amazon/nova-2-lite-v1"]
 context_window = 1000000
@@ -518,22 +478,27 @@ max_output_tokens = 65535
 [openrouter."amazon/nova-lite-v1"]
 context_window = 300000
 max_output_tokens = 5120
+reasoning = false
 
 [openrouter."amazon/nova-micro-v1"]
 context_window = 128000
 max_output_tokens = 5120
+reasoning = false
 
 [openrouter."amazon/nova-premier-v1"]
 context_window = 1000000
 max_output_tokens = 32000
+reasoning = false
 
 [openrouter."amazon/nova-pro-v1"]
 context_window = 300000
 max_output_tokens = 5120
+reasoning = false
 
 [openrouter."anthracite-org/magnum-v4-72b"]
 context_window = 32768
 max_output_tokens = 4096
+reasoning = false
 
 [openrouter."anthropic/claude-fable-5"]
 context_window = 1000000
@@ -622,14 +587,17 @@ max_output_tokens = 131072
 [openrouter."bytedance/ui-tars-1.5-7b"]
 context_window = 128000
 max_output_tokens = 2048
+reasoning = false
 
 [openrouter."cognitivecomputations/dolphin-mistral-24b-venice-edition"]
 context_window = 128000
 max_output_tokens = 8192
+reasoning = false
 
 [openrouter."cohere/command-a"]
 context_window = 256000
 max_output_tokens = 8192
+reasoning = false
 
 [openrouter."cohere/command-a-plus"]
 context_window = 192000
@@ -638,22 +606,27 @@ max_output_tokens = 64000
 [openrouter."cohere/command-r-08-2024"]
 context_window = 128000
 max_output_tokens = 4000
+reasoning = false
 
 [openrouter."cohere/command-r-plus-08-2024"]
 context_window = 128000
 max_output_tokens = 4000
+reasoning = false
 
 [openrouter."cohere/command-r7b-12-2024"]
 context_window = 128000
 max_output_tokens = 4000
+reasoning = false
 
 [openrouter."deepseek/deepseek-chat"]
 context_window = 163840
 max_output_tokens = 16000
+reasoning = false
 
 [openrouter."deepseek/deepseek-chat-v3-0324"]
 context_window = 163840
 max_output_tokens = 147456
+reasoning = false
 
 [openrouter."deepseek/deepseek-chat-v3.1"]
 context_window = 163840
@@ -722,6 +695,7 @@ max_output_tokens = 65535
 [openrouter."google/gemini-2.5-flash-image"]
 context_window = 32768
 max_output_tokens = 8192
+reasoning = false
 
 [openrouter."google/gemini-2.5-flash-lite"]
 context_window = 1048576
@@ -826,18 +800,22 @@ max_output_tokens = 65536
 [openrouter."google/gemma-2-27b-it"]
 context_window = 8192
 max_output_tokens = 2048
+reasoning = false
 
 [openrouter."google/gemma-3-12b-it"]
 context_window = 131072
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."google/gemma-3-27b-it"]
 context_window = 131072
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."google/gemma-3-4b-it"]
 context_window = 131072
 max_output_tokens = 117964
+reasoning = false
 
 [openrouter."google/gemma-4-26b-a4b-it"]
 context_window = 262144
@@ -858,14 +836,17 @@ max_output_tokens = 32768
 [openrouter."google/lyria-3-clip-preview"]
 context_window = 1048576
 max_output_tokens = 65536
+reasoning = false
 
 [openrouter."google/lyria-3-pro-preview"]
 context_window = 1048576
 max_output_tokens = 65536
+reasoning = false
 
 [openrouter."gryphe/mythomax-l2-13b"]
 context_window = 8192
 max_output_tokens = 7372
+reasoning = false
 
 [openrouter."ibm-granite/granite-4.2-8b"]
 context_window = 131072
@@ -894,10 +875,12 @@ max_output_tokens = 262144
 [openrouter."inference-net/schematron-v2-small"]
 context_window = 128000
 max_output_tokens = 8192
+reasoning = false
 
 [openrouter."inference-net/schematron-v2-turbo"]
 context_window = 128000
 max_output_tokens = 8192
+reasoning = false
 
 [openrouter."kt/midm-k-3.0-pro"]
 context_window = 261795
@@ -918,34 +901,42 @@ max_output_tokens = 8192
 [openrouter."mancer/weaver"]
 context_window = 8000
 max_output_tokens = 6000
+reasoning = false
 
 [openrouter."meta-llama/llama-3.1-70b-instruct"]
 context_window = 131072
 max_output_tokens = 8192
+reasoning = false
 
 [openrouter."meta-llama/llama-3.1-8b-instruct"]
 context_window = 131072
-max_output_tokens = 16384
+max_output_tokens = 117964
+reasoning = false
 
 [openrouter."meta-llama/llama-3.2-3b-instruct"]
 context_window = 131072
 max_output_tokens = 117964
+reasoning = false
 
 [openrouter."meta-llama/llama-3.3-70b-instruct"]
 context_window = 131072
 max_output_tokens = 115200
+reasoning = false
 
 [openrouter."meta-llama/llama-4-maverick"]
 context_window = 524288
 max_output_tokens = 32768
+reasoning = false
 
 [openrouter."meta-llama/llama-4-scout"]
 context_window = 327680
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."meta-llama/llama-guard-4-12b"]
 context_window = 163840
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."meta/muse-ember"]
 context_window = 1048576
@@ -986,6 +977,7 @@ max_output_tokens = 943718
 [openrouter."microsoft/phi-4"]
 context_window = 16384
 max_output_tokens = 14745
+reasoning = false
 
 [openrouter."minimax/minimax-m2.5"]
 context_window = 198000
@@ -1001,39 +993,47 @@ max_output_tokens = 235929
 
 [openrouter."minimax/minimax-m3.1-flash"]
 context_window = 1048576
-max_output_tokens = 512000
+max_output_tokens = 943718
 
 [openrouter."mistralai/codestral-2508"]
 context_window = 256000
 max_output_tokens = 204800
+reasoning = false
 
 [openrouter."mistralai/devstral-2512"]
 context_window = 262144
 max_output_tokens = 209715
+reasoning = false
 
 [openrouter."mistralai/ministral-14b-2512"]
 context_window = 262144
 max_output_tokens = 209715
+reasoning = false
 
 [openrouter."mistralai/ministral-3b-2512"]
 context_window = 131072
 max_output_tokens = 104857
+reasoning = false
 
 [openrouter."mistralai/ministral-8b-2512"]
 context_window = 262144
 max_output_tokens = 209715
+reasoning = false
 
 [openrouter."mistralai/mistral-large"]
 context_window = 128000
 max_output_tokens = 102400
+reasoning = false
 
 [openrouter."mistralai/mistral-large-2407"]
 context_window = 131072
 max_output_tokens = 104857
+reasoning = false
 
 [openrouter."mistralai/mistral-large-2512"]
 context_window = 262144
 max_output_tokens = 209715
+reasoning = false
 
 [openrouter."mistralai/mistral-large-4-0"]
 context_window = 1048576
@@ -1042,6 +1042,7 @@ max_output_tokens = 262144
 [openrouter."mistralai/mistral-medium-3"]
 context_window = 131072
 max_output_tokens = 104857
+reasoning = false
 
 [openrouter."mistralai/mistral-medium-3-5"]
 context_window = 262144
@@ -1050,18 +1051,22 @@ max_output_tokens = 209715
 [openrouter."mistralai/mistral-medium-3.1"]
 context_window = 131072
 max_output_tokens = 104857
+reasoning = false
 
 [openrouter."mistralai/mistral-nemo"]
 context_window = 131072
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."mistralai/mistral-saba"]
 context_window = 32768
 max_output_tokens = 26214
+reasoning = false
 
 [openrouter."mistralai/mistral-small-24b-instruct-2501"]
 context_window = 32768
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."mistralai/mistral-small-2603"]
 context_window = 262144
@@ -1070,22 +1075,27 @@ max_output_tokens = 209715
 [openrouter."mistralai/mistral-small-3.1-24b-instruct"]
 context_window = 128000
 max_output_tokens = 102400
+reasoning = false
 
 [openrouter."mistralai/mistral-small-3.2-24b-instruct"]
 context_window = 256000
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."mistralai/mixtral-8x22b-instruct"]
 context_window = 65536
 max_output_tokens = 52428
+reasoning = false
 
 [openrouter."mistralai/pixtral-large-2502"]
 context_window = 128000
 max_output_tokens = 102400
+reasoning = false
 
 [openrouter."mistralai/voxtral-small-24b-2507"]
 context_window = 32768
 max_output_tokens = 26214
+reasoning = false
 
 [openrouter."moondream/moondream3-preview"]
 context_window = 32000
@@ -1098,10 +1108,12 @@ max_output_tokens = 4096
 [openrouter."moonshotai/kimi-k2"]
 context_window = 131072
 max_output_tokens = 98304
+reasoning = false
 
 [openrouter."moonshotai/kimi-k2-0905"]
 context_window = 262144
 max_output_tokens = 98304
+reasoning = false
 
 [openrouter."moonshotai/kimi-k2-thinking"]
 context_window = 262144
@@ -1130,10 +1142,12 @@ max_output_tokens = 943718
 [openrouter."morph/morph-v3-fast"]
 context_window = 262144
 max_output_tokens = 131072
+reasoning = false
 
 [openrouter."morph/morph-v3-large"]
 context_window = 262144
 max_output_tokens = 131072
+reasoning = false
 
 [openrouter."motif-technologies/motif-3"]
 context_window = 262144
@@ -1198,50 +1212,62 @@ max_output_tokens = 131072
 [openrouter."openai/gpt-3.5-turbo-0613"]
 context_window = 4095
 max_output_tokens = 3685
+reasoning = false
 
 [openrouter."openai/gpt-3.5-turbo-16k"]
 context_window = 16385
 max_output_tokens = 4096
+reasoning = false
 
 [openrouter."openai/gpt-4"]
 context_window = 8191
 max_output_tokens = 4096
+reasoning = false
 
 [openrouter."openai/gpt-4.1"]
 context_window = 1047576
 max_output_tokens = 32768
+reasoning = false
 
 [openrouter."openai/gpt-4.1-mini"]
 context_window = 1047576
 max_output_tokens = 32768
+reasoning = false
 
 [openrouter."openai/gpt-4.1-nano"]
 context_window = 1047576
 max_output_tokens = 942818
+reasoning = false
 
 [openrouter."openai/gpt-4o"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."openai/gpt-4o-2024-05-13"]
 context_window = 128000
 max_output_tokens = 4096
+reasoning = false
 
 [openrouter."openai/gpt-4o-2024-08-06"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."openai/gpt-4o-2024-11-20"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."openai/gpt-4o-mini"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."openai/gpt-4o-mini-2024-07-18"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."openai/gpt-5"]
 context_window = 400000
@@ -1441,14 +1467,17 @@ max_output_tokens = 128000
 [openrouter."openai/gpt-audio"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."openai/gpt-audio-mini"]
 context_window = 128000
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."openai/gpt-chat-latest"]
 context_window = 400000
 max_output_tokens = 128000
+reasoning = false
 
 [openrouter."openai/gpt-oss-120b"]
 context_window = 131072
@@ -1477,6 +1506,7 @@ max_output_tokens = 2000000
 [openrouter."openrouter/bodybuilder"]
 context_window = 128000
 max_output_tokens = 128000
+reasoning = false
 
 [openrouter."openrouter/free"]
 context_window = 200000
@@ -1486,10 +1516,12 @@ max_output_tokens = 8000
 [openrouter."openrouter/fusion"]
 context_window = 1000000
 max_output_tokens = 128000
+reasoning = false
 
 [openrouter."openrouter/pareto-code"]
 context_window = 2000000
 max_output_tokens = 200000
+reasoning = false
 
 [openrouter."particle-ai/particle-1"]
 context_window = 1048576
@@ -1510,6 +1542,7 @@ max_output_tokens = 8192
 [openrouter."perplexity/sonar"]
 context_window = 127072
 max_output_tokens = 114364
+reasoning = false
 
 [openrouter."perplexity/sonar-deep-research"]
 context_window = 128000
@@ -1518,6 +1551,7 @@ max_output_tokens = 115200
 [openrouter."perplexity/sonar-pro"]
 context_window = 200000
 max_output_tokens = 8000
+reasoning = false
 
 [openrouter."perplexity/sonar-pro-search"]
 context_window = 200000
@@ -1538,18 +1572,22 @@ max_output_tokens = 65536
 [openrouter."qwen/qwen-2.5-72b-instruct"]
 context_window = 32768
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."qwen/qwen-2.5-coder-32b-instruct"]
 context_window = 32768
 max_output_tokens = 29491
+reasoning = false
 
 [openrouter."qwen/qwen-plus"]
 context_window = 1000000
 max_output_tokens = 32768
+reasoning = false
 
 [openrouter."qwen/qwen2.5-vl-72b-instruct"]
 context_window = 128000
 max_output_tokens = 115200
+reasoning = false
 
 [openrouter."qwen/qwen3-14b"]
 context_window = 40960
@@ -1558,6 +1596,7 @@ max_output_tokens = 16384
 [openrouter."qwen/qwen3-235b-a22b-2507"]
 context_window = 262144
 max_output_tokens = 117964
+reasoning = false
 
 [openrouter."qwen/qwen3-235b-a22b-thinking-2507"]
 context_window = 128000
@@ -1570,6 +1609,7 @@ max_output_tokens = 16384
 [openrouter."qwen/qwen3-30b-a3b-instruct-2507"]
 context_window = 262144
 max_output_tokens = 235929
+reasoning = false
 
 [openrouter."qwen/qwen3-32b"]
 context_window = 131072
@@ -1578,34 +1618,42 @@ max_output_tokens = 16384
 [openrouter."qwen/qwen3-coder"]
 context_window = 262144
 max_output_tokens = 65536
+reasoning = false
 
 [openrouter."qwen/qwen3-coder-30b-a3b-instruct"]
 context_window = 262144
 max_output_tokens = 235929
+reasoning = false
 
 [openrouter."qwen/qwen3-coder-flash"]
 context_window = 1000000
 max_output_tokens = 65536
+reasoning = false
 
 [openrouter."qwen/qwen3-coder-next"]
 context_window = 262144
 max_output_tokens = 235929
+reasoning = false
 
 [openrouter."qwen/qwen3-next-80b-a3b-instruct"]
 context_window = 262144
 max_output_tokens = 235929
+reasoning = false
 
 [openrouter."qwen/qwen3-vl-235b-a22b-instruct"]
 context_window = 262144
 max_output_tokens = 32768
+reasoning = false
 
 [openrouter."qwen/qwen3-vl-30b-a3b-instruct"]
 context_window = 262144
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."qwen/qwen3-vl-8b-instruct"]
 context_window = 262144
 max_output_tokens = 235929
+reasoning = false
 
 [openrouter."qwen/qwen3.5-122b-a10b"]
 context_window = 262144
@@ -1711,6 +1759,7 @@ max_output_tokens = 131072
 [openrouter."rekaai/reka-edge"]
 context_window = 16384
 max_output_tokens = 14745
+reasoning = false
 
 [openrouter."rekaai/reka-flash-3"]
 context_window = 65536
@@ -1719,10 +1768,12 @@ max_output_tokens = 58982
 [openrouter."relace/relace-apply-3"]
 context_window = 256000
 max_output_tokens = 128000
+reasoning = false
 
 [openrouter."relace/relace-search"]
 context_window = 256000
 max_output_tokens = 128000
+reasoning = false
 
 [openrouter."ricursiveai/ripple-65b-preview"]
 context_window = 1048576
@@ -1747,18 +1798,22 @@ max_output_tokens = 65536
 [openrouter."sao10k/l3-lunaris-8b"]
 context_window = 8192
 max_output_tokens = 7372
+reasoning = false
 
 [openrouter."sao10k/l3.1-euryale-70b"]
 context_window = 131072
 max_output_tokens = 16384
+reasoning = false
 
 [openrouter."scaledown/extract"]
 context_window = 1000000
 max_output_tokens = 900000
+reasoning = false
 
 [openrouter."scaledown/summarize"]
 context_window = 1000000
 max_output_tokens = 4000
+reasoning = false
 
 [openrouter."stepfun/step-3.7-flash"]
 context_window = 262144
@@ -1773,14 +1828,17 @@ max_output_tokens = 64000
 [openrouter."tencent/hy-mt2-1.8b"]
 context_window = 8192
 max_output_tokens = 4096
+reasoning = false
 
 [openrouter."tencent/hy-mt2-30b-a3b"]
 context_window = 8192
 max_output_tokens = 4096
+reasoning = false
 
 [openrouter."tencent/hy-mt2-7b"]
 context_window = 8192
 max_output_tokens = 4096
+reasoning = false
 
 [openrouter."tencent/hy3"]
 context_window = 262144
@@ -1804,17 +1862,20 @@ max_output_tokens = 64000
 [openrouter."thedrummer/cydonia-24b-v4.1"]
 context_window = 131072
 max_output_tokens = 117964
+reasoning = false
 
 [openrouter."thedrummer/skyfall-36b-v2"]
 context_window = 32768
 max_output_tokens = 29491
+reasoning = false
 
 [openrouter."thedrummer/unslopnemo-12b"]
 context_window = 1024000
 max_output_tokens = 819200
+reasoning = false
 
 [openrouter."thinkingmachines/inkling"]
-context_window = 524288
+context_window = 1048576
 max_output_tokens = 471859
 
 [openrouter."thinkingmachines/inkling-2-mini"]
@@ -1832,18 +1893,22 @@ max_output_tokens = 262144
 [openrouter."unbiased/pareto-26.10"]
 context_window = 1048576
 max_output_tokens = 131072
+reasoning = false
 
 [openrouter."unbiased/pareto-26.10-preview"]
 context_window = 1048576
 max_output_tokens = 131072
+reasoning = false
 
 [openrouter."unbiased/pareto-26.9"]
 context_window = 262144
 max_output_tokens = 131072
+reasoning = false
 
 [openrouter."undi95/remm-slerp-l2-13b"]
 context_window = 6144
 max_output_tokens = 5529
+reasoning = false
 
 [openrouter."upstage/solar-mini4"]
 context_window = 524288
@@ -1856,6 +1921,7 @@ max_output_tokens = 131072
 [openrouter."writer/palmyra-x5"]
 context_window = 1040000
 max_output_tokens = 8192
+reasoning = false
 
 [openrouter."x-ai/grok-4.20"]
 context_window = 2000000
@@ -1884,10 +1950,6 @@ max_output_tokens = 450000
 [openrouter."xiaomi/mimo-v2.5"]
 context_window = 1000000
 max_output_tokens = 65536
-
-[openrouter."xiaomi/mimo-v2.5-pro"]
-context_window = 262144
-max_output_tokens = 235929
 
 [openrouter."xiaomi/mimo-v2.6-flash"]
 context_window = 1048576
@@ -1987,7 +2049,7 @@ max_output_tokens = 128000
 
 [openrouter."~deepseek/deepseek-flash-latest"]
 context_window = 1048576
-max_output_tokens = 943718
+max_output_tokens = 393216
 
 [openrouter."~deepseek/deepseek-pro-latest"]
 context_window = 1048576
@@ -2032,6 +2094,7 @@ max_output_tokens = 128000
 [openrouter."~unbiased/pareto-latest"]
 context_window = 1048576
 max_output_tokens = 131072
+reasoning = false
 
 [openrouter."~x-ai/grok-latest"]
 context_window = 500000
@@ -2088,14 +2151,17 @@ max_output_tokens = 16384
 [qwen."deepseek-v3"]
 context_window = 65536
 max_output_tokens = 8192
+reasoning = false
 
 [qwen."deepseek-v3-1"]
 context_window = 131072
 max_output_tokens = 65536
+reasoning = false
 
 [qwen."deepseek-v3-2-exp"]
 context_window = 131072
 max_output_tokens = 65536
+reasoning = false
 
 [qwen."deepseek-v4-flash"]
 context_window = 1000000
@@ -2148,6 +2214,7 @@ max_output_tokens = 262144
 [qwen."moonshot-kimi-k2-instruct"]
 context_window = 131072
 max_output_tokens = 8192
+reasoning = false
 
 [qwen."qvq-max"]
 context_window = 131072
@@ -2156,10 +2223,12 @@ max_output_tokens = 8192
 [qwen."qwen-deep-research"]
 context_window = 1000000
 max_output_tokens = 32768
+reasoning = false
 
 [qwen."qwen-doc-turbo"]
 context_window = 131072
 max_output_tokens = 8192
+reasoning = false
 
 [qwen."qwen-flash"]
 context_window = 1000000
@@ -2168,34 +2237,42 @@ max_output_tokens = 32768
 [qwen."qwen-long"]
 context_window = 10000000
 max_output_tokens = 8192
+reasoning = false
 
 [qwen."qwen-math-plus"]
 context_window = 4096
 max_output_tokens = 3072
+reasoning = false
 
 [qwen."qwen-math-turbo"]
 context_window = 4096
 max_output_tokens = 3072
+reasoning = false
 
 [qwen."qwen-max"]
 context_window = 131072
 max_output_tokens = 8192
+reasoning = false
 
 [qwen."qwen-mt-plus"]
 context_window = 16384
 max_output_tokens = 8192
+reasoning = false
 
 [qwen."qwen-mt-turbo"]
 context_window = 16384
 max_output_tokens = 8192
+reasoning = false
 
 [qwen."qwen-omni-turbo"]
 context_window = 32768
 max_output_tokens = 2048
+reasoning = false
 
 [qwen."qwen-omni-turbo-realtime"]
 context_window = 32768
 max_output_tokens = 2048
+reasoning = false
 
 [qwen."qwen-plus"]
 context_window = 1000000
@@ -2204,6 +2281,7 @@ max_output_tokens = 32768
 [qwen."qwen-plus-character"]
 context_window = 32768
 max_output_tokens = 4096
+reasoning = false
 
 [qwen."qwen-turbo"]
 context_window = 1000000
@@ -2212,18 +2290,22 @@ max_output_tokens = 16384
 [qwen."qwen-vl-max"]
 context_window = 131072
 max_output_tokens = 8192
+reasoning = false
 
 [qwen."qwen-vl-ocr"]
 context_window = 34096
 max_output_tokens = 4096
+reasoning = false
 
 [qwen."qwen-vl-plus"]
 context_window = 131072
 max_output_tokens = 8192
+reasoning = false
 
 [qwen."qwen2-5-omni-7b"]
 context_window = 32768
 max_output_tokens = 2048
+reasoning = false
 
 [qwen."qwen3-14b"]
 context_window = 131072
@@ -2244,22 +2326,27 @@ max_output_tokens = 8192
 [qwen."qwen3-asr-flash"]
 context_window = 53248
 max_output_tokens = 4096
+reasoning = false
 
 [qwen."qwen3-coder-30b-a3b-instruct"]
 context_window = 262144
 max_output_tokens = 65536
+reasoning = false
 
 [qwen."qwen3-coder-480b-a35b-instruct"]
 context_window = 262144
 max_output_tokens = 65536
+reasoning = false
 
 [qwen."qwen3-coder-flash"]
 context_window = 1000000
 max_output_tokens = 65536
+reasoning = false
 
 [qwen."qwen3-coder-plus"]
 context_window = 1048576
 max_output_tokens = 65536
+reasoning = false
 
 [qwen."qwen3-max"]
 context_window = 262144
@@ -2268,6 +2355,7 @@ max_output_tokens = 65536
 [qwen."qwen3-next-80b-a3b-instruct"]
 context_window = 131072
 max_output_tokens = 32768
+reasoning = false
 
 [qwen."qwen3-next-80b-a3b-thinking"]
 context_window = 131072
@@ -2280,6 +2368,7 @@ max_output_tokens = 16384
 [qwen."qwen3-omni-flash-realtime"]
 context_window = 65536
 max_output_tokens = 16384
+reasoning = false
 
 [qwen."qwen3-vl-235b-a22b"]
 context_window = 131072
@@ -2353,6 +2442,7 @@ max_output_tokens = 32768
 [qwen."siliconflow/deepseek-v3-0324"]
 context_window = 163840
 max_output_tokens = 163840
+reasoning = false
 
 [qwen."siliconflow/deepseek-v3.1-terminus"]
 context_window = 163840
@@ -2365,3 +2455,4 @@ max_output_tokens = 65536
 [qwen."tongyi-intent-detect-v3"]
 context_window = 8192
 max_output_tokens = 1024
+reasoning = false

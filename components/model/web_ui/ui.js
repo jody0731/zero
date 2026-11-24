@@ -10,7 +10,19 @@ const modelKeyState = {
 export function register(host) {
   const { look, change } = host.api;
   const { $, el, failureDetails, modelFailureView, state } = host.dom;
-  const { acceptModelDirectory, nextModelVersion } = host.models;
+  const {
+    acceptModelDirectory,
+    clearModelFeatures = () => {},
+    editModelWindow = async () => false,
+    nextModelVersion,
+  } = host.models;
+
+  function qualifyModel(server, raw) {
+    const trimmed = (raw || "").trim();
+    const prefix = server.model_prefix ?? `${server.name}/`;
+    if (prefix && !trimmed.startsWith(prefix)) return prefix + trimmed;
+    return trimmed;
+  }
 
   function modelButton(text, pressed) {
     const button = el("button", null, text);
@@ -63,6 +75,7 @@ export function register(host) {
       const version = nextModelVersion(name);
       const reply = await change("model/server/key/set", { name, key: key.value });
       key.value = "";
+      clearModelFeatures();
       if (!acceptModelDirectory(name, version, reply.directory)) return;
       const saved = `Saved key for ${server.title}.`;
       const directory = reply.directory;
@@ -80,6 +93,7 @@ export function register(host) {
       const name = server.name;
       const version = nextModelVersion(name);
       const reply = await change("model/server/key/set", { name, key: null });
+      clearModelFeatures();
       if (!acceptModelDirectory(name, version, reply.directory)) return;
       await refresh(`Removed saved key for ${server.title}.`);
     }, () => editor.replaceChildren(), `Remove the saved key for ${server.title}?`));
@@ -142,6 +156,58 @@ export function register(host) {
     model.focus();
   }
 
+  function modelWindowEditor(server, editor, refresh) {
+    const [field, model] = modelNameInput(server);
+    editor.replaceChildren(modelForm([field], "Edit window", async () => {
+      const fullModel = qualifyModel(server, model.value);
+      const changed = await editModelWindow(fullModel);
+      if (changed) await refresh(`Updated context window for ${fullModel}.`);
+      else editor.replaceChildren();
+    }, () => editor.replaceChildren()));
+    model.focus();
+  }
+
+  function featureSummaryView(reply) {
+    const box = el("div", "feature-summary");
+    const heading = `${reply.model} · ${reply.api || ""}`.trim();
+    box.append(el("strong", null, heading));
+    if (reply.measured_at) {
+      box.append(el("div", "sub", `Measured ${reply.measured_at}`));
+    }
+    const list = el("ul");
+    const words = { true: "yes", false: "unavailable", null: "not measured" };
+    for (const [name, value] of Object.entries(reply.features || {})) {
+      list.append(el("li", null, `${name}: ${words[String(value)] ?? String(value)}`));
+    }
+    const efforts = Object.entries(reply.thinking_efforts || {});
+    if (efforts.length) {
+      const shown = efforts.map(([name, ok]) => {
+        const label = name === "model_default" ? "Model default" : name;
+        const suffix = ok === false ? " (unavailable)"
+          : ok === null ? " (unverified)" : "";
+        return label + suffix;
+      }).join(", ");
+      list.append(el("li", null, `thinking_efforts: ${shown}`));
+    }
+    if (reply.tools_error) {
+      box.append(el("div", "sub", reply.tools_error));
+    }
+    box.append(list);
+    return box;
+  }
+
+  function checkModelFeatures(server, editor, status) {
+    const [field, model] = modelNameInput(server);
+    editor.replaceChildren(modelForm([field], "Check features", async () => {
+      const fullModel = qualifyModel(server, model.value);
+      const reply = await change("model/features", { model: fullModel, test: true });
+      clearModelFeatures(fullModel);
+      status.textContent = `Checked features for ${reply.model}.`;
+      editor.replaceChildren(featureSummaryView(reply));
+    }, () => editor.replaceChildren(), "The provider may charge for the check."));
+    model.focus();
+  }
+
   function connectModel(server, editor, refresh, close) {
     const [nameField, name] = modelInput("Server name");
     const [urlField, url] = modelInput("API URL", "url");
@@ -192,6 +258,7 @@ export function register(host) {
       if (tokens.value) values.context_window = Number(tokens.value);
       const reply = await change("model/server/connect", values);
       key.value = "";
+      clearModelFeatures();
       state.modelServer = values.name;
       if (reply.default) {
         const setting = state.settings.find((row) => row.name === "model");
@@ -254,9 +321,12 @@ export function register(host) {
       if (selected) {
         const panel = el("section", "model-server-panel");
         const editor = el("div", "model-server-editor");
+        const endpoint = selected.api_title
+          ? `${selected.api_title} · ${selected.url}`
+          : selected.url;
         panel.append(
           el("h3", null, selected.title),
-          el("p", "sub model-server-url", selected.url),
+          el("p", "sub model-server-url", endpoint),
         );
         if (addKey) {
           panel.append(editor);
@@ -282,6 +352,12 @@ export function register(host) {
           actions.append(
             modelButton("View models", () => showModelNames(selected, editor, status)),
             modelButton("Test model", () => modelTest(selected, editor, status)),
+            modelButton("Context window", () => modelWindowEditor(
+              selected, editor, refresh,
+            )),
+            modelButton("Check features", () => checkModelFeatures(
+              selected, editor, status,
+            )),
             modelButton("Connect a model", () => connectModel(
               selected, editor, refresh, () => editor.replaceChildren(),
             )),
@@ -292,6 +368,7 @@ export function register(host) {
                 const name = selected.name;
                 const ver = nextModelVersion(name);
                 await change("model/server/disconnect", { name });
+                clearModelFeatures();
                 if (!acceptModelDirectory(name, ver)) return;
                 state.modelServer = null;
                 await refresh(`Removed ${selected.title}.`);

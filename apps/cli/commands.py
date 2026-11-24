@@ -13,7 +13,8 @@ A message only a screen needs has no command; NO_COMMAND says why.
     zero job list [--session ID] · job stop JOB
     zero rounds list [--session ID] · rounds stop ID
     zero grant list ID · grant forget ID GRANT
-    zero model list · model features MODEL [--test] · model server list ·
+    zero model list · model window MODEL [TOKENS | --reset] ·
+        model features MODEL [--test] · model server list ·
         probe NAME · connect NAME --model M [--url URL] [--key-stdin] ·
         disconnect NAME
     zero setting list · setting set NAME VALUE
@@ -62,8 +63,8 @@ NO_COMMAND = {
     "session/deliveries": "a browser checks its outstanding submissions on reconnect",
     "session/submit": "session send uses this when addressing an existing session",
     "workspace/list": "folders for a screen's workspace picker",
-    "model/window": "the model picker checks the selected endpoint's window",
-    "model/window/set": "a model picker saves the window the user enters",
+    "model/window/set": "model window MODEL [TOKENS | --reset] sets or resets a "
+                        "model's window",
     "model/server/key/set": "masked credential settings shared by the apps",
     "model/server/test": "a separate model test confirmed in the settings apps",
     "session/mark_seen": "a person's read mark, which the full screen sends for what "
@@ -592,6 +593,19 @@ def parser(prog="zero"):
     listing = actions.add_parser("list", help="every reachable server's models")
     json_flag(listing)
     listing.set_defaults(handler=model_list_command)
+    window = actions.add_parser(
+        "window", help="show, set or reset a model's context window")
+    window.add_argument("model", metavar="MODEL")
+    change_window = window.add_mutually_exclusive_group()
+    change_window.add_argument(
+        "tokens", metavar="TOKENS", type=int, nargs="?", default=None,
+        help="remember this context window in tokens")
+    change_window.add_argument(
+        "--reset", action="store_true",
+        help="remove a saved override and return to the automatic window")
+    window.add_argument("--url", help="the server's API URL")
+    json_flag(window)
+    window.set_defaults(handler=model_window_command)
     measured = actions.add_parser(
         "features", help="what a model honours of its API's features")
     measured.add_argument("model", metavar="MODEL")
@@ -1029,6 +1043,36 @@ def model_list_command(connection, args, out):
     return print_reply(args, out, reply, "\n".join(lines) or "No servers reachable.")
 
 
+def model_window_command(connection, args, out):
+    if args.tokens is not None:
+        if args.tokens < 1:
+            raise ValueError("Context window must be a positive integer.")
+        url = args.url or connection.model_window(args.model)["url"]
+        reply = connection.set_model_window(args.model, url, args.tokens)
+        return print_reply(
+            args, out, reply,
+            f"Set {args.model} context window to {args.tokens:,} tokens ({url}).",
+        )
+    if args.reset:
+        url = args.url or connection.model_window(args.model)["url"]
+        reply = connection.set_model_window(args.model, url, None)
+        return print_reply(
+            args, out, reply,
+            f"Reset {args.model} context window to automatic ({url}).",
+        )
+    reply = connection.model_window(args.model, url=args.url)
+    tokens = reply.get("context_window")
+    source = reply.get("source")
+    if tokens is None:
+        text = f"{args.model}: unknown ({reply['url']})"
+    else:
+        text = f"{args.model}: {tokens:,} tokens ({source})"
+        auto = reply.get("automatic_window")
+        if source == "saved" and auto is not None:
+            text += f" (automatic: {auto:,})"
+    return print_reply(args, out, reply, text)
+
+
 def model_features_command(connection, args, out):
     reply = connection.features(args.model, test=args.test)
     words = {True: "yes", False: "unavailable", None: "not measured"}
@@ -1041,8 +1085,12 @@ def model_features_command(connection, args, out):
 
 def server_list_command(connection, args, out):
     reply = connection.servers()
-    lines = [f"{row['name']}  key {row['key_state']}  {row['url']}"
-             for row in reply["servers"]]
+    lines = [
+        f"{row['name']}  key {row['key_state']}  "
+        + (f"{row['api']}  " if row.get("api") else "")
+        + row["url"]
+        for row in reply["servers"]
+    ]
     lines.append(f"default model: {reply['default'] or 'none'}")
     if reply.get("not_ready_reason"):
         lines.append(f"(a new session couldn't start: {reply['not_ready_reason']})")

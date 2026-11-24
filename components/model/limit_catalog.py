@@ -19,7 +19,7 @@ RETRY_SECONDS = 5 * 60
 FETCH_SECONDS = 3
 SELECTION_WAIT_SECONDS = 0.75
 MAX_CATALOG_BYTES = 16 * 1024 * 1024
-FILE_FORMAT = 1
+FILE_FORMAT = 2
 
 
 def fetch_catalog(timeout=FETCH_SECONDS, url=URL):
@@ -66,7 +66,10 @@ def published_limits(catalog):
                 "max_output_tokens": limits.get("output"),
             })
             if model.context_window is not None:
-                models[name] = model.as_dict()
+                entry = model.as_dict()
+                if row.get("reasoning") is False:
+                    entry["reasoning"] = False
+                models[name] = entry
         if models:
             found[server] = models
     return found
@@ -77,9 +80,17 @@ def bundled():
     return tomllib.loads(SNAPSHOT.read_text(encoding="utf-8")), SNAPSHOT.stat().st_mtime
 
 
-def matching(rows, name, model):
+def _row(rows, name, model):
     server = rows.get(name)
-    return TokenLimits.read(server.get(model) if isinstance(server, dict) else None)
+    if isinstance(server, dict):
+        row = server.get(model)
+        if isinstance(row, dict):
+            return row
+    return None
+
+
+def matching(rows, name, model):
+    return TokenLimits.read(_row(rows, name, model))
 
 
 class LimitCatalog:
@@ -111,6 +122,20 @@ class LimitCatalog:
             return matching(pending.result(timeout=SELECTION_WAIT_SECONDS), name, model)
         except TimeoutError:
             return known
+
+    def reasoning(self, name, model):
+        """Return False when models.dev explicitly marks the model non-reasoning."""
+        baseline, _ = bundled()
+        with self.lock:
+            if self.rows is None:
+                self.rows, self.read_at = self.read()
+            cached = _row(self.rows, name, model)
+        if cached is not None:
+            return False if cached.get("reasoning") is False else None
+        shipped = _row(baseline, name, model)
+        if shipped is not None:
+            return False if shipped.get("reasoning") is False else None
+        return None
 
     def read(self):
         try:
@@ -162,10 +187,18 @@ def catalog_file():
     return paths.home() / "state" / "model_catalog.json"
 
 
-def lookup(name, model, *, refresh):
+def _catalog():
     path = catalog_file()
     with _catalogs_lock:
         catalog = _catalogs.get(path)
         if catalog is None:
             catalog = _catalogs[path] = LimitCatalog(path)
-    return catalog.lookup(name, model, refresh=refresh)
+    return catalog
+
+
+def lookup(name, model, *, refresh):
+    return _catalog().lookup(name, model, refresh=refresh)
+
+
+def reasoning_supported(name, model):
+    return _catalog().reasoning(name, model)

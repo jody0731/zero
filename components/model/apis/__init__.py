@@ -19,12 +19,16 @@ never patched.
 from components.model.apis import (
     chat_completions,
     deepseek_search,
+    google_interactions,
     moonshot_search,
     responses,
     tavily_search,
 )
 
-APIS = {api.NAME: api for api in (chat_completions, responses)}
+APIS = {
+    api.NAME: api
+    for api in (chat_completions, responses, google_interactions)
+}
 DEFAULT = "responses"
 
 # The model server's search capability names the wire contract it implements.

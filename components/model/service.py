@@ -11,8 +11,6 @@ from hashlib import sha256
 from threading import Lock
 from time import monotonic
 
-from openai import NotFoundError
-
 from server.services import Service
 from components.model import connect, features, servers
 from components.model.limits import endpoint
@@ -26,7 +24,7 @@ DIRECTORY_FRESH_SECONDS = 60
 
 @dataclass
 class ModelDirectory:
-    route: tuple[str, bytes]
+    route: tuple[str, str, bytes]
     reply: Future = field(default_factory=Future)
     read_at: float = 0.0
 
@@ -281,7 +279,7 @@ def connect_failure(error):
 
 
 def directory_route(server, key):
-    return server.url, sha256(key.encode()).digest()
+    return server.url, server.api.NAME, sha256(key.encode()).digest()
 
 
 def empty_directory(server):
@@ -292,14 +290,17 @@ def server_row(server, key):
     """One server's row: its models by ZERO's names, or why there are none."""
     row = empty_directory(server)
     try:
-        found = connect.listing(server.url, key)
+        found = connect.listing(server.url, key, api=server.api)
         row["models"] = [connect.full_name(server.name, model["id"]) for model in found]
-    except NotFoundError as error:
-        row["error"] = ("This server has no model directory at its configured API URL. "
-                        + connect.error_text(error, key))
     except Exception as error:
-        row["error"] = (str(error) if isinstance(error, connect.ConnectError)
-                        else connect.error_text(error, key))
+        if connect.is_not_found(error):
+            row["error"] = (
+                "This server has no model directory at its configured API URL. "
+                + connect.error_text(error, key)
+            )
+        else:
+            row["error"] = (str(error) if isinstance(error, connect.ConnectError)
+                            else connect.error_text(error, key))
     return row
 
 

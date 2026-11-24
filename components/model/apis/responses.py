@@ -24,6 +24,7 @@ from openai.types.responses import Response, ResponseStreamEvent
 from core import entries
 from core.llm import CutShort, NoReply, StreamFailure, complete, tool_timeline
 from core.replay import tool_output
+from components.model.apis.chat_completions import list_models, make_client
 from components.model.apis.conversation import (
     project_entries, provider_items, reasoning,
 )
@@ -46,6 +47,7 @@ TITLE = "the Responses API"
 FEATURES = ("thinking_off", "thinking_on", "strict_json", "json_mode")
 # The API refuses a smaller max_output_tokens
 MIN_OUTPUT_TOKENS = 16
+RETRY_V1_PREFIX = True
 # ZERO's thinking efforts as the API's reasoning.effort
 EFFORTS = {"off": "none", "low": "low", "high": "high", "max": "max"}
 # Why a response is incomplete, in ZERO's words (core/llm.py, Draft); any
@@ -53,9 +55,12 @@ EFFORTS = {"off": "none", "low": "low", "high": "high", "max": "max"}
 INCOMPLETE = {"max_output_tokens": "length", "content_filter": "content_filter"}
 # The provider's hosted tool type, part of the Responses wire format.
 WEB_SEARCH_TYPE = "web_search"
-CALL_ITEM_FIELDS = {"type", "id", "call_id", "name", "arguments", "status"}
+CALL_ITEM_FIELDS = {
+    "type", "id", "call_id", "name", "arguments", "status", "obfuscation", "p",
+}
 CALL_EVENT_FIELDS = {
-    "type", "sequence_number", "item_id", "output_index", "delta", "arguments", "name",
+    "type", "sequence_number", "item_id", "output_index", "delta", "arguments",
+    "name", "obfuscation", "p",
 }
 
 
@@ -213,8 +218,23 @@ def usage(draft, response):
     draft.tokens = (used.input_tokens or 0, cached, used.output_tokens or 0)
 
 
+def _is_benign_call_default(key, value):
+    if key == "caller":
+        return value is None or (
+            isinstance(value, Mapping) and dict(value) == {"type": "direct"}
+        )
+    if key == "namespace":
+        return value is None
+    if key in ("async", "async_"):
+        return value is None or value is False
+    return False
+
+
 def remember_call_fields(call, data, known):
-    extra = {key: value for key, value in data.items() if key not in known}
+    extra = {
+        key: value for key, value in data.items()
+        if key not in known and not _is_benign_call_default(key, value)
+    }
     if extra:
         call.setdefault("wire_fields", {}).update(extra)
 
@@ -231,7 +251,8 @@ def _dump_item(item, *, exclude_unset=False, exclude_none=False):
             return {k: v for k, v in item.items() if v is not None}
         return dict(item)
     return item.model_dump(
-        mode="json", exclude_unset=exclude_unset, exclude_none=exclude_none,
+        mode="json", by_alias=True,
+        exclude_unset=exclude_unset, exclude_none=exclude_none,
     )
 
 
@@ -262,6 +283,8 @@ def remember_item(draft, index, item, *, done=True, ignored_kinds=()):
                 )
         return kind == "function_call"
     data = _dump_item(item, exclude_none=True)
+    data.pop("obfuscation", None)
+    data.pop("p", None)
     stored = draft.continuation_items.setdefault("response_item", {})
     previous = stored.get(index, {}).get("item", {})
     early = draft.stream_state.get("early_encrypted", {}).get(index)
@@ -289,8 +312,10 @@ def _fold(draft, event, *, ignored_kinds=()):
     if kind in ("response.function_call_arguments.delta",
                 "response.function_call_arguments.done"):
         call = draft.call(event.output_index)
-        remember_call_fields(call, event.model_dump(mode="json", exclude_unset=True),
-                             CALL_EVENT_FIELDS)
+        remember_call_fields(
+            call, event.model_dump(mode="json", exclude_unset=True),
+            CALL_EVENT_FIELDS,
+        )
         if kind.endswith(".delta"):
             call["arguments"] += event.delta
             return bool(event.delta)

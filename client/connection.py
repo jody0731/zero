@@ -317,7 +317,8 @@ class Connection:
         return self.call(build("model/window", model=model, **fields))
 
     def set_model_window(self, model, url, context_window):
-        """Remember a context window at the URL that was selected."""
+        """Remember a context window at the URL that was selected, or reset a
+        saved override when `context_window` is None."""
         return self.call(build("model/window/set", model=model, url=url,
                                context_window=context_window))
 

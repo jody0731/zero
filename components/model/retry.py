@@ -5,7 +5,19 @@ import random
 from openai import APIConnectionError, APIStatusError
 
 from core.hooks import Hook, Retry
-from core.llm import CutShort, NoReply
+from core.llm import (
+    CutShort, ModelConnectionError, ModelHTTPError, ModelTimeoutError, NoReply,
+)
+
+
+def _retry_after_seconds(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) if value >= 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return float(text)
+    return None
 
 
 def retry_delay(error, attempt, base):
@@ -21,10 +33,21 @@ def retry_delay(error, attempt, base):
         code = error.status_code
         if code not in (408, 409, 429) and code < 500:
             return None
-        after = error.response.headers.get("retry-after", "")
-        if after.isdigit():
-            return float(after)
-    elif not isinstance(error, (APIConnectionError, CutShort, NoReply)):
+        delay = _retry_after_seconds(error.response.headers.get("retry-after", ""))
+        if delay is not None:
+            return delay
+    elif isinstance(error, ModelHTTPError):
+        code = error.status_code
+        if code not in (408, 409, 429) and code < 500:
+            return None
+        delay = _retry_after_seconds(error.retry_after)
+        if delay is not None:
+            return delay
+    elif not isinstance(
+        error,
+        (APIConnectionError, ModelConnectionError, ModelTimeoutError,
+         CutShort, NoReply),
+    ):
         return None
     return base * 2**attempt * random.uniform(0.9, 1.1)
 

@@ -1,6 +1,8 @@
 /* Right-hand details panel: session settings, family tree, context, and jobs. */
 
-import { change, labelEfforts, look, modelCapabilities } from "./api.js";
+import {
+  change, clearModelFeatures, labelEfforts, look, modelCapabilities,
+} from "./api.js";
 import { registry } from "./components.js";
 import {
   $, actionDialog, effortLabel, el, folderName, modelFailureView, rowOf,
@@ -156,27 +158,114 @@ export function modelForm(fields, label, submit, close, notice) {
   return form;
 }
 
+function formatTokenCount(count) {
+  return Number(count).toLocaleString("en-US");
+}
+
+export function formatWindowSummary(info) {
+  if (!info || info.context_window === null || info.context_window === undefined) {
+    return "Unknown";
+  }
+  const count = formatTokenCount(info.context_window);
+  if (info.source === "saved") return `${count} · custom`;
+  if (info.source === "endpoint" || info.source === "catalog") {
+    return `${count} · automatic`;
+  }
+  return count;
+}
+
+export async function editModelWindow(model, opts = {}) {
+  if (!model) return false;
+  const required = Boolean(opts.required);
+  const found = opts.found || await look("model/window", { model });
+  return new Promise((resolve, reject) => {
+    const dialog = actionDialog("Context window");
+    let changed = false;
+    const [field, input] = modelInput("Context window in tokens", "number");
+    input.min = "1";
+    input.step = "1";
+    if (found.context_window !== null && found.context_window !== undefined) {
+      input.value = String(found.context_window);
+    }
+    const intro = required
+      ? `Enter the window configured for ${model}.`
+      : model;
+    dialog.append(el("p", "window-dialog-info", intro));
+    if (found.automatic_window !== null && found.automatic_window !== undefined) {
+      dialog.append(el(
+        "p",
+        "sub window-dialog-info",
+        `Automatic: ${formatTokenCount(found.automatic_window)} tokens`,
+      ));
+    } else if (!required && (found.context_window === null
+        || found.context_window === undefined)) {
+      dialog.append(el(
+        "p", "sub window-dialog-info", "No automatic window reported.",
+      ));
+    }
+    const form = modelForm([field], "Save", async () => {
+      const value = Number(input.value);
+      if (!Number.isInteger(value) || value < 1) {
+        throw new Error("Enter a positive whole number of tokens.");
+      }
+      await change("model/window/set", {
+        model, url: found.url, context_window: value,
+      });
+      clearModelFeatures(model);
+      changed = true;
+      dialog.close();
+    }, () => dialog.close());
+    if (found.source === "saved" && found.automatic_window !== null
+        && found.automatic_window !== undefined) {
+      const actions = form.querySelector(".model-actions");
+      const status = form.querySelector(".model-status");
+      const reset = modelButton("Reset to automatic", async () => {
+        if (reset.disabled) return;
+        reset.disabled = true;
+        status.replaceChildren();
+        try {
+          await change("model/window/set", {
+            model, url: found.url, context_window: null,
+          });
+          clearModelFeatures(model);
+          changed = true;
+          dialog.close();
+        } catch (error) {
+          if (error.modelFailure) {
+            status.append(modelFailureView(error.modelFailure));
+          } else {
+            status.textContent = error.message;
+          }
+        } finally {
+          reset.disabled = false;
+        }
+      });
+      actions.insertBefore(reset, actions.lastElementChild);
+    }
+    dialog.append(form);
+    dialog.addEventListener("close", () => {
+      if (changed) {
+        resolve(true);
+        return;
+      }
+      if (required) {
+        reject(new Error(
+          "The model needs its context window before it can be used.",
+        ));
+        return;
+      }
+      resolve(false);
+    });
+    input.focus();
+    if (input.value) input.select();
+  });
+}
+
 export async function ensureModelWindow(model) {
   if (!model) return;
   const found = await look("model/window", { model });
   if (found.context_window !== null) return;
-  await new Promise((resolve, reject) => {
-    const dialog = actionDialog("Context window");
-    const [field, input] = modelInput("Context window in tokens", "number");
-    input.min = "1";
-    dialog.append(el("p", null, "Enter the window configured for " + model + "."));
-    dialog.append(modelForm([field], "Save", async () => {
-      await change("model/window/set", {
-        model, url: found.url, context_window: Number(input.value),
-      });
-      resolve();
-      dialog.close();
-    }, () => dialog.close()));
-    dialog.addEventListener("close", () => {
-      reject(new Error("The model needs its context window before it can be used."));
-    });
-    input.focus();
-  });
+  await editModelWindow(model, { required: true, found });
 }
 
 function workspaceControl(value, chosen) {
@@ -313,6 +402,48 @@ function runsWithSection(row) {
     }
     status.textContent = message;
   };
+  const windowControl = el("div", "context-window-control");
+  windowControl.append(el("span", "field-label", "Context window"));
+  const windowLine = el("div", "workspace-line");
+  const windowValue = el("span", "context-window-value", "…");
+  const windowEdit = el("button", "ghost", "Edit");
+  windowEdit.type = "button";
+  windowEdit.setAttribute("aria-label", "Edit context window");
+  windowLine.append(windowValue, windowEdit);
+  windowControl.append(windowLine);
+
+  let capabilityVersion = 0;
+  let windowVersion = 0;
+  const capabilities = async () => {
+    const model = inputs.model?.value.trim() || "";
+    const version = ++capabilityVersion;
+    const reply = await modelCapabilities(model, true);
+    if (version === capabilityVersion && model === (inputs.model?.value.trim() || "")) {
+      labelEfforts(inputs.thinking_effort, reply, thinkingNote);
+    }
+  };
+  const refreshWindow = async () => {
+    const model = inputs.model?.value.trim() || "";
+    const version = ++windowVersion;
+    if (!model) {
+      windowValue.textContent = "—";
+      windowEdit.disabled = true;
+      return;
+    }
+    windowEdit.disabled = false;
+    try {
+      const info = await look("model/window", { model });
+      if (version !== windowVersion || model !== (inputs.model?.value.trim() || "")) {
+        return;
+      }
+      windowValue.textContent = formatWindowSummary(info);
+    } catch {
+      if (version === windowVersion && model === (inputs.model?.value.trim() || "")) {
+        windowValue.textContent = "Unknown";
+      }
+    }
+  };
+
   const update = async (name, value, control) => {
     const previous = name === "thinking_effort" ? runs[name] : row[name];
     control.disabled = true;
@@ -322,6 +453,10 @@ function runsWithSection(row) {
       if (row === state.newSession) {
         row[name] = value;
         sayStatus("Updated");
+        if (name === "model") {
+          capabilities();
+          refreshWindow();
+        }
         return;
       }
       const reply = await change("session/set", { session: row.id, [name]: value });
@@ -331,9 +466,17 @@ function runsWithSection(row) {
       }
       Object.assign(runs, reply.set);
       sayStatus(reply.next_turn ? "Applies next turn" : "Updated");
+      if (name === "model") {
+        capabilities();
+        refreshWindow();
+      }
     } catch (error) {
       if (control.tagName === "SELECT") control.value = previous || "";
       sayStatus(error.message);
+      if (name === "model") {
+        capabilities();
+        refreshWindow();
+      }
       throw error;
     } finally {
       control.disabled = false;
@@ -367,19 +510,30 @@ function runsWithSection(row) {
       apply(name, input.value, input).catch(() => {});
     });
   }
-  form.append(workspaceControl(row.workspace, async (folder, button) => {
+  windowEdit.addEventListener("click", async () => {
+    const model = inputs.model.value.trim();
+    if (!model) return;
+    try {
+      const changed = await editModelWindow(model);
+      if (changed) {
+        await refreshWindow();
+        await capabilities();
+        drawDetails();
+      }
+    } catch (error) {
+      sayStatus(error.message);
+    }
+  });
+  form.append(windowControl, workspaceControl(row.workspace, async (folder, button) => {
     await apply("workspace", folder, button);
   }), thinkingNote, status);
-  const capabilities = async () => {
-    const model = inputs.model.value.trim();
-    const reply = await modelCapabilities(model, true);
-    if (model === inputs.model.value.trim()) {
-      labelEfforts(inputs.thinking_effort, reply, thinkingNote);
-    }
-  };
-  inputs.model.addEventListener("change", capabilities);
+  inputs.model.addEventListener("change", () => {
+    capabilities();
+    refreshWindow();
+  });
   inputs.thinking_effort.addEventListener("change", capabilities);
   capabilities();
+  refreshWindow();
   section.append(form);
   if (row.pending && row.pending.length) {
     section.append(el("p", "sub", `Next turn: ${row.pending.join(", ")}`));

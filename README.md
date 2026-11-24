@@ -35,9 +35,10 @@
 illustrative session data. Run <code>zero</code> to open it;
 <code>zero tui</code> opens the terminal app.</sub></p>
 
-- **Any model.** Choose a server from the [catalog](components/model/catalog.toml) or
-  connect your own server that speaks the Chat Completions or Responses API.
-  Settings show which features ZERO has measured on your model.
+- **Any model.** Choose a server from the [catalog](components/model/catalog.toml)
+  (including native Google Interactions, OpenAI Responses, and Chat Completions)
+  or connect your own compatible server. Settings show each server's API,
+  editable context windows, and which features ZERO has measured on your model.
 - **Many sessions:** each with its own workspace and history, opened, switched, renamed or archived from the browser or terminal.
 - **Permissions you choose:** five modes, from read-only to never asking, a sandbox (bubblewrap), and a judge that answers in the auto modes, deciding only after it gives its reason and takes a second look at it.
 - **One server:** it runs every session. Turns, background jobs and waiting questions go on after the browser or terminal closes, and every app reaches the server the same way.
@@ -305,6 +306,7 @@ zero job list                                      # job stop JOB
 zero rounds list                                   # rounds stop ID
 zero grant list ID                                 # grant forget ID GRANT
 zero model server list                             # probe, connect, disconnect
+zero model window MODEL [TOKENS | --reset]         # show, set or reset a model's context window
 zero model features MODEL                          # what it honours of its API; --test
 zero setting set max_subagent_depth 1             # setting list
 zero server status                                 # whether the server runs and what keeps it busy

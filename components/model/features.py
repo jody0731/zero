@@ -14,7 +14,9 @@ import openai
 
 import paths
 from core import entries
-from core.llm import UnsupportedModelRequest, complete, request_error_text
+from core.llm import (
+    ModelHTTPError, UnsupportedModelRequest, complete, request_error_text,
+)
 from components.model import MODEL_DEFAULT_EFFORT, THINKING_EFFORTS
 
 # Each feature: what it is, in words, as the screens say it
@@ -247,6 +249,14 @@ def measure(model, api, client, server_model, timeout, *, server=None):
                 efforts[choice] = True
         except (openai.BadRequestError, openai.UnprocessableEntityError):
             # The server refuses the field
+            found[feature] = False
+            if choice is not None:
+                efforts[choice] = False
+        except ModelHTTPError as e:
+            if e.status_code not in (400, 422):
+                raise FeatureError(
+                    f"couldn't measure {model}: {request_error_text(e, client)}"
+                ) from None
             found[feature] = False
             if choice is not None:
                 efforts[choice] = False

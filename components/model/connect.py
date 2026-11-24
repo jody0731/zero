@@ -19,15 +19,15 @@ import re
 from pathlib import Path
 
 import openai
-from openai import OpenAI
 
 import paths
 from core import entries
 from core.llm import (
-    MODEL_ERRORS, complete, failure_text, request_error_details, request_failure,
-    safe_error_text,
+    MODEL_ERRORS, ModelHTTPError, complete, failure_text, request_error_details,
+    request_failure, safe_error_text,
 )
 from components.model import directory, servers
+from components.model.apis import APIS, DEFAULT
 from components.model.limits import endpoint, model_id, token_count
 from settings import sections
 
@@ -51,49 +51,59 @@ def error_text(error, key):
     return safe_error_text(f"{type(error).__name__}: {error}", key)
 
 
-def listing(url, key, *, cached=False):
+def is_not_found(error):
+    return isinstance(error, openai.NotFoundError) or (
+        isinstance(error, ModelHTTPError) and error.status_code == 404
+    )
+
+
+def listing(url, key, *, api=None, cached=False):
     """The server's models: [{"id", "context_window"}], context_window None where the
     server doesn't say. ConnectError when it can't be asked. NotFound
     passes, for the caller to judge."""
     try:
-        return directory.listing(url, key, cached=cached)
-    except openai.NotFoundError:
-        raise
+        return directory.listing(url, key, api=api, cached=cached)
     except Exception as e:
+        if is_not_found(e):
+            raise
         detail = error_text(e, key)
         raise ConnectError(f"Model list request failed · {detail}") from None
 
 
-def probe(url, key):
+def probe(url, key, *, api=None):
     """(the url that answered, its models). A URL without /v1 that finds
-    nothing is tried again with it, as local servers serve there."""
+    nothing is tried again with it when the API uses a /v1 prefix."""
+    chosen = api or APIS[DEFAULT]
     try:
-        return url, listing(url, key)
-    except openai.NotFoundError as e:
-        if not url.rstrip("/").endswith("/v1"):
+        return url, listing(url, key, api=chosen)
+    except Exception as e:
+        if not is_not_found(e):
+            raise
+        if chosen.RETRY_V1_PREFIX and not url.rstrip("/").endswith("/v1"):
             other = url.rstrip("/") + "/v1"
             try:
-                return other, listing(other, key)
-            except openai.NotFoundError:
-                pass
+                return other, listing(other, key, api=chosen)
+            except Exception as retry_error:
+                if not is_not_found(retry_error):
+                    raise
+        prefix = " The usual API prefix is /v1" if chosen.RETRY_V1_PREFIX else ""
         raise ConnectError(
-            f"{url} has no /models. The usual API prefix is /v1 "
-            f"({error_text(e, key)})."
+            f"{url} has no /models.{prefix} ({error_text(e, key)})."
         ) from e
 
 
 def test_call(url, key, model, api, *, server=None, title=None):
     """As few output tokens as the server's API allows, from the model, in
     that API (apis/); ConnectError if they don't come."""
+    redact_key = None if key == servers.NO_KEY else key
     try:
-        with OpenAI(base_url=url, api_key=key, timeout=TEST_SECONDS,
-                    max_retries=0) as client:
+        with api.make_client(url, key, TEST_SECONDS) as client:
             conversation = (entries.root("text", "user", text="Say OK."),)
             complete(api, client, model, conversation,
                      silence=TEST_SECONDS, max_output_tokens=api.MIN_OUTPUT_TOKENS)
     except MODEL_ERRORS as error:
         report = request_failure(error, "test_model", server or "model server",
-                                 title=title, key=key)
+                                 title=title, key=redact_key)
         raise ConnectError(
             f"the test call failed: {failure_text(report)}",
             model_failure={**report, "next_action": "stop"},
@@ -299,8 +309,9 @@ def reach(request):
 
 
 def probe_request(request):
-    _, _, url, key = reach(request)
-    url, models = probe(url, key)
+    _, known, url, key = reach(request)
+    api = known.api if known and endpoint(url) == endpoint(known.url) else None
+    url, models = probe(url, key, api=api)
     return {"url": url, "models": models}
 
 
@@ -358,17 +369,46 @@ def save_window(lines, url, model, window):
     }}
 
 
+def remove_window(lines, url, model):
+    windows = lines.get("context_windows")
+    if not isinstance(windows, dict):
+        return lines
+    key = endpoint(url)
+    per_url = windows.get(key)
+    if not isinstance(per_url, dict) or model not in per_url:
+        return lines
+    next_per_url = {k: v for k, v in per_url.items() if k != model}
+    next_windows = {k: v for k, v in windows.items() if k != key}
+    if next_per_url:
+        next_windows[key] = next_per_url
+    updated = {k: v for k, v in lines.items() if k != "context_windows"}
+    if next_windows:
+        updated["context_windows"] = next_windows
+    return updated
+
+
 def window_request(request):
     name, entry, model = model_route(request)
-    _, limits = servers.model_limits(name, entry, model)
-    return {"url": entry["url"], "context_window": limits.context_window,
-            **limits.as_dict()}
+    verified, limits, source = servers.window_details(name, entry, model)
+    return {
+        "url": entry["url"],
+        "context_window": limits.context_window,
+        "source": source,
+        "automatic_window": verified.context_window,
+        **limits.as_dict(),
+    }
 
 
 def set_window_request(request):
-    window = token_count(request.get("context_window"))
-    if window is None:
+    if "context_window" not in request:
         raise ConnectError("A context window is a whole number of tokens.")
+    raw_window = request["context_window"]
+    if raw_window is not None:
+        window = token_count(raw_window)
+        if window is None:
+            raise ConnectError("A context window is a whole number of tokens.")
+    else:
+        window = None
     url = request.get("url")
     if not isinstance(url, str):
         raise ConnectError("The model's API URL is required.")
@@ -380,6 +420,21 @@ def set_window_request(request):
                 "The model server's URL changed. Choose the model again."
             )
         lines = own_lines(name, path)
+        if window is None:
+            updated = remove_window(lines, entry["url"], model)
+            if updated == lines:
+                return
+            write_server(
+                path, name, None if not updated and name in catalog() else updated,
+            )
+            return
+        verified, _ = servers.model_limits(name, entry, model, refresh=False)
+        if (verified.context_window is not None
+                and window > verified.context_window):
+            raise ConnectError(
+                f"Context window cannot exceed {verified.context_window:,} "
+                f"tokens for {model}."
+            )
         write_server(path, name, save_window(lines, entry["url"], model, window))
 
 
@@ -397,12 +452,15 @@ def connect(request):
     if context_window is not None and token_count(context_window) is None:
         raise ConnectError("a context window is a whole number of tokens")
     title = request.get("title")
+    _, entry, _ = model_route({"name": name, "url": url, "model": model})
+    reply = servers.ModelServer(name, entry, model, refresh=False)
     try:
-        listed = listing(url, key)
-    except openai.NotFoundError:
+        listed = listing(url, key, api=reply.api)
+    except Exception as error:
+        if not is_not_found(error):
+            raise
         # Lists nothing: the call alone proves it
         listed = []
-    _, entry, _ = model_route({"name": name, "url": url, "model": model})
     reported = next((row for row in listed if row["id"] == model), {})
     _, limits = servers.model_limits(name, entry, model)
     known_window = context_window or limits.context_window
@@ -412,14 +470,14 @@ def connect(request):
                       "in tokens.")
     if known_window is None and not loads_window:
         raise ConnectError(missing_window)
-    reply = servers.ModelServer(name, entry, model, refresh=False)
     test_call(reply.reply_url, key, model, reply.api, server=name,
               title=title or (known.title if known else None))
     if loads_window:
         try:
-            listing(url, key)
-        except (ConnectError, openai.NotFoundError):
-            pass
+            listing(url, key, api=reply.api)
+        except Exception as error:
+            if not isinstance(error, ConnectError) and not is_not_found(error):
+                raise
         _, limits = servers.model_limits(name, entry, model, refresh=False)
         known_window = context_window or limits.context_window
     if known_window is None:
@@ -503,6 +561,7 @@ def rows():
             key = "environment"
         listed.append({
             "name": name, "title": server.title, "url": server.url,
+            "api": server.api.NAME, "api_title": server.api.TITLE,
             "key_state": key, "needs_key": needs_key,
             "has_saved_key": has_saved_key,
             "model_prefix": full_name(name, ""),

@@ -7,7 +7,9 @@
  * textContent: nothing a session holds is ever read as HTML.
  */
 
-import { change, look, pairBrowser, setWakeHandler } from "./api.js";
+import {
+  change, clearModelFeatures, look, pairBrowser, setWakeHandler,
+} from "./api.js";
 import { drawAsk } from "./ask.js";
 import { createHost, loadComponents } from "./components.js";
 import {
@@ -16,8 +18,8 @@ import {
   sizeComposer,
 } from "./composer.js";
 import {
-  acceptModelDirectory, drawDetails, ensureModelWindow, initDetails,
-  nextModelVersion,
+  acceptModelDirectory, drawDetails, editModelWindow, ensureModelWindow,
+  initDetails, nextModelVersion,
 } from "./details.js";
 import {
   $, HIDDEN_SECONDS, PAGE_RECORDS, WIDTHS, actionDialog, applyTheme, el,
@@ -383,7 +385,10 @@ async function start() {
       failureDetails, modelFailureView,
     },
     entries,
-    models: { acceptModelDirectory, nextModelVersion },
+    models: {
+      acceptModelDirectory, clearModelFeatures, editModelWindow,
+      nextModelVersion,
+    },
     openSession,
     openNew,
     openSettings,

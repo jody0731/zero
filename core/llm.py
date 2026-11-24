@@ -107,6 +107,42 @@ class UnsupportedModelRequest(Exception):
     """The selected model and API cannot satisfy this request as configured."""
 
 
+class UnsupportedExecutionCondition(UnsupportedModelRequest):
+    """A model reply carried an execution condition the harness cannot enforce."""
+
+
+class ModelHTTPError(Exception):
+    """An HTTP error returned by a non-SDK model transport."""
+
+    def __init__(self, status_code, *, provider_code=None, provider_message=None,
+                 retry_after=None, body=None):
+        self.status_code = status_code
+        if (provider_code is None or provider_message is None) and body is not None:
+            parsed_code, parsed_message = error_body_fields(body)
+            if provider_code is None:
+                provider_code = parsed_code
+            if provider_message is None:
+                provider_message = parsed_message
+        self.provider_code = provider_code
+        self.provider_message = provider_message
+        self.retry_after = retry_after
+        self.body = body
+        parts = [f"HTTP {status_code}"]
+        if provider_code:
+            parts.append(str(provider_code))
+        if provider_message:
+            parts.append(str(provider_message))
+        super().__init__(" · ".join(parts))
+
+
+class ModelConnectionError(Exception):
+    """A network or transport error reaching a model server."""
+
+
+class ModelTimeoutError(Exception):
+    """A request timeout waiting on a model server."""
+
+
 class StreamFailure(CutShort):
     """A provider error event that ends the stream."""
 
@@ -117,7 +153,28 @@ class StreamFailure(CutShort):
 
 
 # What a model call can raise that the loop hands to the model_error hook
-MODEL_ERRORS = (APIError, CutShort, NoReply, UnsupportedModelRequest)
+MODEL_ERRORS = (
+    APIError, ModelHTTPError, ModelConnectionError, ModelTimeoutError,
+    CutShort, NoReply, UnsupportedModelRequest,
+)
+
+
+def error_body_fields(body):
+    """Extract (provider_code, provider_message) from a JSON error body."""
+    if isinstance(body, list):
+        body = next((item for item in body if isinstance(item, dict)), None)
+    if not isinstance(body, dict):
+        return None, None
+    inner = body.get("error") if isinstance(body.get("error"), dict) else body
+    raw_code = inner.get("code")
+    status = inner.get("status")
+    if isinstance(status, str) and status and (
+        raw_code is None or type(raw_code) is int
+    ):
+        code = status
+    else:
+        code = raw_code
+    return code, inner.get("message")
 
 
 def safe_error_text(text, key=None, redact=None):
@@ -147,13 +204,21 @@ def request_error_details(error, *, key=None, redact=None):
     """The provider's reported fields and what the harness observed."""
     report = {}
     code = message = observation = None
-    if isinstance(error, APIStatusError):
+    if isinstance(error, (APIStatusError, ModelHTTPError)):
         report["http_status"] = error.status_code
     if isinstance(error, StreamFailure):
         code, message = error.code, error.message
-    elif isinstance(error, APITimeoutError):
+    elif isinstance(error, ModelHTTPError):
+        code, message = error.provider_code, error.provider_message
+        if (code is None or message is None) and error.body is not None:
+            parsed_code, parsed_message = error_body_fields(error.body)
+            if code is None:
+                code = parsed_code
+            if message is None:
+                message = parsed_message
+    elif isinstance(error, (APITimeoutError, ModelTimeoutError)):
         observation = "ZERO reached its request timeout."
-    elif isinstance(error, APIConnectionError):
+    elif isinstance(error, (APIConnectionError, ModelConnectionError)):
         observation = "Connection error."
     elif isinstance(error, (NoReply, CutShort, UnsupportedModelRequest)):
         observation = str(error)
@@ -161,8 +226,8 @@ def request_error_details(error, *, key=None, redact=None):
         # The SDK unwraps `error` in HTTP and stream errors. Only use named
         # fields, never the SDK's exception text or a raw HTTP response.
         body = error.body
-        if isinstance(body, dict):
-            code, message = body.get("code"), body.get("message")
+        if isinstance(body, (dict, list)):
+            code, message = error_body_fields(body)
         elif isinstance(body, str):
             if isinstance(error, APIStatusError):
                 # An explicit JSON error string can be used. A raw body cannot.
@@ -353,6 +418,8 @@ def complete(api, client, model, conversation, *, silence, check=None,
         reply = Reply(draft, time.monotonic() - started, route=route,
                       keep_continuation=keep_continuation)
         entries.ensure_executable(reply.entry)
+    except entries.UnsupportedCondition as error:
+        raise UnsupportedExecutionCondition(str(error)) from error
     except entries.EntryError as error:
         raise CutShort(str(error)) from error
     return reply

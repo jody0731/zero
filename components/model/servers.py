@@ -28,8 +28,6 @@ from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from openai import OpenAI
-
 import paths
 from core.llm import complete
 from components.model import THINKING_EFFORTS, directory, features, limit_catalog
@@ -152,6 +150,7 @@ class ModelServer:
         self.reply_url = reply_url(self.url, entry.get("responses_url"), self.api)
         route = (name, endpoint(self.reply_url), self.api.NAME, model)
         self.history_route = sha256(json.dumps(route).encode()).hexdigest()
+        self.reports_reasoning_efforts = entry.get("reports_reasoning_efforts", False)
         self.reasoning_efforts = merged.get("reasoning_efforts")
         self.tool_efforts = None
         self.chat_thinking_field = None
@@ -161,13 +160,20 @@ class ModelServer:
             )
             self.tool_efforts = merged.get("chat_tool_efforts")
             self.chat_thinking_field = merged.get("chat_thinking_field")
-        else:
+        elif self.api.NAME == "responses":
             self.reasoning_efforts = merged.get(
                 "responses_reasoning_efforts", self.reasoning_efforts,
             )
+        if (self.reasoning_efforts is None and model
+                and canonical_endpoint(name, self.url)
+                and name in limit_catalog.providers()
+                and self.reported_reasoning() is None
+                and limit_catalog.reasoning_supported(name, model) is False):
+            self.reasoning_efforts = []
         self.max_reasoning_effort = merged.get("max_reasoning_effort")
-        if (self.api.NAME == "chat_completions"
-                and "responses_reasoning_efforts" in line):
+        if (self.api.NAME != "responses"
+                and "responses_reasoning_efforts" in line
+                and "reasoning_efforts" not in line):
             self.max_reasoning_effort = None
         self.accepts_zero_temperature = merged.get("accepts_zero_temperature", True)
         self.replays_encrypted_reasoning = entry.get(
@@ -177,7 +183,6 @@ class ModelServer:
         self.requests_reasoning_summary = merged.get(
             "requests_reasoning_summary", False,
         )
-        self.reports_reasoning_efforts = entry.get("reports_reasoning_efforts", False)
         # None: no key needed
         self.key_env = entry.get("key_env")
         # Whether it refuses a request longer than its context, where a
@@ -208,9 +213,18 @@ class ModelServer:
         self.request_context_window = limits.context_window if bounded else None
 
     def refresh_limits(self):
-        """Apply a new endpoint observation to an already open session."""
+        """Apply new endpoint observations or saved window edits to an open session."""
+        try:
+            entry = table().get(self.name)
+        except ModelServerError:
+            entry = None
+        if entry is not None and endpoint(entry["url"]) == endpoint(self.url):
+            entry_changed = entry != self._entry
+            self._entry = entry
+        else:
+            entry_changed = False
         reported = directory.reported(self.url, self._model)
-        if reported != self._reported:
+        if entry_changed or reported != self._reported:
             self.set_limits(reported)
 
     def reported_reasoning(self):
@@ -468,16 +482,21 @@ def saved_window(entry, model):
     return entry.get("context_windows", {}).get(endpoint(entry["url"]), {}).get(model)
 
 
-def model_limits(name, entry, model, *, refresh=True, reported=None):
-    """Verified provider limits and the effective limits after user caps."""
+def window_details(name, entry, model, *, refresh=True, reported=None):
+    """Verified limits, effective limits, and the source of the effective window."""
     url = entry["url"]
-    verified = reported if reported is not None else directory.reported(url, model)
+    endpoint_limits = (
+        reported if reported is not None else directory.reported(url, model)
+    )
+    catalog_limits = TokenLimits()
     if canonical_endpoint(name, url):
         published = limit_catalog.lookup(
-            name, model, refresh=refresh and verified.context_window is None,
+            name, model,
+            refresh=refresh and endpoint_limits.context_window is None,
         ) if name in limit_catalog.providers() else TokenLimits()
         shipped = TokenLimits.read(catalog()[name].get("models", {}).get(model))
-        verified = verified.capped_by(published).capped_by(shipped)
+        catalog_limits = published.capped_by(shipped)
+    verified = endpoint_limits.capped_by(catalog_limits)
     line = entry.get("models", {}).get(model, {})
     manual = saved_window(entry, model)
     # The old per-model setting took precedence over the server-wide setting.
@@ -490,7 +509,29 @@ def model_limits(name, entry, model, *, refresh=True, reported=None):
         token_count(line.get("max_input_tokens", entry.get("max_input_tokens"))),
         token_count(line.get("max_output_tokens", entry.get("max_output_tokens"))),
     )
-    return verified, verified.capped_by(configured)
+    limits = verified.capped_by(configured)
+    if limits.context_window is None:
+        source = "unknown"
+    elif saved is not None and (
+        verified.context_window is None or saved <= verified.context_window
+    ):
+        source = "saved"
+    elif endpoint_limits.context_window is not None and (
+        catalog_limits.context_window is None
+        or endpoint_limits.context_window <= catalog_limits.context_window
+    ):
+        source = "endpoint"
+    else:
+        source = "catalog"
+    return verified, limits, source
+
+
+def model_limits(name, entry, model, *, refresh=True, reported=None):
+    """Verified provider limits and the effective limits after user caps."""
+    verified, limits, _ = window_details(
+        name, entry, model, refresh=refresh, reported=reported,
+    )
+    return verified, limits
 
 
 def read_directory(name, entry):
@@ -499,7 +540,7 @@ def read_directory(name, entry):
         return
     server = ModelServer(name, entry)
     try:
-        directory.listing(server.url, api_key(server), cached=True)
+        directory.listing(server.url, api_key(server), api=server.api, cached=True)
     except Exception:
         # Startup still uses verified and configured limits it already has.
         pass
@@ -583,16 +624,10 @@ def api_key(server, keys_file=None):
 
 
 def make_client(model, timeout, *, server=None):
-    """The SDK's client. Its timeout counts per read, a backstop for a
+    """The API adapter's client. Its timeout counts per read, a backstop for a
     connection that never opens; complete's clock is the one that counts."""
     server = server or resolve(model, check_endpoint=True)[0]
-    # The SDK's own retries are off: hooks decide what to retry
-    return OpenAI(
-        base_url=server.reply_url,
-        api_key=api_key(server),
-        timeout=timeout,
-        max_retries=0,
-    )
+    return server.api.make_client(server.reply_url, api_key(server), timeout)
 
 
 class Model:

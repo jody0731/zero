@@ -11,12 +11,14 @@ ENTRY_SPECS = (
               role="provider_item", required_fields=("route", "kind"), fields_schema={
                   "route": (str, type(None)), "kind": str, "item": object,
                   "call_id": str, "name": str, "arguments": str,
-                  "extra_content": Mapping,
+                  "extra_content": Mapping, "thought_signature": str,
               }),
 )
 
 
-CONTINUATION_KINDS = ("response_item", "thought_signature", "reasoning_detail")
+CONTINUATION_KINDS = (
+    "response_item", "interaction_step", "thought_signature", "reasoning_detail",
+)
 
 
 def provider_items(draft, route, keep_continuation):

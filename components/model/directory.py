@@ -10,16 +10,14 @@ from time import monotonic
 from urllib.parse import urljoin
 
 import httpx2
-from openai import OpenAI
 
 import paths
-from components.model.apis import chat_completions
-from components.model.limits import TokenLimits, endpoint, model_id, token_count
+from components.model.apis import APIS, DEFAULT
+from components.model.limits import TokenLimits, endpoint
 
 LIST_SECONDS = 3
 FRESH_SECONDS = 60
 VERSION_SECONDS = 0.5
-TOTAL_FIELDS = ("max_model_len", "context_length", "max_context_length")
 FILE_FORMAT = 1
 
 
@@ -63,33 +61,13 @@ def read_server_version(url):
     return tuple(map(int, version.split(".")))
 
 
-def route(url, key):
-    return endpoint(url), sha256(key.encode()).digest()
+def route(url, key, api=None):
+    chosen = api or APIS[DEFAULT]
+    return endpoint(url), (chosen.NAME, sha256(key.encode()).digest())
 
 
-def rows(url, key):
-    with OpenAI(base_url=url, api_key=key, timeout=LIST_SECONDS,
-                max_retries=0) as client:
-        items = client.models.list().data
-    found = []
-    for item in items:
-        if not model_id(item.id):
-            continue
-        data = item.model_dump()
-        window, loads_window = chat_completions.runtime_context_window(data)
-        window = token_count(window)
-        if not loads_window:
-            window = next((count for name in TOTAL_FIELDS
-                           if (count := token_count(data.get(name)))), None)
-        limits = TokenLimits.read({**data, "context_window": window})
-        row = {"id": item.id, "context_window": window, **limits.as_dict()}
-        reasoning = data.get("reasoning")
-        if isinstance(reasoning, dict):
-            row["reasoning"] = reasoning
-        if loads_window:
-            row["context_reported_on_load"] = True
-        found.append(row)
-    return found
+def rows(url, key, api=None):
+    return (api or APIS[DEFAULT]).list_models(url, key, LIST_SECONDS)
 
 
 def windows_file():
@@ -97,10 +75,11 @@ def windows_file():
     return paths.home() / "state" / "model_windows.json"
 
 
-def listing(url, key, *, cached=False):
+def listing(url, key, *, api=None, cached=False):
     """Read /models once for concurrent callers of the same connection."""
     path = windows_file()
-    address, fingerprint = route(url, key)
+    chosen = api or APIS[DEFAULT]
+    address, fingerprint = route(url, key, chosen)
     identity = (path, address)
     with _listing_lock:
         previous, entry = _listings.get(identity, (None, None))
@@ -115,7 +94,7 @@ def listing(url, key, *, cached=False):
             send = True
     if send:
         try:
-            data = rows(url, key)
+            data = rows(url, key, chosen)
             remember(path, address, data, entry)
         except Exception as error:
             # A failed Future holds a traceback through its caller. Release

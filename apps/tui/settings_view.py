@@ -16,7 +16,9 @@ from textual.widgets import Static
 import paths
 import settings
 from apps.tui import config, controller, keybindings
-from apps.tui.connect_view import ServersView, with_model_window
+from apps.tui.connect_view import (
+    ServersView, parse_context_window, with_model_window,
+)
 from apps.tui.dialogs import KeyCaptureView, ChoiceView, PromptView
 from apps.tui.widgets import ERRORS, Plain
 from client import session_list
@@ -52,6 +54,15 @@ class SessionRow:
     @property
     def name(self):
         return self.setting.name
+
+
+@dataclass(frozen=True)
+class ContextWindowRow:
+    """The session model's context window: edited via `model/window/set`, not
+    a config.toml setting."""
+
+    name: str = "context_window"
+    label: str = "Context window"
 
 
 class Scrolled:
@@ -97,6 +108,9 @@ class SettingsView(Scrolled, Screen):
         self.error = None
         # What the session in view runs with from its next turn
         self.now = {}
+        # The session model's resolved context window and the model it was for
+        self.window = None
+        self.window_model = None
         # Support on the selected route, separately for agent and judge calls.
         self.features = {}
         self.rows = []
@@ -120,6 +134,15 @@ class SettingsView(Scrolled, Screen):
                 # The session's rows show the defaults' values meanwhile
                 found["now"] = {}
                 found.setdefault("failed", []).append(str(error))
+            listed_values = {row["name"]: row["value"] for row in found["listed"]}
+            model = found["now"].get("model") or listed_values.get("model")
+            found["window_model"] = model
+            found["window"] = None
+            if self.place in ("main", "model") and model:
+                try:
+                    found["window"] = self.zero.connection.model_window(model)
+                except ERRORS:
+                    found["window"] = None
             return found
 
         self.zero.request(work, then=self.fetched)
@@ -130,6 +153,8 @@ class SettingsView(Scrolled, Screen):
         listed = found["listed"]
         self.error = found.get("error", self.error)
         self.now = found["now"]
+        self.window = found.get("window")
+        self.window_model = found.get("window_model")
         shown = []
         for row in listed:
             fields = {k: v for k, v in row.items() if k != "value"}
@@ -146,6 +171,8 @@ class SettingsView(Scrolled, Screen):
         made = self.zero.client.session is not None
         rows = [SessionRow(self.known[name]) for name in current
                 if name in self.known and (made or self.place != "advanced")]
+        if self.place in ("main", "model"):
+            rows.append(ContextWindowRow())
         rows += sorted(
             (s for s in [*config.SETTINGS, *shown] if s.group in groups),
             key=lambda s: groups.index(s.group),
@@ -185,7 +212,8 @@ class SettingsView(Scrolled, Screen):
         self.read_features()
 
     def on_screen_resume(self):
-        # Back from another view, where the default may have changed
+        # Back from another view, where the default or capabilities may have changed
+        self.features.clear()
         self.fetch()
         self.draw()
         self.read_features()
@@ -257,7 +285,7 @@ class SettingsView(Scrolled, Screen):
         )
 
     def heading(self, row):
-        if isinstance(row, SessionRow):
+        if isinstance(row, (SessionRow, ContextWindowRow)):
             return "The judge" if self.place == "advanced" else "Current session"
         if row in LINKS:
             return ""
@@ -266,6 +294,8 @@ class SettingsView(Scrolled, Screen):
     def label(self, row):
         if row in LINKS:
             return LINKS[row]
+        if isinstance(row, ContextWindowRow):
+            return row.label
         # Advanced has the judge twice: the session's, then the default
         if isinstance(row, SessionRow):
             if self.place == "advanced":
@@ -285,6 +315,17 @@ class SettingsView(Scrolled, Screen):
             return (f"{len(mine)} changed" if mine else "defaults"), bool(mine)
         if row == ADVANCED:
             return "the judge, the limits, the server", False
+        if isinstance(row, ContextWindowRow):
+            info = self.window or {}
+            tokens = info.get("context_window")
+            source = info.get("source")
+            if tokens is None:
+                return "unknown", False
+            if source == "saved":
+                return f"{tokens:,} · custom", True
+            if source in ("endpoint", "catalog"):
+                return f"{tokens:,} · automatic", False
+            return f"{tokens:,}", False
         if isinstance(row, SessionRow):
             setting, now = row.setting, self.value(row)
             # The judge's model, unset, is the session's own
@@ -336,6 +377,17 @@ class SettingsView(Scrolled, Screen):
         if row == ADVANCED:
             return ("The judge (for this session and by default), the limits "
                     "and the server. Enter opens them.")
+        if isinstance(row, ContextWindowRow):
+            info = self.window or {}
+            auto = info.get("automatic_window")
+            lines = ["Enter edits this model's context window."]
+            if info.get("source") == "saved" and auto is not None:
+                lines.append(
+                    f"Automatic: {auto:,} tokens. Del resets to automatic."
+                )
+            elif auto is not None:
+                lines.append(f"Automatic: {auto:,} tokens.")
+            return "\n".join(lines)
         note = controller.SETTING_NOTES.get(row.name)
         missing = self.missing_feature_text(row)
         if isinstance(row, SessionRow):
@@ -381,6 +433,9 @@ class SettingsView(Scrolled, Screen):
             return
         if isinstance(row, SessionRow):
             self.change_session(row)
+            return
+        if isinstance(row, ContextWindowRow):
+            self.edit_context_window()
             return
         if self.problem():
             self.notify("config.toml can't be read: fix it first", severity="error")
@@ -488,10 +543,92 @@ class SettingsView(Scrolled, Screen):
             self.notify(str(error), severity="error")
         self.draw()
 
+    def edit_context_window(self):
+        model = self.now.get("model") or self.values.get("model")
+        if not model:
+            self.notify("No model selected.", severity="warning")
+            return
+
+        def prompt(info):
+            url = info.get("url")
+            if not url:
+                self.notify("Model endpoint is unavailable.", severity="error")
+                return
+            current = info.get("context_window")
+            auto = info.get("automatic_window")
+            label = f"{model}'s context window in tokens"
+            if auto is not None:
+                label += f" (automatic: {auto:,})"
+
+            def save(text):
+                if text is None:
+                    return
+                tokens = parse_context_window(text)
+                if tokens is None:
+                    self.notify(
+                        "Enter a context window in whole tokens.",
+                        severity="warning",
+                    )
+                    return
+
+                def saved(_):
+                    self.features.clear()
+                    self.fetch()
+                    self.notify(f"Context window set to {tokens:,} tokens.")
+
+                self.zero.request(
+                    lambda: self.zero.connection.set_model_window(model, url, tokens),
+                    then=saved,
+                )
+
+            self.app.push_screen(
+                PromptView(label, "" if current is None else str(current)),
+                save,
+            )
+
+        if self.window and self.window_model == model and self.window.get("url"):
+            prompt(self.window)
+            return
+        self.zero.request(
+            lambda: self.zero.connection.model_window(model), then=prompt,
+        )
+
+    def reset_context_window(self):
+        model = self.now.get("model") or self.values.get("model")
+        if not model:
+            return
+        info = self.window or {}
+        if info.get("source") != "saved":
+            self.notify("Already using the automatic context window.")
+            return
+        auto = info.get("automatic_window")
+        if auto is None:
+            self.notify(
+                "This model has no automatic context window.",
+                severity="warning",
+            )
+            return
+        url = info.get("url")
+        if not url:
+            return
+
+        def cleared(_):
+            self.features.clear()
+            self.fetch()
+            self.notify(f"Context window reset to automatic ({auto:,} tokens).")
+
+        self.zero.request(
+            lambda: self.zero.connection.set_model_window(model, url, None),
+            then=cleared,
+        )
+
     def action_reset(self):
         if not self.rows:
             return
         row = self.rows[self.selected]
+        if isinstance(row, ContextWindowRow):
+            self.reset_context_window()
+            return
         if not isinstance(row, settings.Setting) or self.problem():
             return
         if row.name == "model":

@@ -1,6 +1,6 @@
 /* Settings dialog: General, component tabs, and Advanced tabs. */
 
-import { change, look } from "./api.js";
+import { change, labelEfforts, look, modelCapabilities } from "./api.js";
 import { registry } from "./components.js";
 import {
   $, el, getThemePreference, setThemePreference, state,
@@ -65,6 +65,8 @@ export async function openSettings(view = "General") {
       el("p", "sub", "For new sessions. Applied when you leave settings."));
   }
   const groups = new Map();
+  const inputs = new Map();
+  const notes = new Map();
   for (const setting of state.settings.filter((each) => each.shown
     && (view === "General" ? each.group === "Default" : each.group !== "Default"))) {
     let container = body;
@@ -84,17 +86,75 @@ export async function openSettings(view = "General") {
       ? state.settingsDraft.get(setting.name) : setting.value;
     const input = fieldInput(setting, value);
     input.dataset.setting = setting.name;
+    inputs.set(setting.name, input);
     label.append(input);
     const status = el("span", "error setting-error",
       state.settingsErrors.get(setting.name) || "");
     status.hidden = !status.textContent;
-    form.append(label, status);
+    form.append(label);
+    if (setting.name === "thinking_effort"
+        || setting.name === "judge_thinking_effort") {
+      const note = el("div", "sub setting-note");
+      note.setAttribute("aria-live", "polite");
+      notes.set(setting.name, note);
+      form.append(note);
+    }
+    form.append(status);
     input.addEventListener("input", () => {
       state.settingsDraft.set(setting.name, input.value);
       state.settingsErrors.delete(setting.name);
       status.hidden = true;
     });
     container.append(form);
+  }
+  const wireEfforts = (modelName, effortName, tools) => {
+    const effortInput = inputs.get(effortName);
+    const note = notes.get(effortName);
+    if (!effortInput || !note) return;
+    const resolveModel = () => {
+      const control = inputs.get(modelName);
+      const raw = control
+        ? control.value
+        : (state.settingsDraft.has(modelName)
+          ? state.settingsDraft.get(modelName)
+          : state.settings.find((each) => each.name === modelName)?.value);
+      const trimmed = (raw || "").trim();
+      if (trimmed) return trimmed;
+      if (modelName === "judge_model") {
+        const fallback = state.settingsDraft.has("model")
+          ? state.settingsDraft.get("model")
+          : state.settings.find((each) => each.name === "model")?.value;
+        return (fallback || "").trim();
+      }
+      return "";
+    };
+    let version = 0;
+    const updateEfforts = async () => {
+      const model = resolveModel();
+      const current = ++version;
+      if (!model) {
+        labelEfforts(effortInput, null, note);
+        return;
+      }
+      const reply = await modelCapabilities(model, tools);
+      if (current !== version || !effortInput.isConnected
+          || model !== resolveModel()) {
+        return;
+      }
+      labelEfforts(effortInput, reply, note);
+    };
+    const modelInput = inputs.get(modelName);
+    if (modelInput) {
+      modelInput.addEventListener("input", updateEfforts);
+      modelInput.addEventListener("change", updateEfforts);
+    }
+    effortInput.addEventListener("input", updateEfforts);
+    effortInput.addEventListener("change", updateEfforts);
+    updateEfforts();
+  };
+  if (view === "General") wireEfforts("model", "thinking_effort", true);
+  if (view === "Advanced") {
+    wireEfforts("judge_model", "judge_thinking_effort", false);
   }
 }
 

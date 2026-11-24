@@ -85,6 +85,20 @@ export async function change(message, fields) {
   return reply;
 }
 
+export function clearModelFeatures(model = null) {
+  if (!model) {
+    state.features.clear();
+    return;
+  }
+  for (const key of [...state.features.keys()]) {
+    try {
+      if (JSON.parse(key)[0] === model) state.features.delete(key);
+    } catch {
+      // Ignore unexpected keys.
+    }
+  }
+}
+
 export async function modelCapabilities(model, tools, fresh = false) {
   if (!model) return null;
   const key = JSON.stringify([model, tools]);

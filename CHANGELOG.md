@@ -3,6 +3,25 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.9.5
+
+- Added a native Google Interactions API adapter (`/v1beta/interactions`) with
+  streaming reasoning summaries, tool schema normalization, thought-signature
+  replay, and clean `/v1beta/models` listing; Google Gemini now uses this
+  adapter by default (existing Google users: re-save your API key in Settings →
+  Models to bind it to the new native `/v1beta` endpoint).
+- Hardened the Responses and Chat Completions adapters for live provider edge
+  cases, updated the offline limits catalog (`FILE_FORMAT = 2`), and extended
+  `model/window`, `model/window/set`, and `model/server/list` with source,
+  automatic capacity, null-reset support, and server API labels.
+- Added editable and resettable per-model context windows across the browser
+  (Session panel and Settings → Models), terminal (`/model`, `/settings`, and
+  Models and keys), and CLI (`zero model window MODEL [TOKENS | --reset]`).
+- Wired live thinking-effort availability notes into browser Settings → General
+  and Settings → Advanced, added **Check features** to browser and terminal
+  model server panels, showed each server's active API title, and fixed
+  feature-cache invalidation and model-switch cancel rollback.
+
 ## 0.7.9.4
 
 - Sessions store conversations in Format 8 as structured, origin-attributed

@@ -3262,6 +3262,24 @@
             }
           ]
         },
+        "source": {
+          "enum": [
+            "saved",
+            "endpoint",
+            "catalog",
+            "unknown"
+          ]
+        },
+        "automatic_window": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "max_input_tokens": {
           "type": "integer"
         },
@@ -3282,7 +3300,7 @@
     },
     "model.window.set": {
       "type": "object",
-      "description": "Remember a context window for one model on its current endpoint.",
+      "description": "Remember a context window for one model on its current endpoint, or reset a saved override when context_window is null.",
       "properties": {
         "message": {
           "const": "model/window/set"
@@ -3313,8 +3331,15 @@
           "type": "string"
         },
         "context_window": {
-          "type": "integer",
-          "minimum": 1
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -3482,7 +3507,7 @@
             "type": "object",
             "additionalProperties": true
           },
-          "description": "name, title, url, key_state, needs_key, has_saved_key, model_prefix, user_added, in_catalog, context_window, models"
+          "description": "name, title, url, api, api_title, key_state, needs_key, has_saved_key, model_prefix, user_added, in_catalog, context_window, models"
         },
         "default": {
           "anyOf": [

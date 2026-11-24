@@ -350,9 +350,22 @@ def ensure_executable(entry, *, origin=None):
             raise EntryError(f"unsupported executable entry type: {node.type}")
         fields = node.fields or {}
         schema = spec.fields_schema
-        if node.extra or node.links is not None or fields.keys() - schema.keys():
+        extra_fields = sorted(fields.keys() - schema.keys())
+        if node.extra or node.links is not None or extra_fields:
+            reasons = []
+            if node.extra:
+                reasons.append(f"extra ({', '.join(sorted(node.extra))})")
+            if node.links is not None:
+                reasons.append("links")
+            for name in extra_fields:
+                value = fields.get(name)
+                if name == "wire_fields" and isinstance(value, Mapping) and value:
+                    reasons.append(f"wire_fields ({', '.join(sorted(value))})")
+                else:
+                    reasons.append(name)
+            detail = f": {', '.join(reasons)}" if reasons else ""
             raise UnsupportedCondition(
-                f"unsupported execution condition on {node.type}"
+                f"unsupported execution condition on {node.type}{detail}"
             )
         if any(name not in fields for name in spec.required_fields) or not all(
             isinstance(value, schema[name]) for name, value in fields.items()

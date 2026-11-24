@@ -42,6 +42,8 @@ REPLACE_KEY = "Replace saved key"
 REMOVE_KEY = "Remove saved key"
 VIEW_MODELS = "View models"
 TEST_MODEL = "Test model"
+CONTEXT_WINDOW = "Context window"
+CHECK_FEATURES = "Check features"
 URL_LABEL = "API URL, for example http://localhost:8080/v1"
 NO_MODEL_YET = ("ZERO needs a model to talk to. Pick a server and paste its API "
                 "key, or point ZERO at a server of your own.")
@@ -115,6 +117,39 @@ def parse_context_window(text):
         return None
     tokens = int(digits)
     return tokens if 0 < tokens < 2**53 else None
+
+
+def full_model_name(row, model):
+    """A server's qualified model name, respecting servers without a prefix."""
+    prefix = row.get("model_prefix")
+    if prefix is None:
+        prefix = f"{row['name']}/"
+    if prefix and not model.startswith(prefix):
+        return prefix + model
+    return model
+
+
+def format_features_text(reply):
+    """Measured model API features and thinking efforts for TextView."""
+    words = {True: "yes", False: "unavailable", None: "not measured"}
+    lines = [f"{reply['model']} · {reply.get('api', '')}".strip()]
+    if reply.get("measured_at"):
+        lines.append(f"Measured: {reply['measured_at']}")
+    lines.append("")
+    for name, honoured in (reply.get("features") or {}).items():
+        lines.append(f"  {name}: {words.get(honoured, str(honoured))}")
+    efforts = reply.get("thinking_efforts") or {}
+    if efforts:
+        shown = []
+        for name, ok in efforts.items():
+            label = "Model default" if name == "model_default" else name
+            suffix = (" (unavailable)" if ok is False
+                      else " (unverified)" if ok is None else "")
+            shown.append(label + suffix)
+        lines.append(f"  thinking_efforts: {', '.join(shown)}")
+    if error := reply.get("tools_error"):
+        lines.extend(("", error))
+    return "\n".join(lines)
 
 
 def with_model_window(zero, model, done):
@@ -404,7 +439,9 @@ class ServersView(Screen):
         if row is None:
             return ("A server of your own: its URL, a key if it takes one, and "
                     "a model it serves.")
-        said = [row["url"]]
+        api_title = row.get("api_title")
+        endpoint = f"{api_title} · {row['url']}" if api_title else row["url"]
+        said = [endpoint]
         if self.not_ready_reason and self.default:
             said.append(self.not_ready_reason)
         return "\n".join(said)
@@ -424,7 +461,9 @@ class ServersView(Screen):
             actions.append(REPLACE_KEY if saved else ADD_KEY)
         if saved:
             actions.append(REMOVE_KEY)
-        actions.extend((VIEW_MODELS, TEST_MODEL, CONNECT))
+        actions.extend((
+            VIEW_MODELS, TEST_MODEL, CONTEXT_WINDOW, CHECK_FEATURES, CONNECT,
+        ))
         if row["user_added"]:
             actions.append("Remove server")
         self.app.push_screen(ChoiceView(row["title"], actions),
@@ -452,6 +491,16 @@ class ServersView(Screen):
             self.pick_model(
                 row, "Test model. The provider may charge for the test.",
                 lambda model: self.test_model(row, model),
+            )
+        elif action == CONTEXT_WINDOW:
+            self.pick_model(
+                row, "Context window. Choose a model.",
+                lambda model: self.edit_model_window(row, model),
+            )
+        elif action == CHECK_FEATURES:
+            self.pick_model(
+                row, "Check features. The provider may charge for the check.",
+                lambda model: self.check_features(row, model),
             )
         elif action == CONNECT:
             self.app.push_screen(
@@ -535,6 +584,93 @@ class ServersView(Screen):
         self.zero.request(
             lambda: self.zero.connection.test_model(row["name"], model),
             then=lambda reply: self.notify(f"{reply['model']} answered the test."),
+            failed=self.show_error,
+        )
+
+    def edit_model_window(self, row, model):
+        full = full_model_name(row, model)
+
+        def prompt_tokens(info):
+            url = info["url"]
+            current = info.get("context_window")
+            auto = info.get("automatic_window")
+            label = f"{full}'s context window in tokens"
+            if auto is not None:
+                label += f" (automatic: {auto:,})"
+
+            def save(text):
+                if text is None:
+                    return
+                tokens = parse_context_window(text)
+                if tokens is None:
+                    self.notify(
+                        "Enter a context window in whole tokens.",
+                        severity="warning",
+                    )
+                    return
+
+                def saved(_):
+                    self.notify(f"Context window for {full} set to {tokens:,}.")
+                    self.fetch()
+
+                self.zero.request(
+                    lambda: self.zero.connection.set_model_window(full, url, tokens),
+                    then=saved, failed=self.show_error,
+                )
+
+            self.app.push_screen(
+                PromptView(label, "" if current is None else str(current)),
+                save,
+            )
+
+        def resolved(info):
+            source = info.get("source")
+            auto = info.get("automatic_window")
+            current = info.get("context_window")
+            if source == "saved" and auto is not None:
+                edit_choice = f"Edit ({current:,} tokens)"
+                reset_choice = f"Reset to automatic ({auto:,} tokens)"
+
+                def chosen(choice):
+                    if choice == edit_choice:
+                        prompt_tokens(info)
+                    elif choice == reset_choice:
+                        def cleared(_):
+                            self.notify(
+                                f"Context window for {full} reset to automatic "
+                                f"({auto:,})."
+                            )
+                            self.fetch()
+
+                        self.zero.request(
+                            lambda: self.zero.connection.set_model_window(
+                                full, info["url"], None,
+                            ),
+                            then=cleared, failed=self.show_error,
+                        )
+
+                self.app.push_screen(
+                    ChoiceView(f"Context window · {full}",
+                               [edit_choice, reset_choice]),
+                    chosen,
+                )
+                return
+            prompt_tokens(info)
+
+        self.zero.request(
+            lambda: self.zero.connection.model_window(full),
+            then=resolved, failed=self.show_error,
+        )
+
+    def check_features(self, row, model):
+        full = full_model_name(row, model)
+        self.notify(f"Checking features for {full}…")
+        self.zero.request(
+            lambda: self.zero.connection.features(full, test=True),
+            then=lambda reply: self.app.push_screen(
+                TextView(f"Features for {reply['model']}",
+                         format_features_text(reply)),
+            ),
             failed=self.show_error,
         )
 

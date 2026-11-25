@@ -142,14 +142,22 @@ class Runtime(SessionActions):
         # them that only look
         self.services = {}
         self.messages = {}
+        self.streaming_messages = {}
         self.looking_messages = ()
         self.workflow_messages = ()
+        self.principal_messages = ()
+        self.features = ()
         for service in services:
             service.attach(self)
             self.services[service.name] = service
             self.messages.update(service.messages())
+            self.streaming_messages.update(service.streaming_messages())
             self.looking_messages += tuple(service.looking_messages)
             self.workflow_messages += tuple(service.workflow_messages)
+            self.principal_messages += tuple(service.principal_messages)
+            self.features += tuple(
+                f for f in service.features if f not in self.features
+            )
 
     @property
     def model(self):
@@ -308,9 +316,9 @@ class Runtime(SessionActions):
             timeline.marked_format(raw, first=True)
         return upgrade.read_record(raw, seq=seq)
 
-    def redact(self, value, partial=False):
+    def redact(self, value):
         for service in self.services.values():
-            value = service.redact(value, partial=partial)
+            value = service.redact(value)
         return value
 
     def redact_entry(self, entry):
@@ -371,14 +379,55 @@ class Runtime(SessionActions):
             names += [n for n in service.message_fields if n not in names]
         return names
 
-    def admit(self, message, extra=None, *, legacy_send=False):
-        return self.admission.admit(message, extra, legacy_send=legacy_send)
+    def in_workflow_scope(self, sid, scope):
+        seen = set()
+        while sid and sid not in seen:
+            seen.add(sid)
+            row = self.store.session(sid)
+            if row is None or row.get("started_by") != "zero":
+                return False
+            sid = row.get("parent")
+            if sid == scope:
+                return True
+        return False
+
+    def prepare_message(self, message, extra, *, principal=None):
+        prepared = []
+        for service in self.services.values():
+            item = service.prepare_message(message, extra, principal=principal)
+            if item is not None:
+                prepared.append(item)
+        return prepared
+
+    def message_label(self, entry):
+        for service in self.services.values():
+            label = service.message_label(entry)
+            if label:
+                return label
+        return ""
+
+    def message_restore(self, entry):
+        restored = {}
+        for service in self.services.values():
+            item = service.message_restore(entry)
+            if item:
+                restored.update(item)
+        return restored
+
+    def admit(self, message, extra=None, *, legacy_send=False, principal=None):
+        return self.admission.admit(
+            message, extra, legacy_send=legacy_send, principal=principal,
+        )
 
     def check_reply(self, sid, message, expected):
         return self.admission.check_reply(sid, message, expected)
 
-    def admit_to_session(self, message, sid, new, payload, legacy_send):
-        return self.admission.admit_to_session(message, sid, new, payload, legacy_send)
+    def admit_to_session(self, message, sid, new, payload, legacy_send,
+                         claims=(), *, legacy_payload=None, principal=None):
+        return self.admission.admit_to_session(
+            message, sid, new, payload, legacy_send, claims=claims,
+            legacy_payload=legacy_payload, principal=principal,
+        )
 
     def handled_as(self, sid, state, message, legacy_send=False):
         return self.admission.handled_as(sid, state, message, legacy_send)
@@ -445,9 +494,11 @@ class Runtime(SessionActions):
     def _run_turn(self, sid, row, lock, control):
         return self.turn_runner._run_turn(sid, row, lock, control)
 
-    def end_for_missing_workspace(self, sid, row, log, records, begun, text, workspace):
+    def end_for_missing_workspace(self, sid, row, log, records, begun, text, workspace,
+                                  *, child_entries=()):
         return self.turn_runner.end_for_missing_workspace(
             sid, row, log, records, begun, text, workspace,
+            child_entries=child_entries,
         )
 
     def finish_turn(self, sid, session, turn, row):
@@ -536,6 +587,9 @@ class Runtime(SessionActions):
 
     def append_between_turns(self, sid, refused, type, **fields):
         return self.turn_runner.append_between_turns(sid, refused, type, **fields)
+
+    def append_side_record(self, sid, entry, *, timeout=10.0):
+        return self.turn_runner.append_side_record(sid, entry, timeout=timeout)
 
     def run_on_session(self, sid, name, fn, *, if_busy=None, precheck=None):
         return self.turn_runner.run_on_session(

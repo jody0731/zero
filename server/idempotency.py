@@ -41,11 +41,42 @@ STILL_RUNNING = ("message id {id!r} is still running after {seconds} s; "
                  "send it again later for its reply")
 
 
-def request_hash(request):
-    """What a request asks, as a short hash: the same id must ask the same."""
+DIGEST_VERSION = "v2:"
+
+
+def legacy_request_hash(request):
+    """Pre-principal unversioned request-only digest (32 hex chars)."""
     asked = {k: v for k, v in request.items() if k not in NOT_HASHED}
     text = json.dumps(asked, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(text.encode()).hexdigest()[:32]
+
+
+def is_legacy_digest(digest):
+    """True when `digest` is a pre-upgrade unversioned request-only hash."""
+    return isinstance(digest, str) and not digest.startswith(DIGEST_VERSION)
+
+
+def matches_request_hash(stored, digest, *, legacy_digest=None, allow_legacy=False):
+    """Compare stored idempotency digest against current (and authorized legacy)."""
+    if stored == digest:
+        return True
+    if not is_legacy_digest(stored):
+        return False
+    allowed = allow_legacy() if callable(allow_legacy) else allow_legacy
+    if not allowed:
+        return False
+    expected = legacy_digest() if callable(legacy_digest) else legacy_digest
+    return expected is not None and stored == expected
+
+
+def request_hash(request, *, principal=None):
+    """What a request asks, as a versioned digest scoped to its principal."""
+    asked = {k: v for k, v in request.items() if k not in NOT_HASHED}
+    if principal is None:
+        return legacy_request_hash(asked)
+    target = {"principal": principal.owner_key, "request": asked}
+    text = json.dumps(target, sort_keys=True, ensure_ascii=False, default=str)
+    return f"{DIGEST_VERSION}{hashlib.sha256(text.encode()).hexdigest()[:32]}"
 
 
 class MessageReplies:
@@ -68,11 +99,13 @@ class MessageReplies:
         self.swept_at = now
         self.store.forget_replies(now - KEEP_SECONDS)
 
-    def run(self, name, request, answer):
+    def run(self, name, request, answer, *, principal=None, allow_legacy=True,
+            legacy_check=None):
         """`answer(request)`'s reply, run once for the request's id; the
         first reply again for an id already run."""
         msg_id = request["id"]
-        digest = request_hash({**request, "message": name})
+        full_request = {**request, "message": name}
+        digest = request_hash(full_request, principal=principal)
         with self.lock:
             waiting = self.running.get(msg_id)
             if waiting is None:
@@ -82,11 +115,31 @@ class MessageReplies:
             if not waiting.wait(self.wait_seconds):
                 return error(STILL_RUNNING.format(id=msg_id,
                                                   seconds=self.wait_seconds))
-            return self.replay(msg_id, self.store.message_reply(msg_id), digest)
+            return self._replay_checked(
+                msg_id,
+                self.store.message_reply(msg_id),
+                digest,
+                full_request,
+                name,
+                request,
+                principal,
+                allow_legacy,
+                legacy_check,
+            )
         try:
             found = self.store.message_reply(msg_id)
             if found is not None:
-                return self.replay(msg_id, found, digest)
+                return self._replay_checked(
+                    msg_id,
+                    found,
+                    digest,
+                    full_request,
+                    name,
+                    request,
+                    principal,
+                    allow_legacy,
+                    legacy_check,
+                )
             if time.time() - self.swept_at > SWEEP_EVERY_SECONDS:
                 self.sweep()
             self.store.claim_reply(msg_id, name, digest)
@@ -98,11 +151,38 @@ class MessageReplies:
                 self.running.pop(msg_id, None)
             mine.set()
 
+    @classmethod
+    def _replay_checked(cls, msg_id, found, digest, full_request, name,
+                        request, principal, allow_legacy, legacy_check):
+        if found is None or found["request_hash"] == digest:
+            return cls.replay(msg_id, found, digest)
+        allowed = (
+            legacy_check(name, request, principal)
+            if legacy_check is not None else allow_legacy
+        )
+        legacy_digest = (
+            legacy_request_hash(full_request)
+            if allowed and principal is not None
+            and is_legacy_digest(found["request_hash"]) else None
+        )
+        return cls.replay(
+            msg_id,
+            found,
+            digest,
+            legacy_digest=legacy_digest,
+            allow_legacy=allowed,
+        )
+
     @staticmethod
-    def replay(msg_id, found, digest):
+    def replay(msg_id, found, digest, *, legacy_digest=None, allow_legacy=False):
         if found is None:
             return error(CUT_OFF.format(id=msg_id))
-        if found["request_hash"] != digest:
+        if not matches_request_hash(
+            found["request_hash"],
+            digest,
+            legacy_digest=legacy_digest,
+            allow_legacy=allow_legacy,
+        ):
             return error(OTHER_REQUEST.format(id=msg_id))
         if found["state"] != "done":
             return error(CUT_OFF.format(id=msg_id))

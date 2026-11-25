@@ -64,7 +64,10 @@ def new_id():
 
 
 def title(text):
-    line = text.strip().splitlines()[0]
+    lines = text.strip().splitlines()
+    if not lines:
+        return ""
+    line = lines[0]
     return line if len(line) <= TITLE_LENGTH else line[: TITLE_LENGTH - 1] + "…"
 
 
@@ -172,6 +175,11 @@ class SessionActions:
         now.update(self.logged_switches(sid))
         now.update(json.loads(row["switch"] or "{}"))
         now.update({name: row[name] for name in COLUMNS})
+        for name in timeline.SWITCHABLE:
+            setting = settings.BY_NAME.get(name)
+            if (now.get(name) is None and setting is not None
+                    and setting.none_means_default):
+                now[name] = setting.default
         return {name: now[name] for name in timeline.SWITCHABLE}
 
     def pending_switches(self, sid, row=None):
@@ -333,9 +341,17 @@ class SessionActions:
             raise Refused(f"no session {sid!r}")
         records = self.read_branch(sid)
         after = self.copied_to(sid)
-        return [{"seq": r.seq, "time": r.time, "text": entries.text(r.entry)}
-                for r in reversed(timeline.rewind_points(records))
-                if r.seq > after]
+        found = []
+        for r in reversed(timeline.rewind_points(records)):
+            if r.seq <= after:
+                continue
+            text = entries.text(r.entry)
+            label = text if text.strip() else (self.message_label(r.entry) or text)
+            item = {"seq": r.seq, "time": r.time, "text": label}
+            if restored := self.message_restore(r.entry):
+                item.update(restored)
+            found.append(item)
+        return found
 
     def copied_to(self, sid):
         """The last record a session ZERO started copied from its parent (a
@@ -440,7 +456,8 @@ class SessionActions:
                 )
             finally:
                 lock.release()
-        return {"rewind": record, "text": entries.text(left[0].entry)}
+        restored = self.message_restore(left[0].entry)
+        return {"rewind": record, "text": entries.text(left[0].entry), **restored}
 
     def fork(self, sid, seq=None, source="user"):
         """A new session from this one's conversation: its current branch up
@@ -469,7 +486,7 @@ class SessionActions:
                     or log.unfinished_turn()):
                 raise Refused("its last turn hasn't ended; fork from one of the "
                               "user's messages, or once it ends")
-            copied, text, went_on = records, "", None
+            copied, text, went_on, restored = records, "", None, {}
         else:
             self.refuse_copied(sid, seq)
             try:
@@ -478,6 +495,7 @@ class SessionActions:
                 raise Refused(str(error)) from None
             copied = records[: records.index(left[0])]
             text = entries.text(left[0].entry)
+            restored = self.message_restore(left[0].entry)
             went_on = {"effects": "".join(
                 service.fork_effects(sid, left) for service in self.services.values()
             )}
@@ -485,7 +503,7 @@ class SessionActions:
                                 {"title": info["title"], "source": source,
                                  "started_by": "user"})
         return {"session": replies.session_row(self.store.session(new)),
-                "text": text}
+                "text": text, **restored}
 
     def fork_finished(self, sid, title, source, rows_beside=None):
         """A new session from this one's finished turns: its current branch
@@ -545,19 +563,33 @@ class SessionActions:
         for tries in range(1, ID_TRIES + 1):
             new = new_id()
             path = self.paths.sessions / f"{new}.jsonl"
+            copied_for_child = list(copied)
+            for service in self.services.values():
+                copied_for_child = service.rewrite_fork_records(
+                    sid, new, copied_for_child,
+                )
             try:
-                parent_records = self.with_origins(sid, copied)
+                parent_records = self.with_origins(sid, copied_for_child)
                 next(parent_records)
                 write_copy(path, [header, *parent_records])
             except FileExistsError:
                 continue
+
+            def fork_rows(db, child_id):
+                if rows_beside is not None:
+                    rows_beside(db, child_id)
+                for service in self.services.values():
+                    service.session_forked(db, sid, child_id, copied_for_child)
+
             try:
-                self.store.add_session(new, full, rows_beside)
+                self.store.add_session(new, full, fork_rows)
             except sqlite3.IntegrityError:
                 path.unlink(missing_ok=True)
                 if tries == ID_TRIES:
                     raise
                 continue
+            for service in self.services.values():
+                service.after_fork(new, copied_for_child)
             return new
         raise FileExistsError(f"{ID_TRIES} new session ids were all taken")
 
@@ -607,6 +639,8 @@ class SessionActions:
             except Busy as error:
                 raise Refused(str(error)) from None
             try:
+                for service in services:
+                    service.before_trash(sid)
                 files = [self.paths.sessions / f"{sid}.jsonl"]
                 for service in services:
                     files += service.session_files(sid)

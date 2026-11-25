@@ -70,6 +70,22 @@ def system_entry(record: LogRecord):
     return None
 
 
+def reply_has_output(entry: Entry):
+    """Whether an assistant reply carries text, calls, hosted output, or media."""
+    for node, origin, _, depth in entries.walk(entry, include_private=False):
+        if depth == 0:
+            continue
+        if origin == "model" and entries.has(node, "tool_call"):
+            return True
+        if entries.has(node, "text") and (entries.text(node) or "").strip():
+            return True
+        if entries.has(node, "hosted_output"):
+            return True
+        if entries.has(node, "attachment") or entries.has(node, "media"):
+            return True
+    return False
+
+
 def model_entry(record: LogRecord):
     """The entry the model reads as part of the timeline."""
     entry = record.entry
@@ -79,7 +95,8 @@ def model_entry(record: LogRecord):
         return notice
     if entries.has(entry, "answer") and not entry.get("as_message"):
         return None
-    if entries.has(entry, "assistant_reply") and entry.get("empty"):
+    if (entries.has(entry, "assistant_reply") and entry.get("empty")
+            and not reply_has_output(entry)):
         return None
     if (entries.has(entry, "note") or entries.has(entry, "switch")) and (
         not entry.get("text")
@@ -96,9 +113,32 @@ def result_target(record: LogRecord):
     return entries.linked_to(record.entry, "answers")
 
 
-def with_result(entry: Entry, text):
-    """Keep a result's envelope and children when its text moves to a file."""
-    return replace(entry, fields={**(entry.fields or {}), "result": text})
+def _downgrade_attachment(node: Entry):
+    """Downgrade inline attachment children to reference delivery when cleared."""
+    if entries.has(node, "attachment") and node.get("delivery") != "reference":
+        return replace(node, fields={**(node.fields or {}), "delivery": "reference"})
+    if node.entries:
+        updated = tuple(_downgrade_attachment(child) for child in node.entries)
+        if any(a is not b for a, b in zip(updated, node.entries)):
+            return replace(node, entries=updated)
+    return node
+
+
+def with_result(entry: Entry, text, *, clear_media=True):
+    """Keep a result's envelope and children when its text moves to a file.
+
+    When `clear_media` is True, inline attachment children are downgraded to
+    `delivery="reference"` so stale tool media is not re-sent natively.
+    """
+    fields = {**(entry.fields or {}), "result": text} if text is not None else (
+        entry.fields
+    )
+    children = entry.entries
+    if clear_media and children:
+        updated = tuple(_downgrade_attachment(child) for child in children)
+        if any(a is not b for a, b in zip(updated, children)):
+            children = updated
+    return replace(entry, fields=fields, entries=children)
 
 
 def boundary_summary(entry: Entry):
@@ -179,7 +219,7 @@ def _tool_text(entry: Entry):
     return json.dumps(entries.thaw(output), ensure_ascii=False)
 
 
-def tool_output(entry: Entry):
+def tool_output(entry: Entry, *, include_attachments=True):
     """A tool's native output and the visible text supplied in its children."""
     output = _tool_text(entry)
     if not entry.entries:
@@ -189,6 +229,7 @@ def tool_output(entry: Entry):
         for node, origin, _, depth in model_nodes(entry)
         if depth and origin == "tool" and entries.has(node, "model_visible")
         and not entries.has(node, "tool_call")
+        and (include_attachments or not entries.has(node, "attachment"))
         and (text := _tool_text(node))
     )
     return "\n\n".join(filter(None, (output, *evidence))) if evidence else output

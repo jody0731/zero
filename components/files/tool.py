@@ -1,42 +1,61 @@
-"""The file tools: read with line ranges, write, exact-string edit.
+"""The file tools: read, write, edit, inspect_file, read_file_part, present_file.
 
-Their disk work runs in sandboxed_io.py through the session's own sandbox,
-as bash's commands do, so the walls are the same ones (Codex runs apply_patch
-this way): no second set of path checks. Where the mode has no sandbox, or a
-call's ask to leave it was approved, sandboxed_io runs bare, as the user. Each
-call notes the content's hash in its record (seen.py); no bytes are
-kept: undo isn't the harness's. The stale check: `write` and `edit` change no
-file that changed since this session's tools last read or wrote it, and
-`write` replaces no existing file this session never read.
+Text disk work runs in sandboxed_io.py through the session's own sandbox so the
+walls are the same ones as bash's. Binary and rich file inspection/rendering
+runs in reader_worker.py inside a single-layer outer networkless bwrap that
+preserves the session Sandbox's hidden covers and reads workspace files and
+session attachments in place (zero copying into the attachment store).
 """
 
 import base64
 import errno
+import hashlib
 import json
 import os
+import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-from core.asking import TO_APPROVER
-from core.tools import tool
-from components.files import SETTINGS, sandboxed_io
+import paths as home_paths
+from core.asking import PARK, TO_APPROVER
+from core.tools import Result, tool
+from components.attachments import metadata as attachment_metadata
+from components.attachments.entries import make_attachment_entry
+from components.attachments.store import (
+    AttachmentError,
+    LimitExceeded,
+    short_id_of,
+    soft_cap_bytes,
+)
+from components.files import SETTINGS, reader_worker, sandboxed_io
 from components.sandbox.sandbox import (
-    NOT_OUTSIDE, OUTSIDE_ARGUMENT, WALL, outside_crossing,
+    NOT_OUTSIDE,
+    OUTSIDE_ARGUMENT,
+    SandboxError,
+    WALL,
+    outside_crossing,
 )
 
-# The biggest file the file tools take where no session's limits say (a call
-# made without a session), as the setting declares it
+# The biggest file the text file tools take where no session's limits say.
 DEFAULT_MEGABYTES = {s.name: s.default for s in SETTINGS}["max_file_megabytes"]
-# A NUL byte in this much of a file's start makes it binary
+# A NUL byte in this much of a file's start makes it binary.
 BINARY_PROBE_BYTES = 8192
-# How long a read or write in the sandbox may run
+# How long a read or write in the sandbox may run.
 SANDBOXED_IO_SECONDS = 30
 SANDBOXED_IO_SOURCE = Path(sandboxed_io.__file__).read_text()
-# The system's own interpreter, not the venv's: the sandbox may hide the venv
-# (the evals hide the whole repository); sandboxed_io needs only the stdlib
+# System interpreter for stdlib-only sandboxed_io.
 PYTHON = os.path.realpath(sys.executable)
 WALL_ERRORS = (errno.EROFS, errno.EACCES, errno.EPERM)
+READABLE_IMAGE_TYPES = frozenset({
+    "image/png", "image/jpeg", "image/webp", "image/gif",
+})
+OVER_LIMIT_FACT = (
+    "It snapshots a file larger than the soft attachment limit into the "
+    "session attachment store."
+)
 
 
 class SandboxedIOError(Exception):
@@ -46,7 +65,7 @@ class SandboxedIOError(Exception):
 def run_sandboxed_io(box, request):
     """One request to sandboxed_io, through `box` (a Sandbox, Unsandboxed or
     Outside). The sandbox raises rather than hand back a bare command."""
-    # A start the sandbox spoiled ran nothing, so it may go again
+    # A start the sandbox spoiled ran nothing, so it may go again.
     tries = 0
     while True:
         tries += 1
@@ -83,10 +102,7 @@ def pick_box(sandbox, outside, outside_sandbox):
 
 
 def real_path(box, path):
-    """Where a path sandboxed_io saw is on the machine: the same path, as the
-    sandbox binds the workspace and the scratch folder at their own; None
-    for one in the scratch folder, kept only until the server restarts, which
-    the restart note doesn't look at."""
+    """Where a path sandboxed_io saw is on the machine, or None for scratch."""
     inside = Path(path)
     if not box.sandboxed or inside.is_relative_to(box.workspace):
         return path
@@ -96,8 +112,7 @@ def real_path(box, path):
 
 
 def failure_text(box, answer, verb, path):
-    """sandboxed_io's OSError, as the model reads it; the sandbox's walls named
-    when they are what stopped it."""
+    """sandboxed_io's OSError, as the model reads it."""
     text = f"Not {verb}: {path}: {answer['error']}."
     if box.sandboxed and answer.get("errno") in WALL_ERRORS:
         text += "\n\n" + WALL.format(walls=box.walls())
@@ -105,15 +120,12 @@ def failure_text(box, answer, verb, path):
 
 
 def most_megabytes(limits):
-    """The biggest file the file tools take, in MB, as the session's limits
-    stand: bigger is left to commands, since the file tools carry a file
-    whole between the box and the server."""
+    """The biggest file the text file tools take, in MB."""
     return (limits or {}).get("max_file_megabytes", DEFAULT_MEGABYTES)
 
 
 def not_a_file_text(answer, verb, path, megabytes=None):
-    """Why `path` isn't a file the tools take; `megabytes`: their size cap,
-    for a file past it."""
+    """Why `path` isn't a file the tools take."""
     found = answer["kind"]
     if found == "missing":
         return f"Not {verb}: {path} doesn't exist."
@@ -141,7 +153,7 @@ def note(text, extra):
 
 
 # How much of a write's content or an edit's strings an ask shows; the judge
-# reads them whole
+# reads them whole.
 SHOWN_CHARS = 2000
 
 
@@ -151,11 +163,249 @@ def clipped(text, whole=False):
     return f"{text[:SHOWN_CHARS]}… [{len(text) - SHOWN_CHARS:,} more characters]"
 
 
+def _validate_source_args(args):
+    has_path = isinstance(args.get("path"), str) and bool(args["path"].strip())
+    has_att = (
+        isinstance(args.get("attachment_id"), str)
+        and bool(args["attachment_id"].strip())
+    )
+    if has_path == has_att:
+        return "provide exactly one of `path` or `attachment_id`"
+    return None
+
+
+def _resolve_session_attachment(
+    attachment_id, session_attachments=None, attachments_dir=None,
+):
+    """Resolve an authorized session attachment into metadata + readable path."""
+    if session_attachments is not None:
+        meta = session_attachments.resolve(attachment_id)
+        if meta is not None:
+            return meta
+    if attachments_dir is not None:
+        folder = Path(attachments_dir)
+        if folder.is_dir():
+            prefix = f"{short_id_of(attachment_id)}-"
+            matches = sorted(folder.glob(f"{prefix}*"))
+            if matches and matches[0].is_file():
+                target = matches[0]
+                raw = target.read_bytes()
+                media = attachment_metadata.media_type(target.name, raw[:4096])
+                probed = attachment_metadata.probe(target, media)
+                return {
+                    "attachment_id": attachment_id,
+                    "name": target.name.removeprefix(prefix) or target.name,
+                    "media_type": media,
+                    "size_bytes": len(raw),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                    "path": str(target),
+                    "metadata": probed,
+                }
+    return None
+
+
+def _active_model_supports_vision(files_model):
+    """True only when the active session model explicitly supports image input."""
+    if files_model is None:
+        return None
+    model = files_model() if callable(files_model) else files_model
+    if model is None:
+        return None
+    cap_fn = getattr(model, "capabilities", None)
+    caps = cap_fn() if callable(cap_fn) else cap_fn
+    if caps is None:
+        return None
+    return caps.input.get("image")
+
+
+def _vision_fact_note(files_model):
+    """Factual note when visual details are omitted for non-vision models."""
+    vision = _active_model_supports_vision(files_model)
+    if vision is True:
+        return ""
+    if vision is False:
+        return (
+            "The active model does not support image input, so visual details "
+            "(layout, colors, charts, typography) in the image are omitted "
+            "from what the model sees."
+        )
+    return (
+        "Image input support is unknown for the active model, so visual "
+        "details in the image are withheld from model input."
+    )
+
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_WORKER_COPY_CHUNK = 65536
+_WORKER_RENDER_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _copy_worker_output(
+    work_dir,
+    reported_path,
+    *,
+    expected_magic=None,
+    max_bytes=None,
+    copy_dir=None,
+):
+    """Safely open one worker output relative to `<work_dir>/out` without TOCTOU.
+
+    Rejects paths outside `<work_dir>/out`, traversal, symlinks (`O_NOFOLLOW`),
+    and non-regular files (`stat.S_ISREG`), then validates and copies bytes from
+    the same opened file descriptor into a fresh host-owned file.
+    """
+    if not isinstance(reported_path, str) or not reported_path:
+        raise reader_worker.ReaderWorkerError(
+            "worker reported an empty output path"
+        )
+    out_root = (Path(work_dir) / "out").resolve()
+    raw_path = Path(reported_path)
+    if raw_path.is_absolute():
+        try:
+            rel = raw_path.relative_to(out_root)
+        except ValueError:
+            raise reader_worker.ReaderWorkerError(
+                "worker reported a path outside its private output directory"
+            ) from None
+    else:
+        rel = raw_path
+    if (
+        len(rel.parts) != 1
+        or rel.parts[0] in ("", ".", "..")
+        or "/" in rel.parts[0]
+        or "\\" in rel.parts[0]
+    ):
+        raise reader_worker.ReaderWorkerError(
+            "worker reported an invalid output filename"
+        )
+    filename = rel.parts[0]
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
+        os, "O_NOFOLLOW", 0,
+    )
+    file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        dir_fd = os.open(out_root, dir_flags)
+    except OSError as exc:
+        raise reader_worker.ReaderWorkerError(
+            f"worker output directory unavailable: {exc}"
+        ) from None
+    try:
+        try:
+            src_fd = os.open(filename, file_flags, dir_fd=dir_fd)
+        except OSError as exc:
+            raise reader_worker.ReaderWorkerError(
+                f"rejected worker output {filename!r}: {exc}"
+            ) from None
+    finally:
+        os.close(dir_fd)
+
+    host_fd, host_tmp = tempfile.mkstemp(
+        prefix="zero-worker-out-", dir=copy_dir,
+    )
+    host_path = Path(host_tmp)
+    try:
+        with os.fdopen(src_fd, "rb") as src, os.fdopen(host_fd, "wb") as dst:
+            st = os.fstat(src.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                raise reader_worker.ReaderWorkerError(
+                    f"worker output {filename!r} is not a regular file"
+                )
+            total = 0
+            head = bytearray()
+            while chunk := src.read(_WORKER_COPY_CHUNK):
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise reader_worker.ReaderWorkerError(
+                        f"worker output {filename!r} exceeded {max_bytes:,} bytes"
+                    )
+                if len(head) < 4096:
+                    head.extend(chunk[: 4096 - len(head)])
+                dst.write(chunk)
+        head_bytes = bytes(head)
+        if expected_magic is not None and not head_bytes.startswith(expected_magic):
+            raise reader_worker.ReaderWorkerError(
+                f"worker output {filename!r} failed magic-header validation"
+            )
+        return host_path, total, head_bytes
+    except BaseException:
+        host_path.unlink(missing_ok=True)
+        raise
+
+
+def _persist_rendered_png(
+    png_path,
+    *,
+    name,
+    session_attachments=None,
+    attachments_dir=None,
+    box=None,
+    limits=None,
+    allow_over_limit=False,
+):
+    """Validate and persist a rendered PNG into session storage as an Entry."""
+    src = Path(png_path)
+    probed = attachment_metadata.probe(src, "image/png")
+    if session_attachments is not None:
+        return session_attachments.add_file(
+            src,
+            name=name,
+            media_hint="image/png",
+            delivery="inline",
+            allow_over_limit=bool(allow_over_limit),
+            limits=limits,
+        )
+    # Standalone/test fallback without server store: enforce soft cap too.
+    raw = src.read_bytes()
+    max_file, _ = soft_cap_bytes(limits)
+    if not allow_over_limit and max_file is not None and len(raw) > max_file:
+        limit_mb = max_file / (1024 * 1024)
+        raise LimitExceeded(
+            f"attachment size ({len(raw)} bytes) exceeds soft limit "
+            f"({limit_mb:g} MiB); set allow_over_limit to override"
+        )
+    dest_dir = (
+        Path(attachments_dir) if attachments_dir is not None
+        else (Path(box.private_tmp()) if box is not None and hasattr(box, "private_tmp")
+              else src.parent)
+    )
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(raw).hexdigest()
+    aid = f"att_{digest[:16]}"
+    dest = dest_dir / f"{digest[:8]}-{name}"
+    if not dest.exists():
+        home_paths.write_whole(dest, raw)
+    meta = {
+        "attachment_id": aid,
+        "name": name,
+        "media_type": "image/png",
+        "size_bytes": len(raw),
+        "sha256": digest,
+        "path": str(dest),
+        "metadata": probed,
+    }
+    entry = make_attachment_entry(
+        aid,
+        name=name,
+        media_type="image/png",
+        size_bytes=len(raw),
+        sha256=digest,
+        path=str(dest),
+        delivery="inline",
+        metadata=probed,
+    )
+    return meta, entry
+
+
 def read_summary(args):
+    target = (
+        f"attachment {args['attachment_id']}"
+        if args.get("attachment_id")
+        else args.get("path", "")
+    )
     start = args.get("offset") or 1
     if args.get("limit"):
-        return f"read {args['path']} lines {start}–{start + args['limit'] - 1}"
-    return f"read {args['path']}" + (f" from line {start}" if start > 1 else "")
+        return f"read {target} lines {start}–{start + args['limit'] - 1}"
+    return f"read {target}" + (f" from line {start}" if start > 1 else "")
 
 
 def write_summary(args, whole=False):
@@ -171,54 +421,155 @@ def edit_summary(args, whole=False):
     return f"edit {args['path']}{every}: replace\n{old}\nwith\n{new}"
 
 
+def inspect_summary(args):
+    if args.get("attachment_id"):
+        return f"inspect_file attachment {args['attachment_id']}"
+    return f"inspect_file {args.get('path', '')}"
+
+
+def read_part_summary(args):
+    target = (
+        f"attachment {args['attachment_id']}"
+        if args.get("attachment_id")
+        else args.get("path", "")
+    )
+    mode = args.get("mode") or "text"
+    bits = [f"mode={mode}"]
+    for key in ("pages", "sheet", "range", "member"):
+        if args.get(key):
+            bits.append(f"{key}={args[key]}")
+    return f"read_file_part {target} ({', '.join(bits)})"
+
+
+def present_summary(args):
+    if args.get("attachment_id"):
+        return f"present_file attachment {args['attachment_id']}"
+    return f"present_file {args.get('path', '')}"
+
+
+def _over_limit_crossing(args):
+    if args.get("allow_over_limit") is not True:
+        return None
+    return {
+        "rule": "attachment_limit",
+        "fact": OVER_LIMIT_FACT,
+        "why": args.get("reason"),
+    }
+
+
 READ_DESCRIPTION = (
-    "Read a text file. Each line comes as its number, an arrow and the line "
-    "(12→text); the number and arrow aren't part of the file. `offset` (the "
-    "first line, from 1) and `limit` (how many lines) pick a range. With a "
-    "limit, those lines come whole. Without one, the file from offset to its "
-    "end comes within its share of the context's room; past it, its start "
-    "and end come with its size."
+    "Read a text file or session attachment (`attachment_id`). Lines come "
+    "numbered (12→text). `offset` (from 1) and `limit` pick a range; with a "
+    "limit they come whole, without one within its share of the context's "
+    "room. Readable images attach for vision models."
 )
 
 
 @tool(
     READ_DESCRIPTION,
-    optional=("offset", "limit"),
+    optional=("path", "offset", "limit", "attachment_id"),
+    validate=_validate_source_args,
     summary=read_summary,
     traits=("side_by_side",),
     metadata={
         # Where a part starts and how many lines: texts naming a saved file say
-        # how to read it in parts by these
+        # how to read it in parts by these.
         "context": {"reads_in_parts": ("offset", "limit")},
-        # It changes nothing on the machine
+        # It changes nothing on the machine.
         "permissions": {"needs_permission": lambda args: False},
     },
     path=("string", "The file: relative to the workspace, or absolute"),
     offset=("integer", "The first line to read, from 1"),
     limit=("integer", "How many lines to read"),
+    attachment_id=("string", "A session attachment ID to read"),
 )
-def read(path, offset=None, limit=None, sandbox=None, notes=None, limits=None):
-    """`sandbox`, `notes` and `limits` come from the session, never the
-    model: its sandbox, the call's notes, where the content's hash goes for
-    the stale check, and what the context component reads of the result (a
-    read with a limit is sized by ZERO, `sized`; one without names the file
-    that holds it whole, `whole_at`, so one past its share isn't copied),
-    and the session's limits (the size cap; `limit` is the model's, lines)."""
+def read(
+    path=None,
+    offset=None,
+    limit=None,
+    attachment_id=None,
+    sandbox=None,
+    notes=None,
+    limits=None,
+    session_attachments=None,
+    attachments_dir=None,
+    files_model=None,
+):
+    """Read a text file or attachment, or attach a readable image for vision."""
     box = sandbox
     for name, value in (("offset", offset), ("limit", limit)):
         if value is not None and (
             not isinstance(value, int) or isinstance(value, bool) or value < 1
         ):
             return f"Not read: {name} is a whole number from 1."
+
+    att_meta = None
+    target_path = path
+    if attachment_id:
+        att_meta = _resolve_session_attachment(
+            attachment_id, session_attachments, attachments_dir,
+        )
+        if att_meta is None:
+            return f"Not read: unknown attachment {attachment_id!r} in this session."
+        media = att_meta.get("media_type") or ""
+        if media in READABLE_IMAGE_TYPES:
+            entry = make_attachment_entry(
+                att_meta["attachment_id"],
+                name=att_meta["name"],
+                media_type=media,
+                size_bytes=att_meta["size_bytes"],
+                sha256=att_meta["sha256"],
+                path=att_meta.get("path"),
+                delivery="inline",
+                metadata=att_meta.get("metadata"),
+            )
+            meta_dims = att_meta.get("metadata") or {}
+            dims = (
+                f" ({meta_dims['width']}x{meta_dims['height']})"
+                if meta_dims.get("width") and meta_dims.get("height")
+                else ""
+            )
+            summary = (
+                f"Image attachment {att_meta['name']}{dims} "
+                f"({media}, {att_meta['size_bytes']:,} bytes, "
+                f"id {att_meta['attachment_id']})."
+            )
+            extra = _vision_fact_note(files_model)
+            return Result(note(summary, extra), entries=(entry,))
+        target_path = att_meta.get("path")
+        if not target_path:
+            return f"Not read: attachment {attachment_id!r} has no readable file."
+
     megabytes = most_megabytes(limits)
-    answer = run_sandboxed_io(box, {"op": "load", "path": path,
+    answer = run_sandboxed_io(box, {"op": "load", "path": target_path,
                                     "cap": megabytes << 20})
     if "error" in answer:
-        return failure_text(box, answer, "read", path)
+        return failure_text(box, answer, "read", target_path)
     shown = answer["path"]
     if answer["kind"] != "file":
         return not_a_file_text(answer, "read", shown, megabytes)
     data = base64.b64decode(answer["data"])
+    sniffed = attachment_metadata.media_type(shown, data[:4096])
+    if sniffed in READABLE_IMAGE_TYPES and att_meta is None:
+        probed = attachment_metadata.probe_bytes(data, sniffed)
+        dims = (
+            f" ({probed['width']}x{probed['height']})"
+            if probed.get("width") and probed.get("height")
+            else ""
+        )
+        entry = make_attachment_entry(
+            "",
+            name=Path(shown).name or "image",
+            media_type=sniffed,
+            size_bytes=len(data),
+            sha256=answer["sha"],
+            path=shown,
+            delivery="inline",
+            metadata=probed,
+        )
+        extra = _vision_fact_note(files_model)
+        summary = f"Image {shown}{dims} ({sniffed}, {len(data):,} bytes)."
+        return Result(note(summary, extra), entries=(entry,))
     if b"\0" in data[:BINARY_PROBE_BYTES]:
         return f"Not read: {shown} is binary ({len(data):,} bytes)."
     if notes is not None:
@@ -248,8 +599,7 @@ def read(path, offset=None, limit=None, sandbox=None, notes=None, limits=None):
 
 
 def stale_reason(memory, answer, shown):
-    """Why an existing file must not change, or None: it changed since this
-    session's tools last saw it."""
+    """Why an existing file must not change, or None."""
     if memory is None:
         return None
     seen = memory.seen(shown)
@@ -259,8 +609,7 @@ def stale_reason(memory, answer, shown):
 
 
 def store(box, shown, before, data, notes):
-    """Write `data` over `before` (the bytes loaded, or None for a new
-    file) and note the change, as hashes. Returns an error text, or None."""
+    """Write `data` over `before` and note the change, as hashes."""
     expect = None if before is None else sandboxed_io.sha(before)
     answer = run_sandboxed_io(box, {
         "op": "store", "path": shown, "expect": expect,
@@ -294,7 +643,7 @@ def written_path(args):
     return [path] if isinstance(path, str) and path else []
 
 
-# "Don't ask again" for a write or an edit grants its path
+# "Don't ask again" for a write or an edit grants its path.
 PATHS = {
     "field": "paths",
     "of": lambda args: [str(args["path"])] if args.get("path") else None,
@@ -319,9 +668,7 @@ PATHS = {
 )
 def write(path, content, outside_sandbox=False, reason="", sandbox=None,
           outside=None, notes=None, files=None, limits=None):
-    """`files`: the session's SeenFiles (seen.py), for the stale
-    check; None for none (tests calling the tool directly). `limits`: the
-    session's (the size cap); None for the setting's default."""
+    """Write a file whole through the session's sandbox."""
     box, extra = pick_box(sandbox, outside, outside_sandbox)
     if not isinstance(content, str):
         return "Not changed: content is a string."
@@ -378,8 +725,7 @@ def write(path, content, outside_sandbox=False, reason="", sandbox=None,
 def edit(path, old_string, new_string, replace_all=False, outside_sandbox=False,
          reason="", sandbox=None, outside=None, notes=None, files=None,
          limits=None):
-    """`limits`: the session's (the size cap); None for the setting's
-    default."""
+    """Exact-string edit of a UTF-8 file through the session's sandbox."""
     box, extra = pick_box(sandbox, outside, outside_sandbox)
     if not isinstance(old_string, str) or not isinstance(new_string, str):
         return "Not changed: old_string and new_string are strings."
@@ -417,9 +763,7 @@ def edit(path, old_string, new_string, replace_all=False, outside_sandbox=False,
 
 def replace(text, old, new, every):
     """(new text, replacements, first line, last line of the first one), or
-    the reason as text with {path} in it. A file whose every line ends in
-    CRLF is matched on its \\n view and keeps CRLF, unless the strings carry
-    a \\r of their own (OpenCode, Pi)."""
+    the reason as text with {path} in it."""
     crlf = (
         "\r\n" in text and text.count("\n") == text.count("\r\n")
         and "\r" not in old + new
@@ -441,6 +785,583 @@ def replace(text, old, new, every):
     return done, count if every else 1, first, last
 
 
-# What this component offers the model, in the order it reads them; the
-# assembly adds them to core's registry (core/tools.py, add)
-TOOLS = (read, write, edit)
+# ------------------------------------------------------------ rich readers
+
+
+def _resolve_target_for_worker(
+    path, attachment_id, session_attachments=None, attachments_dir=None,
+):
+    """Return `(target_path, display_label, authorized_input, meta, error)`."""
+    if attachment_id:
+        meta = _resolve_session_attachment(
+            attachment_id, session_attachments, attachments_dir,
+        )
+        if meta is None:
+            return (
+                None,
+                attachment_id,
+                False,
+                None,
+                f"Unknown attachment {attachment_id!r} in this session.",
+            )
+        target = meta.get("path")
+        if not target:
+            return (
+                None,
+                attachment_id,
+                False,
+                meta,
+                f"Attachment {attachment_id!r} has no readable file on disk.",
+            )
+        return target, meta["name"], True, meta, None
+    return path, path, False, None, None
+
+
+INSPECT_FILE_DESCRIPTION = (
+    "Inspect a file's structure and metadata in place (`path` or "
+    "`attachment_id`, no copy): PDF, Excel, Word, PowerPoint, images, "
+    "audio/video, archives, and text."
+)
+
+
+@tool(
+    INSPECT_FILE_DESCRIPTION,
+    optional=("path", "attachment_id"),
+    validate=_validate_source_args,
+    summary=inspect_summary,
+    traits=("side_by_side",),
+    metadata={"permissions": {"needs_permission": lambda args: False}},
+    path=("string", "File path (workspace-relative or absolute)"),
+    attachment_id=("string", "Session attachment ID"),
+    fields={
+        "kind": ("string", "Detected file kind"),
+        "media_type": ("string", "Detected MIME type"),
+        "size_bytes": ("integer", "File size in bytes"),
+        "path": ("string", "Inspected path"),
+        "attachment_id": ("string", "Inspected attachment ID"),
+    },
+)
+def inspect_file(
+    path=None,
+    attachment_id=None,
+    sandbox=None,
+    session_attachments=None,
+    attachments_dir=None,
+):
+    """Inspect structure and metadata of a file or attachment in place."""
+    target, label, is_att, _, error = _resolve_target_for_worker(
+        path, attachment_id, session_attachments, attachments_dir,
+    )
+    if error:
+        return Result(f"Not inspected: {error}", failed=True)
+    try:
+        answer = reader_worker.run_worker(
+            sandbox,
+            {"op": "inspect", "path": target, "display_path": label},
+            authorized_input=is_att,
+        )
+    except (reader_worker.ReaderWorkerError, SandboxError) as exc:
+        return Result(f"Not inspected: {label}: {exc}.", failed=True)
+    if not answer.get("ok"):
+        return Result(
+            f"Not inspected: {label}: {answer.get('error', 'unknown error')}.",
+            failed=True,
+        )
+    fields = {
+        "kind": str(answer.get("kind") or "binary"),
+        "media_type": str(answer.get("media_type") or "application/octet-stream"),
+        "size_bytes": int(answer.get("size_bytes") or 0),
+    }
+    if attachment_id:
+        fields["attachment_id"] = attachment_id
+    elif path:
+        fields["path"] = path
+    return Result(str(answer.get("text") or ""), fields=fields)
+
+
+READ_FILE_PART_DESCRIPTION = (
+    "Read a bounded slice of a file in place (`path` or `attachment_id`): "
+    "`mode='text'` for PDF/Office/spreadsheet/archive text and tables, "
+    "`mode='render'` for PNG pages/slides/images, `mode='ocr'` for local OCR."
+)
+
+
+@tool(
+    READ_FILE_PART_DESCRIPTION,
+    optional=(
+        "path", "attachment_id", "mode", "pages", "sheet", "range", "member",
+        "offset", "limit", "dpi", "crop", "allow_over_limit", "reason",
+    ),
+    validate=_validate_source_args,
+    summary=read_part_summary,
+    traits=("side_by_side",),
+    metadata={
+        "permissions": {
+            "needs_permission": lambda args: False,
+            "crossing": _over_limit_crossing,
+        },
+    },
+    path=("string", "File path (workspace-relative or absolute)"),
+    attachment_id=("string", "Session attachment ID"),
+    mode=(
+        {"type": "string", "enum": ["text", "render", "ocr"]},
+        "Mode: 'text' (default), 'render' (PNG), or 'ocr'",
+    ),
+    pages=("string", "1-based page/slide range (e.g. '1-3')"),
+    sheet=("string", "Spreadsheet sheet name"),
+    range=("string", "Spreadsheet range (e.g. 'A1:F30')"),
+    member=("string", "Archive member path"),
+    offset=("integer", "1-based start line/paragraph/row"),
+    limit=("integer", "Max lines/paragraphs/rows"),
+    dpi=("integer", "Render DPI (72-200, default 150)"),
+    crop=("string", "Image crop 'x,y,width,height'"),
+    allow_over_limit=(
+        "boolean",
+        f"Store rendered previews past the soft cap. Goes first to {TO_APPROVER}",
+    ),
+    reason=("string", "With allow_over_limit: why"),
+    fields={
+        "kind": ("string", "Detected file kind"),
+        "media_type": ("string", "Detected MIME type"),
+        "mode": ("string", "Mode used"),
+        "rendered_attachments": (
+            {"type": "array", "items": {"type": "string"}},
+            "Rendered PNG attachment IDs",
+        ),
+        "path": ("string", "Path read"),
+        "attachment_id": ("string", "Attachment ID read"),
+    },
+)
+def read_file_part(
+    path=None,
+    attachment_id=None,
+    mode="text",
+    pages=None,
+    sheet=None,
+    range=None,
+    member=None,
+    offset=None,
+    limit=None,
+    dpi=None,
+    crop=None,
+    allow_over_limit=False,
+    reason="",
+    sandbox=None,
+    notes=None,
+    limits=None,
+    session_attachments=None,
+    attachments_dir=None,
+    files_model=None,
+):
+    """Read bounded text/tables/slices or render visual PNG pages/slides."""
+    if mode not in ("text", "render", "ocr"):
+        return Result(
+            "Not read: mode must be 'text', 'render', or 'ocr'.", failed=True,
+        )
+    for arg_name, val in (("offset", offset), ("limit", limit), ("dpi", dpi)):
+        if val is not None and (
+            not isinstance(val, int) or isinstance(val, bool) or val < 1
+        ):
+            return Result(
+                f"Not read: {arg_name} must be a whole number from 1.",
+                failed=True,
+            )
+    target, label, is_att, _, error = _resolve_target_for_worker(
+        path, attachment_id, session_attachments, attachments_dir,
+    )
+    if error:
+        return Result(f"Not read: {error}", failed=True)
+
+    rendered_entries = []
+    rendered_ids = []
+    stem = Path(label).stem or "render"
+    soft_declined = bool(notes and notes.get("soft_limit_declined"))
+    hook_approved = bool(notes and notes.get("limit") and not soft_declined)
+    override = (allow_over_limit is True) or hook_approved
+
+    def persist_outputs(answer, work_dir):
+        if not answer.get("ok"):
+            return
+        for item in answer.get("rendered") or ():
+            if not isinstance(item, dict):
+                continue
+            png_path = item.get("path")
+            if not png_path:
+                continue
+            host_copy, _, _ = _copy_worker_output(
+                work_dir,
+                png_path,
+                expected_magic=_PNG_MAGIC,
+                max_bytes=_WORKER_RENDER_MAX_BYTES,
+            )
+            try:
+                page_no = item.get("page", 1)
+                out_name = f"{stem}-p{page_no}.png"
+                meta, entry = _persist_rendered_png(
+                    host_copy,
+                    name=out_name,
+                    session_attachments=session_attachments,
+                    attachments_dir=attachments_dir,
+                    box=sandbox,
+                    limits=limits,
+                    allow_over_limit=override,
+                )
+            finally:
+                host_copy.unlink(missing_ok=True)
+            rendered_entries.append(entry)
+            rendered_ids.append(meta["attachment_id"])
+
+    req = {
+        "op": "read_part",
+        "path": target,
+        "display_path": label,
+        "mode": mode,
+        "pages": pages,
+        "sheet": sheet,
+        "range": range,
+        "member": member,
+        "offset": offset,
+        "limit": limit,
+        "dpi": dpi,
+        "crop": crop,
+    }
+    try:
+        answer = reader_worker.run_worker(
+            sandbox, req, authorized_input=is_att, on_output=persist_outputs,
+        )
+    except (
+        reader_worker.ReaderWorkerError,
+        SandboxError,
+        LimitExceeded,
+        AttachmentError,
+    ) as exc:
+        return Result(f"Not read: {label}: {exc}.", failed=True)
+    if not answer.get("ok"):
+        return Result(
+            f"Not read: {label}: {answer.get('error', 'unknown error')}.",
+            failed=True,
+        )
+
+    text = str(answer.get("text") or "")
+    if rendered_entries:
+        ids_note = ", ".join(rendered_ids)
+        text = f"{text}\nRendered attachment(s): {ids_note}."
+        vision_note = _vision_fact_note(files_model)
+        if vision_note:
+            text = note(text, vision_note)
+
+    fields = {
+        "kind": str(answer.get("kind") or "binary"),
+        "media_type": str(answer.get("media_type") or "application/octet-stream"),
+        "mode": mode,
+    }
+    if rendered_ids:
+        fields["rendered_attachments"] = rendered_ids
+    if attachment_id:
+        fields["attachment_id"] = attachment_id
+    elif path:
+        fields["path"] = path
+    return Result(text, fields=fields, entries=tuple(rendered_entries))
+
+
+PRESENT_FILE_DESCRIPTION = (
+    "Surface a file (`path` or `attachment_id`) as a deliverable card "
+    "(`delivery='reference'`, never sent as native model media). Snapshots "
+    "workspace files within soft caps; if declined over cap, references the "
+    "workspace path in place."
+)
+
+
+@tool(
+    PRESENT_FILE_DESCRIPTION,
+    optional=("path", "attachment_id", "title", "allow_over_limit", "reason"),
+    validate=_validate_source_args,
+    summary=present_summary,
+    traits=("side_by_side",),
+    metadata={
+        "permissions": {
+            "needs_permission": lambda args: False,
+            "crossing": _over_limit_crossing,
+        },
+        "tool_boundary": {"keep_stand_ins": ("title",)},
+    },
+    path=("string", "File path to present"),
+    attachment_id=("string", "Existing attachment ID to present"),
+    title=("string", "Optional label"),
+    allow_over_limit=(
+        "boolean",
+        f"Snapshot past the soft cap. Goes first to {TO_APPROVER}",
+    ),
+    reason=("string", "With allow_over_limit: why"),
+    fields={
+        "delivery": ("string", "Always 'reference'"),
+        "snapshotted": ("boolean", "Whether snapshotted into store"),
+        "attachment_id": ("string", "Attachment ID if snapshotted"),
+        "path": ("string", "Presented file path"),
+        "name": ("string", "Display filename"),
+        "media_type": ("string", "Detected MIME type"),
+        "size_bytes": ("integer", "File size in bytes"),
+    },
+)
+def present_file(
+    path=None,
+    attachment_id=None,
+    title=None,
+    allow_over_limit=False,
+    reason="",
+    sandbox=None,
+    notes=None,
+    limits=None,
+    session_attachments=None,
+    attachments_dir=None,
+    present_file_ask=None,
+):
+    """Surface a file as a reference-only deliverable card."""
+    if attachment_id:
+        meta = _resolve_session_attachment(
+            attachment_id, session_attachments, attachments_dir,
+        )
+        if meta is None:
+            return Result(
+                f"Not presented: unknown attachment {attachment_id!r} in this session.",
+                failed=True,
+            )
+        display_name = (title or "").strip() or meta["name"]
+        entry = make_attachment_entry(
+            meta["attachment_id"],
+            name=display_name,
+            media_type=meta["media_type"],
+            size_bytes=meta["size_bytes"],
+            sha256=meta["sha256"],
+            path=meta.get("path"),
+            delivery="reference",
+            metadata=meta.get("metadata"),
+        )
+        fields = {
+            "delivery": "reference",
+            "snapshotted": True,
+            "attachment_id": meta["attachment_id"],
+            "name": display_name,
+            "media_type": meta["media_type"],
+            "size_bytes": meta["size_bytes"],
+        }
+        if meta.get("path"):
+            fields["path"] = meta["path"]
+        return Result(
+            f"Presented {display_name} ({meta['media_type']}, "
+            f"{meta['size_bytes']:,} bytes, attachment {meta['attachment_id']}).",
+            fields=fields,
+            entries=(entry,),
+        )
+
+    soft_declined = bool(notes and notes.get("soft_limit_declined"))
+    hook_approved = bool(
+        notes and notes.get("limit") and not soft_declined
+    )
+    override = (allow_over_limit is True) or hook_approved
+
+    def _finish_present(shown, staged_path, size_bytes, head):
+        display_name = (title or "").strip() or Path(shown).name or "file"
+        media = attachment_metadata.media_type(display_name, head)
+        probed = (
+            attachment_metadata.probe(Path(staged_path), media)
+            if staged_path is not None
+            else attachment_metadata.probe_bytes(head, media)
+        )
+
+        def _ref_result(why_text):
+            ref_entry = make_attachment_entry(
+                "",
+                name=display_name,
+                media_type=media,
+                size_bytes=size_bytes,
+                sha256="",
+                path=shown,
+                delivery="reference",
+                metadata=probed,
+            )
+            suffix = f" {why_text}" if why_text else ""
+            return Result(
+                f"Presented {display_name} ({media}, {size_bytes:,} bytes) at "
+                f"{shown}.{suffix}",
+                fields={
+                    "delivery": "reference",
+                    "snapshotted": False,
+                    "path": shown,
+                    "name": display_name,
+                    "media_type": media,
+                    "size_bytes": size_bytes,
+                },
+                entries=(ref_entry,),
+            )
+
+        if soft_declined:
+            return _ref_result(
+                "Snapshotting past the soft attachment cap was declined; "
+                "referencing the workspace path in place."
+            )
+
+        def _ask_direct(cap_message):
+            if (
+                notes is None
+                and callable(present_file_ask)
+                and present_file_ask is not PARK
+            ):
+                return bool(present_file_ask(
+                    f"present_file {shown}",
+                    f"snapshot {display_name} ({size_bytes:,} bytes): {cap_message}",
+                ))
+            return None
+
+        if session_attachments is not None and staged_path is not None:
+            try:
+                meta, entry = session_attachments.add_file(
+                    staged_path,
+                    name=display_name,
+                    media_hint=media,
+                    delivery="reference",
+                    allow_over_limit=override,
+                    limits=limits,
+                )
+                return Result(
+                    f"Presented {display_name} ({meta['media_type']}, "
+                    f"{meta['size_bytes']:,} bytes, attachment "
+                    f"{meta['attachment_id']}).",
+                    fields={
+                        "delivery": "reference",
+                        "snapshotted": True,
+                        "attachment_id": meta["attachment_id"],
+                        "path": meta["path"],
+                        "name": display_name,
+                        "media_type": meta["media_type"],
+                        "size_bytes": meta["size_bytes"],
+                    },
+                    entries=(entry,),
+                )
+            except LimitExceeded as exc:
+                decision = _ask_direct(str(exc))
+                if decision is True:
+                    meta, entry = session_attachments.add_file(
+                        staged_path,
+                        name=display_name,
+                        media_hint=media,
+                        delivery="reference",
+                        allow_over_limit=True,
+                        limits=limits,
+                    )
+                    return Result(
+                        f"Presented {display_name} ({meta['media_type']}, "
+                        f"{meta['size_bytes']:,} bytes, attachment "
+                        f"{meta['attachment_id']}; over-limit snapshot approved).",
+                        fields={
+                            "delivery": "reference",
+                            "snapshotted": True,
+                            "attachment_id": meta["attachment_id"],
+                            "path": meta["path"],
+                            "name": display_name,
+                            "media_type": meta["media_type"],
+                            "size_bytes": meta["size_bytes"],
+                        },
+                        entries=(entry,),
+                    )
+                why = (
+                    "Snapshotting past the soft attachment cap was declined; "
+                    "referencing the workspace path in place."
+                    if decision is False
+                    else (
+                        f"{exc}. Referencing the workspace path in place without "
+                        "snapshotting."
+                    )
+                )
+                return _ref_result(why)
+            except AttachmentError as exc:
+                return Result(f"Not presented: {shown}: {exc}.", failed=True)
+
+        # Standalone session without a server attachment store.
+        max_file, _ = soft_cap_bytes(limits)
+        why = ""
+        if not override and max_file is not None and size_bytes > max_file:
+            limit_mb = max_file / (1024 * 1024)
+            cap_msg = (
+                f"file size ({size_bytes:,} bytes) exceeds soft limit "
+                f"({limit_mb:g} MiB)"
+            )
+            decision = _ask_direct(cap_msg)
+            if decision is False:
+                why = (
+                    "Snapshotting past the soft attachment cap was declined; "
+                    "referencing the workspace path in place."
+                )
+            elif decision is None:
+                why = (
+                    f"{cap_msg}; referencing the workspace path in place "
+                    "without snapshotting."
+                )
+        return _ref_result(why)
+
+    # When sandboxed and snapshotting, stage from inside single-layer bwrap to
+    # eliminate host-side symlink-swap TOCTOU (zero base64 piping).
+    if sandbox is not None and getattr(sandbox, "sandboxed", False):
+        if soft_declined or session_attachments is None:
+            stat_ans = run_sandboxed_io(sandbox, {"op": "stat", "path": path})
+            if "error" in stat_ans:
+                return Result(
+                    failure_text(sandbox, stat_ans, "presented", path),
+                    failed=True,
+                )
+            shown = stat_ans["path"]
+            if stat_ans["kind"] != "file":
+                return Result(
+                    not_a_file_text(stat_ans, "presented", shown), failed=True,
+                )
+            head = base64.b64decode(stat_ans.get("head") or "")
+            return _finish_present(shown, None, int(stat_ans["size"]), head)
+
+        holder = {}
+
+        def on_staged(answer, work_dir):
+            if not answer.get("ok"):
+                return
+            shown = answer["path"]
+            host_copy, real_size, real_head = _copy_worker_output(
+                work_dir,
+                answer.get("staged_path"),
+                max_bytes=reader_worker.FSIZE_LIMIT_BYTES,
+            )
+            try:
+                holder["result"] = _finish_present(
+                    shown, str(host_copy), real_size, real_head,
+                )
+            finally:
+                host_copy.unlink(missing_ok=True)
+
+        try:
+            answer = reader_worker.run_worker(
+                sandbox, {"op": "stage", "path": path}, on_output=on_staged,
+            )
+        except (reader_worker.ReaderWorkerError, SandboxError) as exc:
+            return Result(f"Not presented: {path}: {exc}.", failed=True)
+        if "result" in holder:
+            return holder["result"]
+        shown = answer.get("path") or path
+        kind = answer.get("kind")
+        if kind in ("missing", "directory", "other", "too_big"):
+            return Result(not_a_file_text(answer, "presented", shown), failed=True)
+        return Result(
+            f"Not presented: {shown}: {answer.get('error', 'unknown error')}.",
+            failed=True,
+        )
+
+    # Unsandboxed / Outside mode: stat and present directly.
+    stat_ans = run_sandboxed_io(sandbox, {"op": "stat", "path": path})
+    if "error" in stat_ans:
+        return Result(failure_text(sandbox, stat_ans, "presented", path), failed=True)
+    shown = stat_ans["path"]
+    if stat_ans["kind"] != "file":
+        return Result(not_a_file_text(stat_ans, "presented", shown), failed=True)
+    head = base64.b64decode(stat_ans.get("head") or "")
+    return _finish_present(shown, shown, int(stat_ans["size"]), head)
+
+
+# What this component offers the model, in the order it reads them.
+TOOLS = (read, write, edit, inspect_file, read_file_part, present_file)

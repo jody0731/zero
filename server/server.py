@@ -44,7 +44,7 @@ from core import timeline
 from server import peers, replies
 from server.credentials import WorkflowCredentials
 from server.idempotency import MessageReplies
-from server.services import Refused
+from server.services import Principal, Refused
 from server.runtime import Message
 from protocol.commands import COMMANDS, INIT
 from protocol import messages, older, version
@@ -64,6 +64,7 @@ WATCH_SEND_SECONDS = 30
 STOP_REASONS = ("stopped", "restart")
 # The messages the kernel serves itself; a service adds its own (server/services.py)
 SERVED = ("server/hello", "server/stop", "session/send", "session/submit",
+          "session/send_with_attachments", "session/submit_with_attachments",
           "session/continue",
           "session/stop", "session/list", "session/read", "session/watch",
           "session/deliveries",
@@ -80,7 +81,11 @@ SESSION_EDITS = ("session/mark_seen", "session/rename", "session/archive",
 # The messages that change something whose id the inbox keeps, committed
 # with the change itself (server/runtime.py); every other one's is
 # message_replies' (server/idempotency.py)
-INBOX_KEPT = ("session/submit", "session/send", "session/continue", "session/stop")
+INBOX_KEPT = (
+    "session/submit", "session/send",
+    "session/submit_with_attachments", "session/send_with_attachments",
+    "session/continue", "session/stop",
+)
 # What every request carries besides its message's own fields
 ENVELOPE = ("message", "protocol")
 
@@ -343,6 +348,9 @@ class Server:
             # The token proves, and goes no further
             token = request.pop("token", None)
             relayed_for = request.pop("relayed_for_pid", None)
+            relayed_flag = request.pop("relayed", None)
+            if relayed_flag is not None and not isinstance(relayed_flag, bool):
+                raise Refused("relayed is a boolean")
             try:
                 if workflow:
                     scope = self.workflow_credentials.owner(token)
@@ -361,9 +369,29 @@ class Server:
             # ZERO's own commands may look, never act; a workflow sends for
             # its own session alone
             looking = (*LOOKING_MESSAGES, *self.runtime.looking_messages)
-            if scope is None and name not in looking and pid is not None:
-                if self.peers.is_zero_command(pid):
+            is_command = False
+            command_session = None
+            if scope is None and pid is not None and self.peers.is_zero_command(pid):
+                is_command = True
+                command_session = self.runtime.command_session(peers.unix_session(pid))
+                if name not in looking:
                     self.check_workflow(name, request, pid, looking)
+            # Heed relayed only from the user's own client (never workflow or
+            # ZERO-command peers); keep source == "web" as fallback.
+            if workflow or is_command:
+                relayed_flag = False
+            relayed = (
+                relayed_for is not None
+                or bool(relayed_flag)
+                or (not workflow and request.get("source") == "web")
+            )
+            principal = Principal(
+                pid=pid,
+                scope=scope,
+                relayed=relayed,
+                command_session=command_session,
+                is_command=is_command,
+            )
             if name == "session/watch":
                 with self.light(request):
                     self.watch(conn, request, protocol)
@@ -372,7 +400,11 @@ class Server:
                 with self.light(request):
                     self.watch_list(conn, request, protocol)
                 return
-            reply = self.reply_to(name, request, protocol)
+            if name in self.runtime.streaming_messages:
+                with self.light(request):
+                    self.stream_service(conn, name, request, protocol, principal)
+                return
+            reply = self.reply_to(name, request, protocol, principal=principal)
             if scope is not None and name == "session/list" and reply.get("ok"):
                 reply["sessions"] = [
                     row for row in reply["sessions"]
@@ -409,7 +441,6 @@ class Server:
         sender's."""
         if self.reply_check is not None:
             self.reply_check(name, reply, kind)
-        reply = self.runtime.redact(reply)
         reply = older.reply_in(protocol, name, reply)
         conn.sendall((json.dumps(reply, ensure_ascii=False) + "\n").encode())
 
@@ -422,7 +453,7 @@ class Server:
                 return
         self.send_out(conn, name, event, protocol, "event")
 
-    def reply_to(self, name, request, protocol):
+    def reply_to(self, name, request, protocol, principal=None):
         """The reply to one request: its id run once when it changes
         something, its fields the message lacks reported."""
         spec = messages.MESSAGES.get(name)
@@ -441,17 +472,21 @@ class Server:
                               "characters")
             else:
                 reply = self.message_replies.run(
-                    name, request, lambda r: self.answered(r, protocol))
+                    name, request,
+                    lambda r: self.answered(r, protocol, principal=principal),
+                    principal=principal,
+                    legacy_check=self._legacy_idempotency_allowed,
+                )
         else:
-            reply = self.answered(request, protocol)
+            reply = self.answered(request, protocol, principal=principal)
         if unknown:
             reply = {**reply, "unknown_fields": unknown}
         return reply
 
-    def answered(self, request, protocol):
+    def answered(self, request, protocol, principal=None):
         """answer()'s reply, every failure a reply too."""
         try:
-            return self.answer(request, protocol)
+            return self.answer(request, protocol, principal=principal)
         except Refused as e:
             return error(str(e))
         except (OSError, ValueError) as e:
@@ -460,17 +495,23 @@ class Server:
             traceback.print_exc()
             return {"ok": False, "error": f"internal error: {type(e).__name__}"}
 
-    def in_workflow_scope(self, sid, scope):
-        seen = set()
-        while sid and sid not in seen:
-            seen.add(sid)
-            row = self.runtime.store.session(sid)
-            if row is None or row.get("started_by") != "zero":
+    def _legacy_idempotency_allowed(self, name, request, principal):
+        """Allow pre-upgrade unversioned idempotency hashes for authorized callers."""
+        if name in self.runtime.principal_messages:
+            return False
+        if principal is None:
+            return True
+        if principal.is_command or principal.command_session is not None:
+            return False
+        if principal.scope is not None:
+            try:
+                self.check_workflow_scope(name, request, principal.scope)
+            except Refused:
                 return False
-            sid = row.get("parent")
-            if sid == scope:
-                return True
-        return False
+        return True
+
+    def in_workflow_scope(self, sid, scope):
+        return self.runtime.in_workflow_scope(sid, scope)
 
     def check_workflow_scope(self, name, request, scope):
         """No approval, configuration, global watch or unrelated history."""
@@ -482,6 +523,14 @@ class Server:
             return
         if name in ("session/read", "session/watch", "session/deliveries"):
             if self.in_workflow_scope(request.get("session"), scope):
+                return
+        if name in ("attachment/read", "attachment/get", "attachment/list"):
+            sid = request.get("session")
+            if sid is not None:
+                if self.in_workflow_scope(sid, scope):
+                    return
+            elif name in ("attachment/read", "attachment/get"):
+                # AttachmentsService enforces workflow scope per attachment.
                 return
         raise Refused("the workflow credential does not permit this request")
 
@@ -520,14 +569,18 @@ class Server:
         except Refused as exc:
             return error(str(exc))
 
-    def answer(self, request, protocol=version.PROTOCOL):
+    def answer(self, request, protocol=version.PROTOCOL, principal=None):
         if not isinstance(request, dict):
             return error("a request is a JSON object")
+        principal = principal or Principal()
         name = request.get("message")
         if name == "server/hello":
             return self.hello(protocol)
-        if name in ("session/submit", "session/send"):
-            return self.send(request)
+        if name in (
+            "session/submit", "session/send",
+            "session/submit_with_attachments", "session/send_with_attachments",
+        ):
+            return self.send(request, principal=principal)
         if name == "session/stop":
             sid = request.get("session")
             source = request.get("source")
@@ -577,8 +630,11 @@ class Server:
             return self.edit_session(name, request)
         if name in self.runtime.messages:
             # A service's message
+            handler = self.runtime.messages[name]
             try:
-                return self.runtime.messages[name](request)
+                if name in self.runtime.principal_messages:
+                    return handler(request, principal)
+                return handler(request)
             except Refused as exc:
                 return error(str(exc))
         if name == "setting/list":
@@ -591,10 +647,13 @@ class Server:
             problem = config.set(setting, request.get("value"))
             if problem:
                 return error(problem)
-            return {"ok": True, "set": {setting: config.values[setting]}}
+            canonical = settings.ALIASES.get(setting, setting)
+            return {"ok": True, "set": {canonical: config.values[canonical]}}
         if name == "server/stop":
             return self.shutdown(request, protocol)
-        served = {*SERVED, *self.runtime.messages}
+        served = {
+            *SERVED, *self.runtime.messages, *self.runtime.streaming_messages,
+        }
         known = ", ".join(m for m in messages.MESSAGES if m in served)
         return error(f"unknown message {name!r}; messages: {known}")
 
@@ -613,6 +672,7 @@ class Server:
             "modes": [dict(row) for row in self.runtime.mode_rows],
             "commands": COMMANDS, "init_request": INIT,
             "default_model": self.runtime.default_model,
+            "features": list(self.runtime.features),
         }
 
     def config(self):
@@ -682,12 +742,18 @@ class Server:
             return False
         return version.release_order(theirs) < version.release_order(self.release)
 
-    def send(self, request):
+    def send(self, request, principal=None):
         msg_id, text = request.get("id"), request.get("text")
         if not isinstance(msg_id, str) or not 0 < len(msg_id) <= 200:
             return error("a message needs an id: a string the sender picks")
         if not isinstance(text, str):
             return error("a message needs its text, a string")
+        op = request["message"]
+        with_attachments = op in (
+            "session/send_with_attachments", "session/submit_with_attachments",
+        )
+        if with_attachments and "attachments" not in self.runtime.features:
+            return error("attachments are not available on this server")
         names = ("session", "mode", "model", "thinking_effort", "reply_to", "workspace",
                  "choice", "title")
         fields = {name: request.get(name) for name in names}
@@ -698,10 +764,22 @@ class Server:
         for name, value in fields.items():
             if value is not None and not isinstance(value, str):
                 return error(f"{name} must be a string")
-        # The fields the services read (rounds/'s `rounds`), each of the
-        # kind the protocol declares for it; a false one is left out
-        declared = messages.MESSAGES["session/send"]["fields"]
+        # The fields the services read (rounds/'s `rounds`, attachments/'s
+        # `attachments`), each of the kind the protocol declares for `op`.
+        declared = messages.MESSAGES[op]["fields"]
         extra = {}
+        initial_switches = {}
+        for name in timeline.SWITCHABLE:
+            if name in names or name in ("mode", "model", "workspace"):
+                continue
+            value = request.get(name)
+            if name not in declared or value is None:
+                continue
+            if not isinstance(value, str):
+                return error(f"{name} must be a string")
+            initial_switches[name] = value
+        if initial_switches:
+            extra["initial_switches"] = initial_switches
         for name in self.runtime.message_fields():
             value = request.get(name)
             if name not in declared or value is None:
@@ -709,15 +787,41 @@ class Server:
             kind = declared[name].get("type")
             if kind == "boolean" and not isinstance(value, bool):
                 return error(f"{name} must be true or false")
+            if kind == "array" and not isinstance(value, list):
+                return error(f"{name} must be a list")
             if value is not False:
                 extra[name] = value
+        if with_attachments and not extra.get("attachments"):
+            return error(f"{op} requires a nonempty attachments list")
+        legacy_send = op in ("session/send", "session/send_with_attachments")
         try:
-            ack = self.runtime.admit(Message(msg_id, text, **fields),
-                                     extra or None,
-                                     legacy_send=request["message"] == "session/send")
+            ack = self.runtime.admit(
+                Message(msg_id, text, **fields),
+                extra or None,
+                legacy_send=legacy_send,
+                principal=principal,
+            )
         except Refused as e:
             return error(str(e))
         return {"ok": True, **ack}
+
+    def stream_service(self, conn, name, request, protocol, principal):
+        """Run a service-declared streaming watch message over the Unix socket."""
+        handler = self.runtime.streaming_messages[name]
+        conn.settimeout(WATCH_SEND_SECONDS)
+
+        def emit(event):
+            self.send_event(conn, name, event, protocol)
+
+        try:
+            handler(conn, request, protocol, principal, emit)
+        except Refused as exc:
+            try:
+                emit(error(str(exc)))
+            except OSError:
+                pass
+        except OSError:
+            pass
 
     def watch(self, conn, request, protocol=version.PROTOCOL):
         """The records after a seq, then each new one as it is appended: an ask

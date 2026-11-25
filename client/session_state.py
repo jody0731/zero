@@ -25,6 +25,13 @@ class SessionState:
         self.workspace = workspace
         # A new session's thinking effort; None: the server's default
         self.thinking_effort = None
+        # A new session's utility service overrides; None: the server's default
+        self.search_service = None
+        self.stt_service = None
+        self.tts_service = None
+        self.image_service = None
+        self.video_service = None
+        self.auto_speak = None
         self.running = False
         # The open ask's `sessions/ask` record, from the log
         self.ask = None
@@ -37,8 +44,9 @@ class SessionState:
         # The reply streaming in (the server's `draft`: step, text, reasoning,
         # calls), until the next record replaces it
         self.draft = None
-        # Lines a stop gave back, for the input
+        # Lines and attachment ids a stop gave back, for the input
         self.withdrawn = []
+        self.withdrawn_attachments = []
         # The latest turn's answer as its Markdown, for /copy
         self.last_reply = None
         # The context's meter: tokens, line, cached_share (protocol's
@@ -57,9 +65,15 @@ class SessionState:
                 self.running = True
                 return
             if "withdrawn" in event:
-                mine = [m["text"] for m in event["withdrawn"]
-                        if m.get("source") == getattr(self.connection, "source", None)]
-                self.withdrawn.extend(mine)
+                mine_src = getattr(self.connection, "source", None)
+                for row in event["withdrawn"]:
+                    if row.get("source") != mine_src:
+                        continue
+                    if row.get("text"):
+                        self.withdrawn.append(row["text"])
+                    for aid in row.get("attachments") or ():
+                        if aid not in self.withdrawn_attachments:
+                            self.withdrawn_attachments.append(aid)
                 return
             if "context" in event:
                 self.context = event["context"]
@@ -118,24 +132,36 @@ class SessionState:
         self.activity = what if command is None else (what, command)
         self.since = time.monotonic()
 
-    def line(self, text, follow_up=False, choice=None, reply_to=None, *, check=None):
+    def line(self, text, follow_up=False, choice=None, reply_to=None, *,
+             check=None, attachments=None):
         """Send a line: a new turn when idle, a steer mid-turn (or a follow-up,
         after the turn's answer), and the reply to the open ask while one
         waits, marked with its id, and with `choice` when it was picked at
         the box. `check` validates the same options the connection will send."""
-        if not text.strip():
+        att_list = list(attachments) if attachments else None
+        if not text.strip() and not att_list:
             return None
         with self.lock:
             options = {
                 "session": self.session, "mode": self.mode, "model": self.model,
                 "reply_to": reply_to, "workspace": self.workspace,
             }
-            if self.session is None and self.thinking_effort is not None:
-                options["thinking_effort"] = self.thinking_effort
+            if self.session is None:
+                if self.thinking_effort is not None:
+                    options["thinking_effort"] = self.thinking_effort
+                for name in (
+                    "search_service", "stt_service", "tts_service",
+                    "image_service", "video_service", "auto_speak",
+                ):
+                    value = getattr(self, name, None)
+                    if value is not None:
+                        options[name] = value
             if follow_up:
                 options["when_busy"] = "queue"
             if choice is not None and reply_to is not None:
                 options["choice"] = choice
+            if att_list:
+                options["attachments"] = att_list
         # Sent outside the lock: the follower's events go on meanwhile
         if check is not None:
             check(options)
@@ -151,3 +177,8 @@ class SessionState:
         with self.lock:
             lines, self.withdrawn = self.withdrawn, []
             return lines
+
+    def take_withdrawn_attachments(self):
+        with self.lock:
+            ids, self.withdrawn_attachments = self.withdrawn_attachments, []
+            return ids

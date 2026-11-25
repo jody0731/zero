@@ -44,8 +44,12 @@ session until it settles, and `--no-wait` returns the session id immediately.
 """
 
 import argparse
+import base64
 import json
+import shutil
+import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -53,15 +57,31 @@ from client import render, session_list
 from client.connection import NotRunning, ProtocolError, command_session
 from client.render import duration, jobs_text
 from client.result import Result, still_running_line
+import paths as home_paths
 
 NAME = "ZERO"
 # The families main.py hands here; `server` is main.py's own
-FAMILIES = ("session", "job", "rounds", "grant", "model", "setting", "mcp", "vault",
-            "private-input")
+FAMILIES = ("session", "attachment", "job", "rounds", "grant", "model",
+            "setting", "mcp", "vault", "private-input", "transcribe", "speak")
 # The messages with no command, and why: what only a screen needs
 NO_COMMAND = {
     "session/deliveries": "a browser checks its outstanding submissions on reconnect",
     "session/submit": "session send uses this when addressing an existing session",
+    "session/send_with_attachments": (
+        "wire variant used when starting a session with attachments"
+    ),
+    "session/submit_with_attachments": (
+        "wire variant used when submitting to an existing session with attachments"
+    ),
+    "attachment/upload": "chunked attachment upload used by apps and clients",
+    "attachment/read": "chunked attachment read used by apps and clients",
+    "dictation/start": "live browser/TUI microphone dictation session start",
+    "dictation/chunk": "live browser/TUI microphone audio chunk streaming",
+    "dictation/stop": "live browser/TUI microphone dictation stop",
+    "dictation/cancel": "live browser/TUI microphone dictation cancel",
+    "dictation/watch": "live browser/TUI dictation event stream",
+    "speech/synthesize": "zero speak and browser/TUI Listen invoke speech synthesis",
+    "media/transcribe": "zero transcribe invokes direct file transcription",
     "workspace/list": "folders for a screen's workspace picker",
     "model/window/set": "model window MODEL [TOKENS | --reset] sets or resets a "
                         "model's window",
@@ -144,6 +164,16 @@ def history_text(info, records, working=True, runs_with=None, context=None):
             who = record.get("sender_name") or render.who(fields.get("source"))
             who = "you" if who == "You" else who
             lines.append(f"{clock}  {who}{mark}  {entries.message_text(record)}")
+            for item in render.attachment_lines(record):
+                lines.append(f"          [attachment] {item}")
+        elif kind == "chat/assistant_reply":
+            for item in render.attachment_lines(record):
+                lines.append(f"          [attachment] {item}")
+        elif kind == "tools/result":
+            for item in render.attachment_lines(record):
+                lines.append(f"          [attachment] {item}")
+            for line in render.search_suggestion_lines(record):
+                lines.append(f"          {line}")
         elif kind == "sessions/ask":
             reason = fields.get("reason") or ""
             asked = (f"asks: {fields['command']}"
@@ -271,11 +301,32 @@ def follow(connection, sid, after, args, out, user_answers=True, message_id=None
                     out("(nothing ran)")
                 else:
                     out(ending(result.last))
+                for item in result.attachments:
+                    out(f"[attachment] {render.attachment_line(item)}")
+                for suggestion in result.search_suggestions:
+                    links = suggestion.get("links") or ()
+                    if links:
+                        parts = [
+                            f"{link['label']} ({link['url']})" for link in links
+                        ]
+                        out("Search suggestions: " + " · ".join(parts))
+                    elif suggestion.get("queries"):
+                        out("Search queries: " + " · ".join(suggestion["queries"]))
                 line = still_running_line(result.still_running)
                 if line:
                     out(line)
             return result.exit_code()
     raise NotRunning("ZERO's watch ended before the session settled")
+
+
+def stage_attachments(connection, items, *, force=False):
+    """Stage local file paths via `attachment/add` and return their ids."""
+    ids = []
+    for raw in items or ():
+        resolved = str(Path(raw).expanduser().resolve())
+        meta = connection.add_attachment(resolved, allow_over_limit=force)
+        ids.append(meta["attachment_id"])
+    return ids
 
 
 def print_workflow_turn(connection, args, for_session, out=print):
@@ -296,10 +347,21 @@ def print_workflow_turn(connection, args, for_session, out=print):
         sid = match_session(connection.sessions(), args.session)["id"]
         records, _ = connection.history(sid, limit=1)
         after = records[-1]["seq"] if records else 0
-    reply = connection.send_for(
-        text_of(args.p), for_session, session=sid,
-        mode=getattr(args, "mode", None), model=getattr(args, "model", None),
+    text = text_of(args.p) if args.p is not None else ""
+    attachment_ids = stage_attachments(
+        connection, getattr(args, "attach", ()),
+        force=bool(getattr(args, "force", False)),
     )
+    if not text and not attachment_ids:
+        raise ValueError("send needs TEXT or --attach PATH")
+    kwargs = {
+        "session": sid,
+        "mode": getattr(args, "mode", None),
+        "model": getattr(args, "model", None),
+    }
+    if attachment_ids:
+        kwargs["attachments"] = attachment_ids
+    reply = connection.send_for(text, for_session, **kwargs)
     sid = reply["session"]
     if getattr(args, "no_wait", False):
         out(json.dumps(reply) if getattr(args, "json", False) else sid)
@@ -322,16 +384,25 @@ def print_turn(connection, args, workspace, out=print):
         sid = info["id"]
         records, _ = connection.history(sid, limit=1)
         after = records[-1]["seq"] if records else 0
+    text = text_of(args.p) if args.p is not None else ""
+    attachment_ids = stage_attachments(
+        connection, getattr(args, "attach", ()),
+        force=bool(getattr(args, "force", False)),
+    )
+    if not text and not attachment_ids and not getattr(args, "choice", None):
+        raise ValueError("send needs TEXT or --attach PATH")
     options = {"session": sid, "mode": args.mode, "model": args.model,
                "workspace": workspace, "reply_to": reply_to,
                "thinking_effort": getattr(args, "thinking_effort", None)}
+    if attachment_ids:
+        options["attachments"] = attachment_ids
     if getattr(args, "when_busy", None):
         options["when_busy"] = args.when_busy
     if getattr(args, "choice", None):
         options["choice"] = args.choice
     if getattr(args, "rounds", False):
         options["rounds"] = True
-    reply = connection.send(text_of(args.p), **options)
+    reply = connection.send(text, **options)
     sid = reply["session"]
     if getattr(args, "no_wait", False):
         out(json.dumps(reply) if getattr(args, "json", False) else sid)
@@ -393,6 +464,10 @@ def send_flags(parser):
                              "choices, as its line names them")
     parser.add_argument("--rounds", action="store_true",
                         help="work on it in rounds")
+    parser.add_argument("--attach", action="append", default=[], metavar="PATH",
+                        help="attach a local file (repeat for more)")
+    parser.add_argument("--force", action="store_true",
+                        help="attach files even when over soft size limits")
     parser.add_argument("--for-session", metavar="ID", default=command_session(),
                         help="a workflow's: a subagent of this session (by "
                              "default the session this command runs for), "
@@ -434,7 +509,8 @@ def parser(prog="zero"):
     session = families.add_parser("session", help="sessions")
     actions = session.add_subparsers(dest="action", required=True)
     send = actions.add_parser("send", help="a message to a session or a new one")
-    send.add_argument("p", metavar="TEXT", help="the message; - reads stdin")
+    send.add_argument("p", metavar="TEXT", nargs="?", default="",
+                      help="the message; - reads stdin (optional with --attach)")
     send_flags(send)
     send.set_defaults(handler=send_command)
     go = actions.add_parser("continue", help="a turn that ended goes on")
@@ -543,8 +619,97 @@ def parser(prog="zero"):
     change.add_argument("--judge-thinking-effort", "--judge-effort",
                         dest="judge_thinking_effort", metavar="E",
                         help="the judge's thinking effort: off, low, high or max")
+    change.add_argument(
+        "--search-service", dest="search_service", metavar="S",
+        help="web search service (current_server, server name, or off)",
+    )
+    change.add_argument(
+        "--stt-service", dest="stt_service", metavar="S",
+        help="speech-to-text service (current_server, server name, or off)",
+    )
+    change.add_argument(
+        "--tts-service", dest="tts_service", metavar="S",
+        help="text-to-speech service (current_server, server name, or off)",
+    )
+    change.add_argument(
+        "--image-service", dest="image_service", metavar="S",
+        help="image generation service (current_server, server name, or off)",
+    )
+    change.add_argument(
+        "--video-service", dest="video_service", metavar="S",
+        help="video generation service (current_server, server name, or off)",
+    )
+    change.add_argument(
+        "--auto-speak", dest="auto_speak", choices=("off", "on"),
+        help="auto-speak assistant replies (off or on)",
+    )
     json_flag(change)
     change.set_defaults(handler=set_command)
+
+    transcribe_cmd = families.add_parser(
+        "transcribe", help="transcribe a local audio file verbatim",
+    )
+    transcribe_cmd.add_argument("path", metavar="PATH", help="local audio file path")
+    transcribe_cmd.add_argument("--session", metavar="ID",
+                                help="resolve settings from this session")
+    transcribe_cmd.add_argument("--model", help="model for Same-Provider Default")
+    transcribe_cmd.add_argument("--service", help="explicit STT service name")
+    transcribe_cmd.add_argument("--language", help="optional ISO-639-1 language hint")
+    json_flag(transcribe_cmd)
+    transcribe_cmd.set_defaults(handler=transcribe_command)
+
+    speak_cmd = families.add_parser(
+        "speak", help="synthesize speech for text or a session's latest reply",
+    )
+    speak_cmd.add_argument("text", metavar="TEXT", nargs="?", default=None,
+                           help="text to speak (- reads stdin; omit with --session)")
+    speak_cmd.add_argument("--session", metavar="ID",
+                           help="speak a session's latest assistant reply")
+    speak_cmd.add_argument("--reply", dest="reply_entry_id", metavar="ENTRY_ID",
+                           help="specific assistant reply entry id in --session")
+    speak_cmd.add_argument("--voice", help="optional provider voice name")
+    speak_cmd.add_argument("--service", help="explicit TTS service name")
+    speak_cmd.add_argument("--model", help="model for Same-Provider Default")
+    speak_cmd.add_argument("--output", metavar="PATH",
+                           help="write synthesized audio bytes to PATH")
+    speak_cmd.add_argument("--play", action="store_true",
+                           help="play synthesized audio via OS audio player")
+    json_flag(speak_cmd)
+    speak_cmd.set_defaults(handler=speak_command)
+
+    attachment = families.add_parser("attachment", help="stored attachments")
+    actions = attachment.add_subparsers(dest="action", required=True)
+    att_add = actions.add_parser("add", help="stage a local file as an attachment")
+    att_add.add_argument("path", metavar="PATH")
+    att_add.add_argument("--name", help="display filename")
+    att_add.add_argument("--media-type", dest="media_type", help="MIME media type")
+    att_add.add_argument("--force", action="store_true",
+                         help="allow files over soft size limits")
+    json_flag(att_add)
+    att_add.set_defaults(handler=attachment_add_command)
+    att_list = actions.add_parser("list", help="list attachments")
+    att_list.add_argument("--session", metavar="ID",
+                          help="attachments belonging to this session")
+    att_list.add_argument("--staged", action="store_true",
+                          help="include caller's staged attachments")
+    json_flag(att_list)
+    att_list.set_defaults(handler=attachment_list_command)
+    att_get = actions.add_parser("get", help="show metadata or download bytes")
+    att_get.add_argument("id", metavar="ID")
+    att_get.add_argument("--session", metavar="ID")
+    att_get.add_argument("--output", metavar="PATH",
+                         help="write attachment bytes to PATH")
+    json_flag(att_get)
+    att_get.set_defaults(handler=attachment_get_command)
+    att_prune = actions.add_parser(
+        "prune", help="remove expired and unreferenced blobs",
+    )
+    att_prune.add_argument(
+        "--include-trashed", action="store_true",
+        help="also prune attachments referenced only by trashed sessions",
+    )
+    json_flag(att_prune)
+    att_prune.set_defaults(handler=attachment_prune_command)
 
     job = families.add_parser("job", help="background jobs")
     actions = job.add_subparsers(dest="action", required=True)
@@ -613,6 +778,11 @@ def parser(prog="zero"):
                           help="measure again now (a few calls to the model)")
     json_flag(measured)
     measured.set_defaults(handler=model_features_command)
+    utilities = actions.add_parser(
+        "utilities", help="available utility capability services")
+    utilities.add_argument("--model", help="resolve current_server for this model")
+    json_flag(utilities)
+    utilities.set_defaults(handler=model_utilities_command)
     server = actions.add_parser("server", help="model servers and keys")
     verbs = server.add_subparsers(dest="verb", required=True)
     listing = verbs.add_parser("list", help="every server ZERO knows")
@@ -964,10 +1134,20 @@ def set_command(connection, args, out):
              "thinking_effort": args.thinking_effort,
              "workspace": workspace_of(args.cd) if args.cd else None,
              "judge_model": args.judge_model,
-             "judge_thinking_effort": args.judge_thinking_effort}
+             "judge_thinking_effort": args.judge_thinking_effort,
+             "search_service": args.search_service,
+             "stt_service": args.stt_service,
+             "tts_service": args.tts_service,
+             "image_service": args.image_service,
+             "video_service": args.video_service,
+             "auto_speak": args.auto_speak}
     if not any(value is not None for value in given.values()):
-        raise ValueError("session set takes --mode, --model, --cd, --thinking-effort, "
-                         "--judge-model or --judge-thinking-effort")
+        raise ValueError(
+            "session set takes --mode, --model, --cd, --thinking-effort, "
+            "--judge-model, --judge-thinking-effort, --search-service, "
+            "--stt-service, --tts-service, --image-service, --video-service "
+            "or --auto-speak"
+        )
     reply = connection.set(session_id(connection, args.id), **given)
     # A judge model of None is the session's own again
     own = "the session's own"
@@ -975,6 +1155,62 @@ def set_command(connection, args, out):
                      for k, v in reply.get("set", {}).items())
     when = " from its next turn" if reply.get("next_turn") else ""
     return print_reply(args, out, reply, f"Set {said}{when}.")
+
+
+def attachment_add_command(connection, args, out):
+    resolved = str(Path(args.path).expanduser().resolve())
+    attachment = connection.add_attachment(
+        resolved, name=args.name, media_type=args.media_type,
+        allow_over_limit=args.force,
+    )
+    reply = {"ok": True, "attachment": attachment}
+    return print_reply(args, out, reply, render.attachment_line(attachment))
+
+
+def attachment_list_command(connection, args, out):
+    sid = session_id(connection, args.session) if args.session else None
+    include_staged = True if args.staged else (sid is None)
+    items = connection.list_attachments(
+        session=sid, include_staged=include_staged,
+    )
+    lines = [
+        f"{row['attachment_id']}  {row.get('state', '')}  "
+        f"{render.attachment_line(row)}"
+        for row in items
+    ]
+    return print_reply(
+        args, out, {"ok": True, "attachments": items},
+        "\n".join(lines) or "No attachments.",
+    )
+
+
+def attachment_get_command(connection, args, out):
+    sid = session_id(connection, args.session) if args.session else None
+    attachment = connection.get_attachment(args.id, session=sid)
+    if args.output:
+        target = Path(args.output).expanduser()
+        home_paths.write_whole(
+            target, connection.iter_attachment(args.id, session=sid),
+        )
+        reply = {"ok": True, "attachment": attachment, "output": str(target)}
+        return print_reply(
+            args, out, reply,
+            f"Saved {render.attachment_line(attachment)} to {target}.",
+        )
+    return print_reply(
+        args, out, {"ok": True, "attachment": attachment},
+        render.attachment_line(attachment),
+    )
+
+
+def attachment_prune_command(connection, args, out):
+    reply = connection.prune_attachments(include_trashed=args.include_trashed)
+    text = (
+        f"Pruned: {reply.get('expired_staged', 0)} staged, "
+        f"{reply.get('removed_blobs', 0)} blobs "
+        f"({render.format_bytes(reply.get('freed_bytes', 0))})."
+    )
+    return print_reply(args, out, reply, text)
 
 
 def job_list_command(connection, args, out):
@@ -1081,6 +1317,23 @@ def model_features_command(connection, args, out):
     lines += [f"  {name}: {words[honoured]}"
               for name, honoured in reply["features"].items()]
     return print_reply(args, out, reply, "\n".join(lines))
+
+
+def model_utilities_command(connection, args, out):
+    reply = connection.utilities(model=args.model)
+    lines = []
+    for name, cap in (reply.get("capabilities") or {}).items():
+        status = "available" if cap.get("available") else "unavailable"
+        current = cap.get("current_server_service")
+        detail = f"current_server -> {current}" if current else status
+        services = ", ".join(
+            f"{svc['name']}{'' if svc.get('available') else ' (unavailable)'}"
+            for svc in (cap.get("services") or ())
+        )
+        lines.append(
+            f"{name}: {detail}" + (f" [{services}]" if services else "")
+        )
+    return print_reply(args, out, reply, "\n".join(lines) or "No utilities.")
 
 
 def server_list_command(connection, args, out):
@@ -1234,3 +1487,96 @@ def setting_set_command(connection, args, out):
     reply = connection.set_setting(args.name, value)
     shown = ", ".join(f"{k} = {json.dumps(v)}" for k, v in reply["set"].items())
     return print_reply(args, out, reply, f"Set {shown}.")
+
+
+def transcribe_command(connection, args, out):
+    resolved = str(Path(args.path).expanduser().resolve())
+    sid = session_id(connection, args.session) if args.session else None
+    reply = connection.transcribe_audio(
+        path=resolved,
+        session=sid,
+        model=args.model,
+        service=args.service,
+        language=args.language,
+    )
+    return print_reply(args, out, reply, reply.get("text", ""))
+
+
+def _play_cli_audio(raw_bytes, suffix=".wav"):
+    for name in ("pw-play", "paplay", "ffplay", "aplay"):
+        exe = shutil.which(name)
+        if not exe:
+            continue
+        tmp_dir = tempfile.mkdtemp(prefix="zero-cli-play-")
+        try:
+            target = Path(tmp_dir) / f"speech{suffix}"
+            target.write_bytes(raw_bytes)
+            if name == "ffplay":
+                cmd = [exe, "-nodisp", "-autoexit", "-loglevel", "quiet", str(target)]
+            elif name == "aplay":
+                cmd = [exe, "-q", str(target)]
+            else:
+                cmd = [exe, str(target)]
+            done = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=120,
+            )
+            return name if done.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+    return None
+
+
+def speak_command(connection, args, out):
+    sid = session_id(connection, args.session) if args.session else None
+    text = text_of(args.text, getattr(args, "stdin", None)) if args.text else None
+    if sid is None and not text:
+        raise ValueError("speak needs TEXT or --session ID")
+    reply = connection.synthesize_speech(
+        session=sid,
+        reply_entry_id=args.reply_entry_id,
+        text=text,
+        voice=args.voice,
+        service=args.service,
+        model=args.model,
+    )
+    audio_bytes = None
+    if args.output or args.play or (not args.json and not reply.get("attachment_id")):
+        if reply.get("audio_base64"):
+            audio_bytes = base64.b64decode(reply["audio_base64"])
+        elif reply.get("attachment_id"):
+            audio_bytes = connection.read_attachment(
+                reply["attachment_id"], session=sid,
+            )
+    if args.output and audio_bytes is not None:
+        dest = Path(args.output).expanduser().resolve()
+        dest.write_bytes(audio_bytes)
+        return print_reply(
+            args, out, reply, f"Wrote {len(audio_bytes):,} bytes to {dest}.",
+        )
+    if args.play and audio_bytes is not None:
+        suffix = ".wav" if "wav" in (reply.get("media_type") or "") else ".mp3"
+        player = _play_cli_audio(audio_bytes, suffix=suffix)
+        if player:
+            return print_reply(args, out, reply, f"Played via {player}.")
+        return print_reply(
+            args, out, reply,
+            "No local audio player found (use --output PATH to save audio).",
+        )
+    if reply.get("attachment_id"):
+        note = "cached" if reply.get("cached") else "synthesized"
+        return print_reply(
+            args, out, reply,
+            f"Speech {note}: attachment {reply['attachment_id']} "
+            f"({reply.get('media_type', 'audio/wav')}, "
+            f"{reply.get('size_bytes', 0):,} bytes).",
+        )
+    return print_reply(
+        args, out, reply,
+        f"Synthesized {reply.get('size_bytes', 0):,} bytes "
+        f"({reply.get('media_type', 'audio/wav')}).",
+    )

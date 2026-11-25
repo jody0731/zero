@@ -85,6 +85,7 @@ class SessionView(Screen):
                 yield MessageBox(id="reply", placeholder="your answer")
             yield Plain(id="progress")
             yield Plain(id="commands")
+            yield Plain(id="attachments")
             yield MessageBox(id="message", placeholder=placeholder(self.app.keys))
             yield Plain(id="status")
 

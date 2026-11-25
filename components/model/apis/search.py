@@ -22,10 +22,46 @@ class Source:
 
 
 @dataclass(frozen=True)
+class CitationSpan:
+    """One grounded text span citing one or more source URLs."""
+
+    text: str
+    urls: tuple[str, ...] = ()
+    start_index: int | None = None
+    end_index: int | None = None
+
+    def as_dict(self):
+        row = {"text": self.text, "urls": list(self.urls)}
+        if self.start_index is not None:
+            row["start_index"] = self.start_index
+        if self.end_index is not None:
+            row["end_index"] = self.end_index
+        return row
+
+
+@dataclass(frozen=True)
+class SearchSuggestions:
+    """Provider search suggestion display data (queries + rendered HTML)."""
+
+    web_search_queries: tuple[str, ...] = ()
+    rendered_content: str = ""
+
+    def as_dict(self):
+        row = {}
+        if self.web_search_queries:
+            row["web_search_queries"] = list(self.web_search_queries)
+        if self.rendered_content:
+            row["rendered_content"] = self.rendered_content
+        return row
+
+
+@dataclass(frozen=True)
 class SearchResponse:
     sources: list[Source]
     summary: str = ""
     billed: bool | None = None
+    citations: tuple[CitationSpan, ...] = ()
+    suggestions: SearchSuggestions | None = None
 
 
 def is_http_url(value):

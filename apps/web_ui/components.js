@@ -8,6 +8,7 @@ export const SLOTS = [
   "settings",
   "sessionBadge",
   "command",
+  "composer",
 ];
 
 export function createRegistry() {
@@ -18,6 +19,7 @@ export function createRegistry() {
   const settingsTabs = new Map();
   const sessionBadges = [];
   const commands = new Map();
+  const composers = [];
 
   return {
     registerAsk(kind, render) {
@@ -40,6 +42,9 @@ export function createRegistry() {
     },
     registerCommand(name, handler) {
       commands.set(name, handler);
+    },
+    registerComposer(fn) {
+      composers.push(fn);
     },
     getAsk(kind) {
       return asks.get(kind) || null;
@@ -65,6 +70,9 @@ export function createRegistry() {
     getCommand(name) {
       return commands.get(name) || null;
     },
+    composers() {
+      return [...composers];
+    },
     reset() {
       asks.clear();
       entries.clear();
@@ -73,6 +81,7 @@ export function createRegistry() {
       settingsTabs.clear();
       sessionBadges.length = 0;
       commands.clear();
+      composers.length = 0;
     },
   };
 }
@@ -90,6 +99,7 @@ export function createHost(base = {}, targetRegistry = registry) {
     settings: (tabName, render) => targetRegistry.registerSettings(tabName, render),
     sessionBadge: (fn) => targetRegistry.registerSessionBadge(fn),
     command: (name, handler) => targetRegistry.registerCommand(name, handler),
+    composer: (fn) => targetRegistry.registerComposer(fn),
   };
 }
 

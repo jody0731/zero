@@ -16,12 +16,14 @@ screen as messages; what is shown is reported back with `session/mark_seen`, so 
 `zero` knows what is news.
 """
 
+import base64
 import shutil
 import subprocess
 import threading
 import time
 import traceback
 from datetime import datetime
+from pathlib import Path
 
 from textual import events
 from textual.app import App
@@ -34,7 +36,7 @@ from textual.widgets import Static, TextArea
 
 import paths
 import settings
-from apps.tui import clipboard, config, controller, keybindings
+from apps.tui import audio, clipboard, config, controller, keybindings
 from apps.tui.connect_view import (
     ServersView, connected_servers, pick_default, with_model_window,
 )
@@ -102,6 +104,7 @@ Screen { background: $background; }
 #attention { height: 1; color: $text-warning; padding: 0 1; display: none; }
 #progress { height: 1; padding: 0 1; color: $text-muted; display: none; }
 #commands { height: auto; padding: 0 2; display: none; color: $text-muted; }
+#attachments { height: auto; padding: 0 2; display: none; color: $text-muted; }
 #askbox { height: auto; border: round $text-warning; padding: 0 1; margin: 0 1;
           display: none; }
 MessageBox { height: auto; max-height: 10; margin: 0 1; }
@@ -274,6 +277,8 @@ class ZeroApp(SafeClicks, App):
         # that comes in after is dropped
         self.opening = None
         self.sending = None
+        self.staged_attachments = []
+        self.dictation_state = None
         self.view = SessionView()
         # config.toml's settings (/settings); a broken file is said, not used
         self.config_error = None
@@ -337,15 +342,16 @@ class ZeroApp(SafeClicks, App):
         self.focus_input()
 
     def on_unmount(self):
+        self.stop_dictation_capture(cancel=True)
         self.lists.stop()
         self.stop_following()
         self.requests.stop()
 
-    def request(self, work, then=None, failed=None):
+    def request(self, work, then=None, failed=None, *, lane="normal"):
         """`work()`, a call to the server, on the requests thread, never the
         drawing one (design rule 12); `then(result)` back on the screen, and
         an error `failed`'s, said in the transcript by default."""
-        self.requests.submit(work, then, failed or self.failed)
+        self.requests.submit(work, then, failed or self.failed, lane=lane)
 
     def wait_for_list(self, seconds=2):
         """For a thread of its own: the session list, once it came."""
@@ -369,7 +375,7 @@ class ZeroApp(SafeClicks, App):
     def transcript(self):
         return self.view.query_one(Transcript)
 
-    def open(self, sid, remember=True):
+    def open(self, sid, remember=True, restore_attachments=None):
         """Show a session: its last MAX_RECORDS_SHOWN records, a line for the earlier
         ones, which a scroll to the top brings in, then it goes live."""
         if remember and self.client.session and self.client.session != sid:
@@ -384,15 +390,21 @@ class ZeroApp(SafeClicks, App):
                                                    limit=MAX_RECORDS_SHOWN)
             return row, records, gap
 
-        self.request(fetch, then=lambda found: self.show(sid, *found))
+        self.request(
+            fetch,
+            then=lambda found: self.show(
+                sid, *found, restore_attachments=restore_attachments,
+            ),
+        )
 
-    def show(self, sid, row, records, gap):
+    def show(self, sid, row, records, gap, *, restore_attachments=None):
         """An opened session's records, fetched (open)."""
         if sid != self.opening:
             return
         self.opening = None
         self.stop_following()
         self.client = SessionInput(self.connection, sid, workspace=row["workspace"])
+        self.staged_attachments = []
         transcript = self.transcript
         transcript.clear()
         if gap:
@@ -410,6 +422,8 @@ class ZeroApp(SafeClicks, App):
         self.follow(after)
         self.mark_seen(after)
         self.boxed = None
+        if restore_attachments:
+            self.hydrate_attachments(restore_attachments, session=sid)
         self.draw()
         self.focus_input()
 
@@ -421,6 +435,7 @@ class ZeroApp(SafeClicks, App):
         self.client = SessionInput(
             self.connection, None, self.mode, self.model, workspace=workspace
         )
+        self.staged_attachments = []
         self.oldest = None
         self.transcript.clear()
         self.draw()
@@ -473,6 +488,15 @@ class ZeroApp(SafeClicks, App):
             # The conversation went back: its view is the branch it left
             self.open(self.client.session, remember=False)
             return
+        if kind == "media/speech_cache":
+            fields = render.entries.fields_of(record)
+            if fields.get("auto_speak") and fields.get("attachment_id"):
+                self.play_speech_attachment(
+                    fields["attachment_id"],
+                    session=self.client.session,
+                    media_type=fields.get("media_type", "audio/wav"),
+                )
+            return
         if record is not None:
             self.transcript.add(record, self.connection.source)
             if kind in ("sessions/turn_end", "sessions/ask"):
@@ -487,6 +511,11 @@ class ZeroApp(SafeClicks, App):
         if lines:
             field = self.view.query_one("#message", MessageBox)
             field.value = " ".join(lines + ([field.value] if field.value else []))
+        withdrawn_attachments = self.client.take_withdrawn_attachments()
+        if withdrawn_attachments:
+            self.hydrate_attachments(
+                withdrawn_attachments, session=self.client.session,
+            )
         self.draw()
 
     def mark_seen(self, seq):
@@ -619,7 +648,8 @@ class ZeroApp(SafeClicks, App):
         self.send(text, follow_up, composer=field)
 
     def send(self, text, follow_up=False, reply=False, choice=None, *, composer=None):
-        if not text.strip():
+        staged = [] if reply else list(self.staged_attachments)
+        if not text.strip() and not staged:
             return
         client = self.client
         target = render.entries.ask_id(client.ask) if reply and client.ask else None
@@ -631,29 +661,41 @@ class ZeroApp(SafeClicks, App):
         if composer is not None and self.sending and self.sending[0] is client:
             return
         pending = (client, composer) if composer is not None else None
+        attachment_ids = [item["attachment_id"] for item in staged]
 
         def submitting():
             if self.sending is pending:
                 self.sending = None
-            if client is self.client and composer.value == text:
-                composer.value = ""
+            if client is self.client:
+                if composer is not None and composer.value == text:
+                    composer.value = ""
+                if attachment_ids:
+                    sent_set = set(attachment_ids)
+                    self.staged_attachments = [
+                        item for item in self.staged_attachments
+                        if item["attachment_id"] not in sent_set
+                    ]
+                    self.draw()
 
         def check(options):
             if not reply and not client.running:
                 self.check_effort(client, options)
-            if pending is not None:
+            if pending is not None or attachment_ids:
                 self.run_on_screen(submitting)
 
         def work():
             # Asked here, in turn: a line before it may have made the session
             made = client.session is None
-            answer = client.line(text, follow_up=follow_up, choice=choice,
-                                 reply_to=target, check=check)
+            answer = client.line(
+                text, follow_up=follow_up, choice=choice,
+                reply_to=target, check=check,
+                attachments=attachment_ids or None,
+            )
             return made, answer
 
         def finished(result):
             made, answer = result
-            self.sent(client, text, made, answer)
+            self.sent(client, text, made, answer, attachments=staged)
 
         def failed(error):
             if self.sending is pending:
@@ -688,14 +730,16 @@ class ZeroApp(SafeClicks, App):
         if client is not self.client or self.opening is not None:
             raise ProtocolError("The session changed while checking the model.")
 
-    def sent(self, client, text, made, answer):
+    def sent(self, client, text, made, answer, *, attachments=()):
         """A line the server took: shown as said, and followed."""
         if answer is None or client is not self.client:
             return
         handled_as = answer.get("handled_as")
         mark = {"steered": "steer", "queued": "queued"}.get(handled_as)
         if handled_as != "reply":
-            self.transcript.sent(text, answer.get("id"), mark)
+            self.transcript.sent(
+                text, answer.get("id"), mark, attachments=attachments,
+            )
         if made or self.follower is None or self.follower.stopped:
             # A new session, or the server was stopped by hand and starts again
             after = self.follower.after if self.follower and not made else 0
@@ -762,6 +806,12 @@ class ZeroApp(SafeClicks, App):
                         self.switch(workspace=folder)
 
                     self.ask_line("Folder its commands run in", here, chosen)
+            elif name == "/attach":
+                self.handle_attach(rest)
+            elif name == "/dictate":
+                self.handle_dictate(rest)
+            elif name == "/speak":
+                self.handle_speak(rest)
             elif sid is None:
                 self.note("This session isn't made yet: send a message first.")
             elif name == "/continue":
@@ -859,11 +909,329 @@ class ZeroApp(SafeClicks, App):
         self.push_screen(ChoiceView(label, choices, values=values),
                          lambda value: value is not None and then(sid, value))
 
+    def handle_attach(self, rest):
+        """Stage a local file for the next message, or remove/clear staged chips."""
+        action, value, force = controller.parse_attach_args(rest)
+        if action == "empty":
+            self.note(
+                "Use /attach PATH [--force], /attach remove N, or /attach clear."
+            )
+            return
+        if action == "clear":
+            self.staged_attachments = []
+            self.draw()
+            return
+        if action == "remove":
+            if value.isdigit():
+                index = int(value) - 1
+                if 0 <= index < len(self.staged_attachments):
+                    removed = self.staged_attachments.pop(index)
+                    self.notify(f"Removed {removed.get('name', 'attachment')}.")
+                    self.draw()
+                    return
+            self.notify(f"No attachment {value}.", severity="warning")
+            return
+        base = self.session_value("workspace") or self.cwd
+        resolved = controller.resolve_workspace(value, base)
+        self.stage_file(resolved, force=force)
+
+    def stage_file(self, resolved, *, force=False):
+        """Stage `resolved` on the non-blocking upload lane with soft-cap dialog."""
+        client = self.client
+
+        def staged(attachment):
+            if client is not self.client:
+                return
+            aid = attachment.get("attachment_id")
+            if aid and not any(
+                item.get("attachment_id") == aid
+                for item in self.staged_attachments
+            ):
+                self.staged_attachments.append(attachment)
+            self.draw()
+
+        def failed(error):
+            if isinstance(error, ProtocolError) and error.over_limit and not force:
+                name = Path(resolved).name
+                self.push_screen(
+                    ChoiceView(
+                        f"{name} exceeds limit.",
+                        ["Attach anyway", "Cancel"],
+                    ),
+                    lambda choice: (
+                        choice == "Attach anyway"
+                        and self.stage_file(resolved, force=True)
+                    ),
+                )
+                return
+            self.failed(error)
+
+        self.request(
+            lambda: self.connection.add_attachment(
+                resolved, allow_over_limit=force,
+            ),
+            then=staged,
+            failed=failed,
+            lane="upload",
+        )
+
+    def hydrate_attachments(self, ids, session=None):
+        """Load metadata for restored attachment ids onto the composer chip bar."""
+        client = self.client
+        wanted = [aid for aid in ids if isinstance(aid, str) and aid]
+        if not wanted:
+            return
+
+        def work():
+            loaded = []
+            for aid in wanted:
+                try:
+                    loaded.append(
+                        self.connection.get_attachment(aid, session=session)
+                    )
+                except ERRORS:
+                    loaded.append({
+                        "attachment_id": aid, "name": aid, "size_bytes": 0,
+                    })
+            return loaded
+
+        def done(items):
+            if client is not self.client:
+                return
+            seen = {item.get("attachment_id") for item in self.staged_attachments}
+            for item in items:
+                aid = item.get("attachment_id")
+                if aid and aid not in seen:
+                    seen.add(aid)
+                    self.staged_attachments.append(item)
+            self.draw()
+
+        self.request(work, then=done, failed=ignored, lane="upload")
+
+    def _apply_dictation_text(self, prefix, transcript):
+        clean = (transcript or "").strip()
+        joiner = " " if (prefix and clean and not prefix[-1].isspace()) else ""
+        field = self.view.query_one("#message", MessageBox)
+        field.value = prefix + joiner + clean
+        self.focus_input()
+
+    def stop_dictation_capture(self, *, cancel=False):
+        state = self.dictation_state
+        if state is None:
+            return
+        self.dictation_state = None
+        mic = state.get("mic")
+        if mic is not None:
+            mic.stop()
+        watch = state.get("watch")
+        if watch is not None:
+            try:
+                watch.close()
+            except OSError:
+                pass
+        did = state.get("id")
+        prefix = state.get("prefix", "")
+        if not did:
+            return
+
+        def finish():
+            if cancel:
+                return self.connection.cancel_dictation(did)
+            return self.connection.stop_dictation(did)
+
+        def finished(reply):
+            if cancel:
+                self.notify("Dictation cancelled.")
+                return
+            text = reply.get("text", "")
+            if text.strip():
+                self._apply_dictation_text(prefix, text)
+            self.notify("Dictation stopped.")
+
+        self.request(finish, then=finished, failed=self.failed, lane="upload")
+
+    def handle_dictate(self, rest):
+        """Live mic dictation or file-path fallback into the editable input."""
+        arg = (rest or "").strip()
+        if arg.lower() == "cancel":
+            if self.dictation_state is None:
+                self.notify("No active dictation.")
+                return
+            self.stop_dictation_capture(cancel=True)
+            return
+        if arg.lower() == "stop" or (not arg and self.dictation_state is not None):
+            if self.dictation_state is None:
+                self.notify("No active dictation.")
+                return
+            self.stop_dictation_capture(cancel=False)
+            return
+        if arg:
+            base = self.session_value("workspace") or self.cwd
+            resolved = controller.resolve_workspace(arg, base)
+            sid = self.client.session
+            model = self.session_value("model")
+            prefix = self.view.query_one("#message", MessageBox).value
+
+            def transcribe_file():
+                return self.connection.transcribe_audio(
+                    path=resolved, session=sid, model=model,
+                )
+
+            def done(reply):
+                text = reply.get("text", "")
+                if text.strip():
+                    self._apply_dictation_text(prefix, text)
+                else:
+                    self.notify("No speech detected.")
+
+            self.request(
+                transcribe_file, then=done, failed=self.failed, lane="upload",
+            )
+            return
+
+        cap_kind, _ = audio.capture_binary()
+        if not cap_kind:
+            self.note(
+                "No local mic recorder (pw-record/arecord) found; "
+                "use /dictate PATH to transcribe an audio file."
+            )
+            return
+
+        sid = self.client.session
+        model = self.session_value("model")
+        stt_service = getattr(self.client, "stt_service", None)
+        prefix = self.view.query_one("#message", MessageBox).value
+
+        def start_work():
+            return self.connection.start_dictation(
+                session=sid,
+                model=model if sid is None else None,
+                stt_service=stt_service if sid is None else None,
+            )
+
+        def started(reply):
+            did = reply["dictation_id"]
+            rate = int(reply.get("sample_rate") or 16000)
+            seq_box = {"seq": 0}
+            mic = audio.MicCapture(sample_rate=rate)
+            state = {"id": did, "mic": mic, "prefix": prefix, "watch": None}
+            self.dictation_state = state
+
+            def watch_loop():
+                try:
+                    watch = self.connection.watch_dictation(did)
+                    state["watch"] = watch
+                    for event in watch:
+                        if self.dictation_state is not state:
+                            break
+                        shown = event.get("full_text") or event.get("text") or ""
+                        if shown and event.get("event") in ("interim", "final"):
+                            self.run_on_screen(
+                                self._apply_dictation_text, prefix, shown,
+                            )
+                except Exception:
+                    pass
+
+            threading.Thread(
+                target=watch_loop, name=f"tui-dict-watch-{did}", daemon=True,
+            ).start()
+
+            def on_chunk(pcm_bytes):
+                if self.dictation_state is not state:
+                    return
+                seq = seq_box["seq"]
+                seq_box["seq"] += 1
+                self.request(
+                    lambda s=seq, b=pcm_bytes: self.connection.send_dictation_chunk(
+                        did, s, b, sample_rate=rate,
+                    ),
+                    failed=ignored,
+                    lane="upload",
+                )
+
+            used = mic.start(on_chunk)
+            if not used:
+                self.stop_dictation_capture(cancel=True)
+                self.note("Could not start local mic recorder; use /dictate PATH.")
+                return
+            self.notify("Dictating… run /dictate again to stop.")
+
+        self.request(start_work, then=started, failed=self.failed, lane="upload")
+
+    def play_speech_attachment(
+        self, attachment_id, *, session=None, media_type="audio/wav",
+    ):
+        """Fetch and play a speech attachment on the non-blocking upload lane."""
+        suffix = ".wav" if "wav" in (media_type or "") else ".mp3"
+
+        def work():
+            raw = self.connection.read_attachment(attachment_id, session=session)
+            player = audio.play_audio_bytes(raw, suffix=suffix)
+            return player, len(raw)
+
+        def done(result):
+            player, size = result
+            if not player:
+                self.note(
+                    f"Speech ready (attachment {attachment_id}, {size:,} bytes); "
+                    "no local audio player found."
+                )
+
+        self.request(work, then=done, failed=ignored, lane="upload")
+
+    def handle_speak(self, rest):
+        """Speak the session's latest assistant reply or explicit text."""
+        text = (rest or "").strip() or None
+        sid = self.client.session
+        if sid is None and not text:
+            self.note("Use /speak TEXT or send a message first.")
+            return
+        model = self.session_value("model")
+
+        def work():
+            reply = self.connection.synthesize_speech(
+                session=sid if text is None else None,
+                text=text,
+                model=model if sid is None else None,
+            )
+            media_type = reply.get("media_type", "audio/wav")
+            suffix = ".wav" if "wav" in media_type else ".mp3"
+            if reply.get("audio_base64"):
+                raw = base64.b64decode(reply["audio_base64"])
+            elif reply.get("attachment_id"):
+                raw = self.connection.read_attachment(
+                    reply["attachment_id"], session=sid,
+                )
+            else:
+                raw = b""
+            player = audio.play_audio_bytes(raw, suffix=suffix) if raw else None
+            return reply, player
+
+        def done(result):
+            reply, player = result
+            if player:
+                self.notify(f"Played via {player}.")
+            elif reply.get("attachment_id"):
+                self.note(
+                    f"Speech saved as attachment {reply['attachment_id']} "
+                    "(no local audio player found)."
+                )
+            else:
+                self.note(
+                    f"Synthesized {reply.get('size_bytes', 0):,} bytes "
+                    "(no local audio player found)."
+                )
+
+        self.request(work, then=done, failed=self.failed, lane="upload")
+
     def rewind_to(self, sid, seq):
         """Rewind, then show the branch it leaves, the message in the input."""
 
         def rewound(reply):
-            self.open(sid, remember=False)
+            self.open(
+                sid, remember=False,
+                restore_attachments=reply.get("attachments") or None,
+            )
             self.fill_input(reply["text"])
 
         self.request(lambda: self.connection.rewind(sid, seq), then=rewound)
@@ -872,7 +1240,10 @@ class ZeroApp(SafeClicks, App):
         """Fork, then open the new session, the message in its input."""
 
         def forked(reply):
-            self.open(reply["session"]["id"])
+            self.open(
+                reply["session"]["id"],
+                restore_attachments=reply.get("attachments") or None,
+            )
             self.fill_input(reply["text"])
 
         seq = None if value == ALL_OF_IT else value
@@ -1042,6 +1413,11 @@ class ZeroApp(SafeClicks, App):
             "model": (self.client.model or self.defaults.get("model")
                       or self.default_model()),
             "thinking_effort": self.client.thinking_effort,
+            "search_service": self.client.search_service,
+            "stt_service": self.client.stt_service,
+            "tts_service": self.client.tts_service,
+            "image_service": self.client.image_service,
+            "video_service": self.client.video_service,
         }
         return {name: value for name, value in chosen.items() if value}
 
@@ -1145,7 +1521,7 @@ class ZeroApp(SafeClicks, App):
         field.value = ""
 
         def stop(sid):
-            self.request(lambda: self.connection.stop(sid))
+            self.request(lambda: self.connection.stop(sid), lane="urgent")
 
         if self.client.ctrl_c(empty, stop=stop):
             self.action_leave()
@@ -1205,6 +1581,15 @@ class ZeroApp(SafeClicks, App):
         was = box.display
         box.display = showing
         view.query_one("#message", MessageBox).display = not showing
+        chips = view.query_one("#attachments", Static)
+        chips.display = bool(self.staged_attachments) and not showing
+        if self.staged_attachments:
+            parts = [
+                f"{item.get('name', 'file')} "
+                f"({render.format_bytes(item.get('size_bytes', 0))})"
+                for item in self.staged_attachments
+            ]
+            chips.update("📎 " + " · ".join(parts) + "  · /attach clear")
         if showing:
             view.offer([])
             private = render.entries.field(self.client.ask, "kind") == "secret"

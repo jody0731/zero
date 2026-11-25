@@ -56,6 +56,14 @@
         "source": {
           "type": "string",
           "description": "who sends it: a client's own name"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "optional attachment ids to claim and attach to the subagent message"
         }
       },
       "required": [

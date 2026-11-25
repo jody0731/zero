@@ -258,6 +258,11 @@ def zero_command(which=shutil.which):
     return " ".join(shlex.quote(part) for part in [*own_python(), str(main)])
 
 
+_HOME_CACHE = (None, None)
+_MODELS_FILE_CACHE = (None, None)
+_KEYS_FILE_CACHE = (None, None)
+
+
 def usual_home():
     """The home when nothing moves it."""
     return Path.home() / f".{NAME}"
@@ -266,9 +271,26 @@ def usual_home():
 def home():
     """The home: ZERO_HOME's folder, made whole (a server started elsewhere,
     as its systemd unit, is led to the same one), else the usual."""
+    global _HOME_CACHE
     base = os.environ.get(HOME_ENV)
     if not base:
+        user_home = os.environ.get("HOME")
+        if user_home and os.path.isabs(user_home):
+            key = ("", user_home)
+            cached = _HOME_CACHE
+            if cached[0] == key:
+                return cached[1]
+            found = Path(user_home) / f".{NAME}"
+            _HOME_CACHE = (key, found)
+            return found
         return usual_home()
+    if os.path.isabs(base) and "~" not in base:
+        cached = _HOME_CACHE
+        if cached[0] == base:
+            return cached[1]
+        found = Path(os.path.normpath(base))
+        _HOME_CACHE = (base, found)
+        return found
     return Path(os.path.normpath(Path(base).expanduser().absolute()))
 
 
@@ -284,13 +306,27 @@ def zero_md_file():
 
 def keys_file():
     """The API keys, beside their environment variables (model/)."""
-    return home() / "keys.toml"
+    global _KEYS_FILE_CACHE
+    h = home()
+    cached = _KEYS_FILE_CACHE
+    if cached[0] is h:
+        return cached[1]
+    found = h / "keys.toml"
+    _KEYS_FILE_CACHE = (h, found)
+    return found
 
 
 def models_file():
     """The model servers the user added, and their changes to the ones ZERO
     ships with (model/)."""
-    return home() / "models.toml"
+    global _MODELS_FILE_CACHE
+    h = home()
+    cached = _MODELS_FILE_CACHE
+    if cached[0] is h:
+        return cached[1]
+    found = h / "models.toml"
+    _MODELS_FILE_CACHE = (h, found)
+    return found
 
 
 def permissions_file():

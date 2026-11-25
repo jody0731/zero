@@ -93,7 +93,9 @@ def tool(description, /, optional=(), fields=None, validate=None, ready=None,
     its tools; by default always.
     `summary(args)`: the call in a line or a few, for an ask and the judge;
     one that cuts long text takes `whole`.
-    `traits`: capability trait strings (e.g. "side_by_side", "changing").
+    `traits`: capability trait strings (e.g. "side_by_side", "changing";
+    "keeps_vault_stand_ins": its arguments reach another session as written,
+    never resolved at this session's tool boundary).
     `metadata`: namespaced dicts for subsystem hooks and components.
     """
 
@@ -267,8 +269,14 @@ def has_trait(name, trait):
 
 def tools_with_trait(trait, context=None):
     """(name, entry) of each offered tool declaring `trait`."""
-    return [(name, entry) for name, entry in offered(context)
-            if trait in entry["traits"]]
+    found = []
+    for name, entry in entries():
+        if trait not in entry["traits"]:
+            continue
+        if (context is None or entry["ready"] is None
+                or entry["ready"](context)):
+            found.append((name, entry))
+    return found
 
 
 def metadata_of(name, namespace, default=None):
@@ -282,9 +290,12 @@ def metadata_of(name, namespace, default=None):
 def tools_with_metadata(namespace, context=None):
     """(name, metadata) of each offered tool carrying `namespace` metadata."""
     found = []
-    for name, entry in offered(context):
+    for name, entry in entries():
         meta = entry["metadata"].get(namespace)
-        if meta is not None:
+        if meta is None:
+            continue
+        if (context is None or entry["ready"] is None
+                or entry["ready"](context)):
             found.append((name, meta))
     return found
 
@@ -469,12 +480,28 @@ def run(name, args, context=None, expected_entry=None):
     boundary = (context or {}).get("tool_boundary")
     if boundary is None:
         return run_checked(name, args, context, expected_entry)
-    try:
-        resolved = boundary.resolve(args)
-    except Exception:
-        return Result("The vault stand-in could not be resolved; nothing ran.",
-                      failed=True)
-    answer = run_checked(name, resolved, context, expected_entry)
+    # A tool that hands its words to another session (`keeps_vault_stand_ins`)
+    # passes the stand-ins on: that session's own tools resolve them. Display-only
+    # arguments listed in `metadata["tool_boundary"]["keep_stand_ins"]` stay
+    # unexpanded so secrets never become durable attachment labels or filenames.
+    if not has_trait(name, "keeps_vault_stand_ins"):
+        keep = set(
+            (metadata_of(name, "tool_boundary") or {}).get("keep_stand_ins") or ()
+        )
+        try:
+            if keep and isinstance(args, dict):
+                to_resolve = {k: v for k, v in args.items() if k not in keep}
+                resolved = boundary.resolve(to_resolve) if to_resolve else {}
+                args = {
+                    k: (v if k in keep else resolved[k])
+                    for k, v in args.items()
+                }
+            else:
+                args = boundary.resolve(args)
+        except Exception:
+            return Result("The vault stand-in could not be resolved; nothing ran.",
+                          failed=True)
+    answer = run_checked(name, args, context, expected_entry)
     notes = (context or {}).get("notes")
     if notes is not None:
         safe = boundary.redact(notes)

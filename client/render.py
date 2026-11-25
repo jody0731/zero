@@ -25,6 +25,57 @@ def short_tokens(count):
     return f"{count / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
 
 
+def format_bytes(count):
+    """Concise human byte count: 512 B, 1.4 KB, 12 MB, 1.2 GB."""
+    size = int(count or 0)
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        val = size / 1024
+        return f"{val:.1f} KB" if val < 10 else f"{val:.0f} KB"
+    if size < 1024 * 1024 * 1024:
+        val = size / (1024 * 1024)
+        return f"{val:.1f} MB" if val < 10 else f"{val:.0f} MB"
+    return f"{size / (1024 * 1024 * 1024):.1f} GB"
+
+
+def attachment_line(item):
+    """One plain-text line summarizing an attached or delivered file."""
+    name = (
+        item.get("name")
+        or item.get("attachment_id")
+        or item.get("path")
+        or "file"
+    )
+    media = item.get("media_type") or ""
+    size = item.get("size_bytes")
+    meta = [p for p in (media, format_bytes(size) if size else "") if p]
+    ref = item.get("attachment_id") or item.get("path") or ""
+    detail = f" ({', '.join(meta)})" if meta else ""
+    suffix = f" · {ref}" if ref else ""
+    return f"{name}{detail}{suffix}"
+
+
+def attachment_lines(record):
+    """Plain-text attachment summary lines for a wire record."""
+    return [attachment_line(item) for item in entries.attachments_of(record)]
+
+
+def search_suggestion_lines(record):
+    """Plain-text search suggestion links or queries for a wire record."""
+    found = entries.search_suggestions(record)
+    if not found:
+        return []
+    links = found.get("links") or ()
+    if links:
+        parts = [f"{link['label']} ({link['url']})" for link in links]
+        return ["Search suggestions: " + " · ".join(parts)]
+    queries = found.get("queries") or ()
+    if queries:
+        return ["Search queries: " + " · ".join(queries)]
+    return []
+
+
 def meter_text(context):
     """The context's meter in a few words, `context 42k/1M · cache 96%`; ""
     with nothing to show."""
@@ -261,19 +312,30 @@ class Renderer:
             ):
                 return []
             text = entries.message_text(record)
+            attached = attachment_lines(record)
             mark = " (steer)" if fields.get("steer") else ""
             if entries.interaction(record):
-                return [f"{interaction_label(record)}> {text}"]
-            return [f"{who(source, self.source)}{mark}> {text}"]
+                lines = [f"{interaction_label(record)}> {text}"] if text else []
+            else:
+                head = f"{who(source, self.source)}{mark}>"
+                lines = [f"{head} {text}"] if text else (
+                    [f"{head} [attachment]"] if attached else [f"{head} "]
+                )
+            lines.extend(f"  [attachment] {line}" for line in attached)
+            return lines
         if kind == "chat/assistant_reply":
             content = entries.assistant_text(record)
             lines = [content] if content else []
+            lines.extend(f"[attachment] {line}" for line in attachment_lines(record))
             summaries = record.get("call_summaries")
             for call in entries.tool_calls(record):
                 lines.append(f"> {call_line(call, summaries)}")
             return lines
         if kind == "tools/result":
-            return clipped(fields.get("result") or "")
+            lines = clipped(fields.get("result") or "")
+            lines.extend(f"[attachment] {line}" for line in attachment_lines(record))
+            lines.extend(search_suggestion_lines(record))
+            return lines
         if kind == "sessions/ask":
             # The CLI's box holds the question; the transcript keeps one line
             return [ask_line(record)]

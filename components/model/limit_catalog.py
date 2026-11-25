@@ -1,4 +1,4 @@
-"""Published limits from models.dev and the snapshot ZERO ships."""
+"""Published limits and capabilities from models.dev and the shipped snapshot."""
 
 import json
 import tomllib
@@ -10,6 +10,7 @@ from threading import Lock, Thread
 from time import monotonic, time
 
 import paths
+from components.model import ModelCapabilities, normalize_modalities_list
 from components.model.limits import TokenLimits, model_id
 
 SNAPSHOT = Path(__file__).with_name("limits.toml")
@@ -19,7 +20,7 @@ RETRY_SECONDS = 5 * 60
 FETCH_SECONDS = 3
 SELECTION_WAIT_SECONDS = 0.75
 MAX_CATALOG_BYTES = 16 * 1024 * 1024
-FILE_FORMAT = 2
+FILE_FORMAT = 3
 
 
 def fetch_catalog(timeout=FETCH_SECONDS, url=URL):
@@ -41,8 +42,21 @@ def providers():
             if "models_dev_provider" in entry}
 
 
+def _published_modalities(row):
+    """Extract normalized input/output modality lists from a models.dev row."""
+    found = {}
+    modalities = row.get("modalities")
+    if not isinstance(modalities, dict):
+        return found
+    for direction in ("input", "output"):
+        normalized = normalize_modalities_list(modalities.get(direction))
+        if normalized:
+            found[f"{direction}_modalities"] = normalized
+    return found
+
+
 def published_limits(catalog):
-    """Read v1 models.dev token fields for the exact providers and IDs."""
+    """Read v1 models.dev token limits and capabilities for exact providers/IDs."""
     found = {}
     if not isinstance(catalog, dict):
         return found
@@ -67,8 +81,11 @@ def published_limits(catalog):
             })
             if model.context_window is not None:
                 entry = model.as_dict()
-                if row.get("reasoning") is False:
-                    entry["reasoning"] = False
+                if isinstance(row.get("reasoning"), bool):
+                    entry["reasoning"] = row["reasoning"]
+                if isinstance(row.get("tool_call"), bool):
+                    entry["tool_calling"] = row["tool_call"]
+                entry.update(_published_modalities(row))
                 models[name] = entry
         if models:
             found[server] = models
@@ -93,6 +110,18 @@ def matching(rows, name, model):
     return TokenLimits.read(_row(rows, name, model))
 
 
+def _row_capabilities(row):
+    """Convert one published catalog row into a ModelCapabilities fragment."""
+    if not isinstance(row, dict):
+        return ModelCapabilities()
+    return ModelCapabilities.from_raw({
+        "input_modalities": row.get("input_modalities"),
+        "output_modalities": row.get("output_modalities"),
+        "reasoning": row.get("reasoning"),
+        "tool_calling": row.get("tool_calling"),
+    })
+
+
 class LimitCatalog:
     """Serve known entries immediately. One bounded wait on a cold miss."""
 
@@ -103,6 +132,16 @@ class LimitCatalog:
         self.read_at = 0
         self.try_after = 0
         self.pending = None
+
+    def _entry_row(self, name, model):
+        baseline, _ = bundled()
+        with self.lock:
+            if self.rows is None:
+                self.rows, self.read_at = self.read()
+            cached = _row(self.rows, name, model)
+        if cached is not None:
+            return cached
+        return _row(baseline, name, model)
 
     def lookup(self, name, model, *, refresh=True):
         baseline, shipped_at = bundled()
@@ -124,18 +163,15 @@ class LimitCatalog:
             return known
 
     def reasoning(self, name, model):
-        """Return False when models.dev explicitly marks the model non-reasoning."""
-        baseline, _ = bundled()
-        with self.lock:
-            if self.rows is None:
-                self.rows, self.read_at = self.read()
-            cached = _row(self.rows, name, model)
-        if cached is not None:
-            return False if cached.get("reasoning") is False else None
-        shipped = _row(baseline, name, model)
-        if shipped is not None:
-            return False if shipped.get("reasoning") is False else None
+        """Return explicit bool when models.dev states reasoning support, else None."""
+        row = self._entry_row(name, model)
+        if row is not None and isinstance(row.get("reasoning"), bool):
+            return row["reasoning"]
         return None
+
+    def capabilities(self, name, model):
+        """Return passive capabilities from the cached or bundled models.dev row."""
+        return _row_capabilities(self._entry_row(name, model))
 
     def read(self):
         try:
@@ -202,3 +238,7 @@ def lookup(name, model, *, refresh):
 
 def reasoning_supported(name, model):
     return _catalog().reasoning(name, model)
+
+
+def capabilities(name, model):
+    return _catalog().capabilities(name, model)

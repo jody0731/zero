@@ -88,6 +88,7 @@ export async function change(message, fields) {
 export function clearModelFeatures(model = null) {
   if (!model) {
     state.features.clear();
+    state.utilities.clear();
     return;
   }
   for (const key of [...state.features.keys()]) {
@@ -97,6 +98,50 @@ export function clearModelFeatures(model = null) {
       // Ignore unexpected keys.
     }
   }
+  state.utilities.delete(model);
+  state.utilities.delete("");
+}
+
+export async function modelUtilities(model = null, fresh = false) {
+  const key = model || "";
+  const saved = state.utilities.get(key);
+  if (!fresh && saved && Date.now() < saved.until) {
+    return saved.reply.catch(() => null);
+  }
+  const reply = look("model/utilities", model ? { model } : {});
+  state.utilities.set(key, { until: Date.now() + 15000, reply });
+  return fresh ? reply : reply.catch(() => null);
+}
+
+export async function uploadAttachment(file, opts = {}, restored = false) {
+  const params = new URLSearchParams();
+  if (file.name) params.set("name", file.name);
+  if (file.type) params.set("media_type", file.type);
+  if (opts.allowOverLimit) params.set("allow_over_limit", "1");
+  const reply = await fetch(`/api/attachments?${params}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (reply.status === 401) {
+    if (!restored) {
+      await pairBrowser();
+      return uploadAttachment(file, opts, true);
+    }
+    const error = new Error("This browser is not paired. Run zero web once.");
+    error.status = 401;
+    throw error;
+  }
+  let body = {};
+  try { body = await reply.json(); } catch { /* Non-JSON error body. */ }
+  if (!reply.ok || !body.ok) {
+    const error = new Error(body.error || `HTTP ${reply.status}`);
+    error.status = reply.status;
+    error.overLimit = Boolean(body.over_limit || reply.status === 413);
+    throw error;
+  }
+  return body.attachment;
 }
 
 export async function modelCapabilities(model, tools, fresh = false) {

@@ -2,11 +2,12 @@
 
 import {
   change, clearModelFeatures, labelEfforts, look, modelCapabilities,
+  modelUtilities,
 } from "./api.js";
 import { registry } from "./components.js";
 import {
-  $, actionDialog, effortLabel, el, folderName, modelFailureView, rowOf,
-  showPanel, state, tokens,
+  $, UTILITY_CAPABILITIES, actionDialog, effortLabel, el, folderName,
+  modelFailureView, rowOf, showPanel, state, tokens,
 } from "./dom.js";
 import { sessionBranch } from "./sessions.js";
 
@@ -75,9 +76,50 @@ export async function refreshModels() {
   }
 }
 
+export function populateServiceSelect(select, settingName, currentValue, reply) {
+  const effective = currentValue || "current_server";
+  const cap = reply?.capabilities?.[settingName] || null;
+  const seen = new Set();
+  select.replaceChildren();
+  const addOption = (value, label, disabled = false) => {
+    if (seen.has(value)) return;
+    seen.add(value);
+    const option = el("option", null, label);
+    option.value = value;
+    option.disabled = disabled;
+    select.append(option);
+  };
+  let currentLabel = "Current server";
+  if (cap) {
+    if (cap.current_server_service) {
+      const match = (cap.services || []).find(
+        (svc) => svc.name === cap.current_server_service,
+      );
+      currentLabel = `Current server (${match?.title || cap.current_server_service})`;
+    } else if (!cap.implemented || !cap.available) {
+      currentLabel = "Current server (unavailable)";
+    }
+  }
+  addOption("current_server", currentLabel);
+  for (const svc of cap?.services || []) {
+    const title = svc.title || svc.name;
+    const label = svc.available ? title : `${title} (unavailable)`;
+    addOption(svc.name, label, !svc.available && svc.name !== effective);
+  }
+  addOption("off", "Off");
+  if (!seen.has(effective)) {
+    addOption(effective, cap ? `${effective} (unavailable)` : effective);
+  }
+  select.value = effective;
+}
+
 export function fieldInput(setting, value) {
   let input;
-  if (["choice", "mode", "model"].includes(setting.kind)) {
+  if (setting.kind === "service") {
+    input = el("select");
+    input.dataset.servicePicker = setting.name;
+    populateServiceSelect(input, setting.name, value || "current_server", null);
+  } else if (["choice", "mode", "model"].includes(setting.kind)) {
     input = el("select");
     const choices = setting.kind === "mode"
       ? (state.hello.modes || []).map((mode) => mode.name)
@@ -106,7 +148,9 @@ export function fieldInput(setting, value) {
       input.placeholder = setting.unset_means;
     }
   }
-  input.value = value === null || value === undefined ? "" : value;
+  if (setting.kind !== "service") {
+    input.value = value === null || value === undefined ? "" : value;
+  }
   input.setAttribute("aria-label", setting.label);
   if (setting.kind === "model") {
     input.dataset.modelPicker = "true";
@@ -414,12 +458,26 @@ function runsWithSection(row) {
 
   let capabilityVersion = 0;
   let windowVersion = 0;
+  let utilityVersion = 0;
   const capabilities = async () => {
     const model = inputs.model?.value.trim() || "";
     const version = ++capabilityVersion;
     const reply = await modelCapabilities(model, true);
     if (version === capabilityVersion && model === (inputs.model?.value.trim() || "")) {
       labelEfforts(inputs.thinking_effort, reply, thinkingNote);
+    }
+  };
+  const refreshUtilities = async () => {
+    const model = inputs.model?.value.trim() || "";
+    const version = ++utilityVersion;
+    const reply = await modelUtilities(model || null);
+    if (version !== utilityVersion || model !== (inputs.model?.value.trim() || "")) {
+      return;
+    }
+    for (const [name] of UTILITY_CAPABILITIES) {
+      if (inputs[name]) {
+        populateServiceSelect(inputs[name], name, inputs[name].value, reply);
+      }
     }
   };
   const refreshWindow = async () => {
@@ -445,7 +503,8 @@ function runsWithSection(row) {
   };
 
   const update = async (name, value, control) => {
-    const previous = name === "thinking_effort" ? runs[name] : row[name];
+    const previous = Object.prototype.hasOwnProperty.call(runs, name)
+      ? runs[name] : row[name];
     control.disabled = true;
     sayStatus("Updating…");
     try {
@@ -455,7 +514,11 @@ function runsWithSection(row) {
         sayStatus("Updated");
         if (name === "model") {
           capabilities();
+          refreshUtilities();
           refreshWindow();
+        }
+        if (name === "model" || name === "stt_service") {
+          window.dispatchEvent(new CustomEvent("zero:session-changed"));
         }
         return;
       }
@@ -468,13 +531,18 @@ function runsWithSection(row) {
       sayStatus(reply.next_turn ? "Applies next turn" : "Updated");
       if (name === "model") {
         capabilities();
+        refreshUtilities();
         refreshWindow();
+      }
+      if (name === "model" || name === "stt_service") {
+        window.dispatchEvent(new CustomEvent("zero:session-changed"));
       }
     } catch (error) {
       if (control.tagName === "SELECT") control.value = previous || "";
       sayStatus(error.message);
       if (name === "model") {
         capabilities();
+        refreshUtilities();
         refreshWindow();
       }
       throw error;
@@ -490,15 +558,23 @@ function runsWithSection(row) {
     pending.then(done, done);
     return pending;
   };
-  for (const [name, label, value] of [
+  const sessionFields = [
     ["mode", "Mode", row.mode],
     ["model", "Model", row.model],
     ["thinking_effort", "Thinking", runs.thinking_effort],
-  ]) {
+    ...UTILITY_CAPABILITIES.map(([name, label]) => [
+      name, label, runs[name] || row[name] || "current_server",
+    ]),
+    ["auto_speak", "Auto-speak", runs.auto_speak || row.auto_speak || "off"],
+  ];
+  for (const [name, label, value] of sessionFields) {
+    const isUtility = UTILITY_CAPABILITIES.some(([cap]) => cap === name);
     const setting = state.settings.find((each) => each.name === name)
       || {
-        kind: name === "thinking_effort" ? "choice" : name,
-        choices: value ? [value] : [],
+        name,
+        kind: isUtility ? "service"
+          : name === "thinking_effort" || name === "auto_speak" ? "choice" : name,
+        choices: name === "auto_speak" ? ["off", "on"] : value ? [value] : [],
         label,
       };
     const input = fieldInput({ ...setting, label }, value);
@@ -529,10 +605,12 @@ function runsWithSection(row) {
   }), thinkingNote, status);
   inputs.model.addEventListener("change", () => {
     capabilities();
+    refreshUtilities();
     refreshWindow();
   });
   inputs.thinking_effort.addEventListener("change", capabilities);
   capabilities();
+  refreshUtilities();
   refreshWindow();
   section.append(form);
   if (row.pending && row.pending.length) {

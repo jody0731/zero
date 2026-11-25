@@ -191,8 +191,23 @@ def read_last_line(stream):
     return b""
 
 
+def tool_output(entry, transform, origin=None):
+    """`entry` with `transform` applied to each part of it a tool wrote
+    (effective origin "tool"), the rest shared as it was."""
+    origin = entry.origin or origin
+    if origin == "tool":
+        return transform(entry)
+    children = tuple(tool_output(child, transform, origin)
+                     for child in entry.entries or ())
+    if all(after is before for after, before in zip(children, entry.entries or ())):
+        return entry
+    return replace(entry, entries=children)
+
+
 class Log:
     def __init__(self, path, lock=None, on_append=None, transform=None):
+        """`transform(entry)`: applied to what a tool wrote before it is
+        saved, a stopped call's result too (a server's redaction)."""
         self.path = Path(path)
         self.lock = lock
         self.on_append = on_append
@@ -201,6 +216,7 @@ class Log:
         self.kept = None
         self.needs_directory_sync = False
         self._cache_lock = RLock()
+        self._append_lock = RLock()
 
     def _refresh(self):
         try:
@@ -351,35 +367,41 @@ class Log:
                     raise ValueError(f"broken last record at {self.path}") from None
                 return timeline.read_record(raw, first=line == header)
 
-    def append(self, kind, /, *, redact_entry=None, **fields):
+    def append(self, kind, /, **fields):
         """Append a declared entry or build one from its fields."""
         self.check_lock()
-        with self._cache_lock:
-            try:
-                kept = self._repair()
-                last = kept.records[-1].seq if kept is not None and kept.records else 0
-                time = None
-                if not isinstance(kind, Entry):
-                    time = fields.pop("time", None)
-                    fields.pop("seq", None)
-                record = build_record(
-                    last + 1, kind, fields.pop("parent", None), fields=fields,
-                    time=time, session=self.path.stem,
-                )
-                if transform := redact_entry or self.transform:
-                    entry = transform(record.entry)
-                    if entry is not record.entry:
-                        record = replace(record, entry=entry)
-                self._append_line(
-                    record, kept, durable=has(record.entry, "durable_boundary"),
-                )
-            except OSError:
-                # The write may have left a whole line or a partial line.
-                self.invalidate()
-                raise
-        if self.on_append is not None:
-            self.on_append(record)
-        return record
+        with self._append_lock:
+            with self._cache_lock:
+                try:
+                    kept = self._repair()
+                    last = (
+                        kept.records[-1].seq
+                        if kept is not None and kept.records else 0
+                    )
+                    time = None
+                    if not isinstance(kind, Entry):
+                        time = fields.pop("time", None)
+                        fields.pop("seq", None)
+                    record = build_record(
+                        last + 1, kind, fields.pop("parent", None),
+                        fields=fields, time=time, session=self.path.stem,
+                    )
+                    if self.transform is not None:
+                        entry = tool_output(record.entry, self.transform)
+                        if entry is not record.entry:
+                            record = replace(record, entry=entry)
+                    self._append_line(
+                        record,
+                        kept,
+                        durable=has(record.entry, "durable_boundary"),
+                    )
+                except OSError:
+                    # The write may have left a whole line or a partial line.
+                    self.invalidate()
+                    raise
+            if self.on_append is not None:
+                self.on_append(record)
+            return record
 
     def _append_line(self, record, kept, *, durable):
         data = encode_record(record)

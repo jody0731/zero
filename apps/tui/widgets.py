@@ -272,22 +272,41 @@ class Transcript(VerticalScroll):
             if entries.is_continue(record):
                 return [yours("/continue")]
             text = entries.message_text(record)
+            attached = render.attachment_lines(record)
             if entries.interaction(record):
                 label = render.interaction_label(record)
                 if fields.get("question_text"):
                     label += " · " + fields["question_text"]
                 mark = None if label == "You" else label
-                return [yours(text, mark)]
+                blocks = [yours(text or "[attachment]", mark)] if (
+                    text or attached
+                ) else []
+                blocks.extend(
+                    Plain(f"  📎 {line}", classes="note attachment")
+                    for line in attached
+                )
+                return blocks
             label = who(fields.get("source"), source)
             marks = [] if label == "you" else [label]
             if fields.get("steer") and entries.is_turn_input(record):
                 marks.append("steer")
-            return [yours(text, " · ".join(marks) or None)]
+            head = text or (
+                f"{len(attached)} attachment{'s' if len(attached) != 1 else ''}"
+                if attached else ""
+            )
+            blocks = [yours(head, " · ".join(marks) or None)]
+            blocks.extend(
+                Plain(f"  📎 {line}", classes="note attachment")
+                for line in attached
+            )
+            return blocks
         if kind == "chat/assistant_reply":
             content = entries.assistant_text(record)
             made = []
             if content:
                 made.append(message("●", Markdown(content), "zero"))
+            for line in render.attachment_lines(record):
+                made.append(Plain(f"📎 {line}", classes="note attachment"))
             for call in entries.tool_calls(record):
                 block = Fold(header_of(call, record.get("call_summaries")),
                              classes="tool")
@@ -297,10 +316,19 @@ class Transcript(VerticalScroll):
             return made
         if kind == "tools/result":
             block = self.calls.get(entries.tool_call_id(record))
+            extra = [
+                Plain(f"📎 {line}", classes="note attachment")
+                for line in render.attachment_lines(record)
+            ]
+            extra.extend(
+                Plain(f"↗ {line}", classes="note suggestion")
+                for line in render.search_suggestion_lines(record)
+            )
             if block is not None:
                 block.finish(record)
-                return []
-            return [Plain((fields.get("result") or "")[:200], classes="note")]
+                return extra
+            return [Plain((fields.get("result") or "")[:200], classes="note"),
+                    *extra]
         if kind == "sessions/ask":
             block = self.calls.get(entries.tool_call_id(record))
             if block is not None:
@@ -378,12 +406,20 @@ class Transcript(VerticalScroll):
             self.unread += 1
         self.call_after_refresh(self.stick)
 
-    def sent(self, text, inbox, mark=None):
+    def sent(self, text, inbox, mark=None, attachments=()):
         """A message of the user's, shown as it is sent from here."""
         if inbox in self.shown:
             return
         self.shown.add(inbox)
-        self.echoes[inbox] = yours(text, mark)
+        names = [a.get("name") or a.get("attachment_id") or "file"
+                 for a in attachments]
+        shown = text
+        if not shown and names:
+            shown = ", ".join(names)
+        elif names:
+            extra = ", ".join(names)
+            mark = f"{mark} · 📎 {extra}" if mark else f"📎 {extra}"
+        self.echoes[inbox] = yours(shown, mark)
         self.mount(self.echoes[inbox])
         # Sending takes the user to the end
         self.following = True

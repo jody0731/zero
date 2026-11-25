@@ -64,7 +64,8 @@ ENTRY_SPECS = (
         "searchable", "durable_boundary",
     }), project=handoff, role="compaction_handoff",
               public_fields=("summary", "handoff_at", "reason", "line", "tokens_before",
-                             "tokens_after", "instructions", "interaction"),
+                             "tokens_after", "instructions", "attachments",
+                             "interaction"),
               replay_notice=compaction_notice_for),
     EntrySpec("context/compaction_notice", frozenset({
         "model_visible", "compaction_notice", "note",

@@ -308,6 +308,9 @@ zero grant list ID                                 # grant forget ID GRANT
 zero model server list                             # probe, connect, disconnect
 zero model window MODEL [TOKENS | --reset]         # show, set or reset a model's context window
 zero model features MODEL                          # what it honours of its API; --test
+zero attachment add PATH --session ID              # list, get, prune session attachments
+zero transcribe PATH                               # speech-to-text via active/pinned STT service
+zero speak "hello" --output reply.wav              # text-to-speech or cached reply (--session, --play)
 zero setting set max_subagent_depth 1             # setting list
 zero server status                                 # whether the server runs and what keeps it busy
 zero doctor                                        # what ZERO needs from the machine, tried
@@ -379,6 +382,41 @@ An unavailable sandbox fails closed. Unmarked calls keep their normal mode's
 behavior. ZERO chooses the mark; it can still send an unmarked read for review.
 Reading the internet uses `web_fetch` or `web_search`, without review; local
 network access keeps its existing permission checks.
+
+### Multimodal files, media and voice
+
+Attach files of any type in the browser (drag-drop, paste, or picker), terminal,
+CLI (`--attach`), or MCP (`zero_start`/`zero_reply`). Attachments are stored
+once as immutable snapshots under configurable soft size limits
+(`max_attachment_megabytes`, `max_attachment_store_megabytes`) and mounted
+read-only inside the sandbox.
+
+- **Native delivery & isolated readers:** supported images, audio, video, and
+  documents are delivered natively to models that support them under
+  prepared-request token accounting, and fall back cleanly when switching
+  models. ZERO also inspects and slices PDFs, Office files, archives, and media
+  inside an isolated networkless sandbox (`inspect_file`, `read_file_part`),
+  renders pages/slides to PNG for visual verification, and surfaces workspace
+  artifacts as inline deliverable cards with `present_file`.
+- **Same-Provider Default:** **Settings → General** configures defaults for
+  `search`, `stt`, `tts`, `image`, and `video` services, and the session Details
+  panel (or TUI/CLI `session set`) pins them per session. **Current server**
+  uses the session's active model server and free/local fallbacks without
+  silently billing another paid provider.
+- **Media generation:** when supported by the active or pinned service, ZERO can
+  call permission-gated `generate_image`, `generate_speech`, and `generate_video`
+  tools, saving outputs directly to the session attachment store as inline
+  deliverable cards.
+- **Live dictation & spoken replies:** click the microphone in the browser
+  composer (even before creating a session) or run `/dictate` in the TUI to
+  dictate directly into editable text—streaming live word-by-word on OpenAI and
+  Google or falling back cleanly to batch transcription on DeepSeek and local
+  Whisper. Click **Listen** on any assistant reply (or run `/speak` in the TUI,
+  `zero speak` in the CLI, or enable `auto_speak` in Session Details / Settings)
+  to synthesize and cache spoken audio per reply without duplicate synthesis.
+  `zero doctor` reports optional reader and OS audio tools (`soffice`,
+  `ffprobe`, `tesseract`, `whisper-cli`, `pw-record`/`arecord`, `pw-play`/
+  `paplay`/`ffplay`).
 
 ### Private credentials
 

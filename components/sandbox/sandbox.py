@@ -111,6 +111,11 @@ SKILLS_SHOWN = (
     "; its skills folder ({skills}) is shown again, read-only, so a skill "
     "there is read and its scripts run as anywhere else"
 )
+# Beside HIDDEN_HOME, where this session's attachments folder is shown again
+ATTACHMENTS_SHOWN = (
+    "; this session's attachments folder ({attachments}) is shown again, "
+    "read-only"
+)
 # What the sandbox's walls look like in a command's output
 WALL_MARKS = (
     "Read-only file system",
@@ -212,7 +217,7 @@ class Sandbox:
 
     def __init__(self, workspace, home=None, read_only=False, private=(),
                  protected=(), scratch=None, shown=(), own_skills=None,
-                 no_changes=False):
+                 no_changes=False, own_attachments=None):
         self.workspace = Path(workspace).resolve()
         # The harness owner's own folders (ZERO's home with its keys and
         # history; private_folders): hidden from every command
@@ -224,6 +229,8 @@ class Sandbox:
         # ZERO's own skills folder, among those shown, which the environment
         # line names: its skills' scripts run in here (None: none shown)
         self.own_skills = own_skills
+        # This session's read-only attachments folder, among those shown
+        self.own_attachments = own_attachments
         # readOnly, or a workspace of /: mounted read-only like the rest
         self.no_changes = no_changes
         self.read_only = no_changes or read_only or self.workspace == Path("/")
@@ -393,6 +400,10 @@ class Sandbox:
         if self.private:
             shown = (SKILLS_SHOWN.format(skills=self.own_skills)
                      if self.own_skills is not None else "")
+            if self.own_attachments is not None:
+                shown += ATTACHMENTS_SHOWN.format(
+                    attachments=self.own_attachments,
+                )
             hidden = [HIDDEN_HOME.format(home=self.private[0]) + shown]
         seen = "; ".join([OWN_PROCESSES, *hidden])
         if self.read_only:

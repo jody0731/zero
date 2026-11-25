@@ -13,10 +13,11 @@ CORE_SWITCHABLE = ("mode", "model", "workspace")
 MODEL_VISIBLE = list(CORE_SWITCHABLE)
 SWITCHABLE = list(CORE_SWITCHABLE)
 OLD_NAMES = {}
+NONE_DEFAULTS = {}
 OLD_LOG_FIELDS = {"plugin_errors": "hook_errors"}
 
 
-def add_switchable(name, aliases=(), *, model_visible=False):
+def add_switchable(name, aliases=(), *, model_visible=False, none_default=None):
     """Register a component-owned switchable session setting."""
     if name not in SWITCHABLE:
         SWITCHABLE.append(name)
@@ -24,6 +25,8 @@ def add_switchable(name, aliases=(), *, model_visible=False):
         MODEL_VISIBLE.append(name)
     for alias in aliases:
         OLD_NAMES[alias] = name
+    if none_default is not None:
+        NONE_DEFAULTS[name] = none_default
 REWOUND = (
     "[The user rewound this conversation. Continue from here. Files, memory "
     "and running work retain their current state.{effects}]"
@@ -109,7 +112,13 @@ def log_format(records: Sequence[LogRecord]):
 
 def renamed(values):
     """A log's settings or switch under today's names."""
-    return {OLD_NAMES.get(name, name): value for name, value in values.items()}
+    result = {}
+    for name, value in values.items():
+        canonical = OLD_NAMES.get(name, name)
+        if value is None and canonical in NONE_DEFAULTS:
+            value = NONE_DEFAULTS[canonical]
+        result[canonical] = value
+    return result
 
 
 def is_switch(record: LogRecord):

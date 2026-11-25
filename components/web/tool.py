@@ -26,14 +26,14 @@ import httpx2
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
 
-from core.asking import DECLINED, PARK, TO_APPROVER, put_to_user
+from core.asking import TO_APPROVER
 from core.control import Stopped
-from core.hooks import Deny, Hook, Park
 from core.tools import Result, tool
+from components.model import SERVICE_CURRENT_SERVER, SERVICE_OFF
 from components.model.apis.search import SearchError
 from components.model.servers import ModelServerError
 from components.web import SETTINGS
-from components.web.search import available_services, select
+from components.web.search import available_services, eligible_services, select
 
 QUERY_CHARS = 128
 DEFAULT_SEARCH_COUNT = 10
@@ -73,12 +73,28 @@ def resolve_host(host):
 
 
 class Web:
-    """The session server's name and the web tools' network access."""
+    """The session's live model server and the web tools' network access."""
 
     def __init__(self, transport=None, resolve=resolve_host, *, model_server=None):
         self.model_server = model_server
         self.transport = transport
         self.resolve = resolve
+        self._session = None
+
+    def bind_session(self, session):
+        """Attach the live session so model switches and settings stay current."""
+        self._session = session
+
+    def active_model_server(self, session=None):
+        """Explicit server pin if given, else live `session.model.server.name`."""
+        if self.model_server is not None:
+            return self.model_server
+        live = session or self._session
+        if live is None:
+            return None
+        model = getattr(live, "model", None)
+        server = getattr(model, "server", None)
+        return getattr(server, "name", None)
 
 
 class Refused(Exception):
@@ -86,6 +102,24 @@ class Refused(Exception):
 
 
 # web_search
+
+
+def active_search_setting(limits, web=None, session=None):
+    """Authoritative `search_service`: session.settings first, else limits."""
+    live = session or (web._session if web is not None else None)
+    if live is not None:
+        session_settings = getattr(live, "settings", None)
+        if isinstance(session_settings, dict):
+            for key in ("search_service", "web_search_service"):
+                if key in session_settings:
+                    value = session_settings[key]
+                    return SERVICE_CURRENT_SERVER if value is None else value
+    if limits is not None:
+        for key in ("search_service", "web_search_service"):
+            if key in limits:
+                value = limits[key]
+                return SERVICE_CURRENT_SERVER if value is None else value
+    return SERVICE_CURRENT_SERVER
 
 
 def search_ready(context):
@@ -97,27 +131,33 @@ SEARCH_DESCRIPTION = (
     "The source URLs can be read with web_fetch. "
     "The server has network access for this tool. "
     "Provider-written summaries are labeled. The selected service receives "
-    "the query and result count. A failed lookup reports the service and "
-    "error. A new call can name another available service. Switching away "
-    "from the user's saved service asks them about that lookup."
+    "the query and result count. The session's search_service setting "
+    "controls which service runs the lookup; under current_server only the "
+    "active model server or keyless fallbacks may run. A failed lookup "
+    "reports the service and error."
 )
 
 
 def describe_search_service(limits, context):
     text = "Optional service name for this lookup. Omit to use the current choice."
-    if not context.get("web"):
+    web = context.get("web")
+    if not web:
         return text
+    session = context.get("web_session")
+    saved = active_search_setting(limits, web, session)
+    if saved == SERVICE_OFF:
+        return "Web search is off in this session's settings."
     try:
         services = available_services()
     except ModelServerError:
         return text
-    chosen, _ = select(
-        services, context["web"].model_server, limit(limits, "web_search_service"),
-    )
+    model_server = web.active_model_server(session)
+    chosen, _ = select(services, model_server, saved)
+    allowed = eligible_services(services, model_server, saved)
     if chosen:
         text += f" The current choice is {chosen.name}."
-    if services:
-        text += f" Available services are {', '.join(services)}."
+    if allowed:
+        text += f" Available services are {', '.join(allowed)}."
     return text
 
 
@@ -141,52 +181,6 @@ def search_count(service, count, limits):
                limit(limits, "web_search_max_results"))
 
 
-class SearchApproval(Hook):
-    """Bind the selection before sending. A switch from a pin asks the user once."""
-
-    def __init__(self, ask):
-        self._ask = ask
-
-    def approve(self, call):
-        if call.name != web_search.__name__:
-            return None
-        context = call.turn.session.tool_context
-        web, limits = context["web"], context["limits"]
-        query, count = call.args["query"], call.args.get("count")
-        if search_arguments_error(query, count, limits=limits):
-            return None
-        saved = limit(limits, "web_search_service")
-        requested = call.args.get("service")
-        try:
-            chosen, reason = select(available_services(), web.model_server,
-                                    saved, requested)
-        except ModelServerError:
-            chosen, reason = None, "The search service configuration could not be read."
-        if chosen is None:
-            call.notes["web"] = {"error": reason, "service": requested or saved}
-            return None
-        count = search_count(chosen, count, limits)
-        call.notes["web"] = {
-            "service": chosen.name, "count": count,
-            "binding": chosen.binding(query, count),
-        }
-        if saved is None or chosen.name == saved:
-            return None
-        host = urlsplit(chosen.url).netloc
-        about = (f"Send this query and a request for up to {count} results to "
-                 f"{chosen.label} at {host} for this lookup. "
-                 f"The saved search service is {saved}.")
-        call.notes["requires_user"] = True
-        call.notes["requires_choice"] = True
-        if self._ask is PARK:
-            return Park(about, about)
-        if self._ask is None:
-            return Deny("The user needs to approve this search service switch.")
-        if not put_to_user(call, self._ask, about):
-            return Deny(DECLINED)
-        return None
-
-
 @tool(
     SEARCH_DESCRIPTION,
     optional=("count", "service"),
@@ -204,11 +198,35 @@ class SearchApproval(Hook):
         "service": ("string", "The search service's name"),
         "source_urls": ({"type": "array", "items": {"type": "string"}},
                         "Source URLs returned by the service"),
+        "citations": (
+            {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "urls": {"type": "array", "items": {"type": "string"}},
+                        "start_index": {"type": "integer"},
+                        "end_index": {"type": "integer"},
+                    },
+                    "required": ["text", "urls"],
+                },
+            },
+            "Grounded text spans and their cited source URLs",
+        ),
+        "web_search_queries": (
+            {"type": "array", "items": {"type": "string"}},
+            "Search queries executed by the provider for grounding",
+        ),
+        "search_suggestions_html": (
+            "string",
+            "Provider search suggestion HTML for sandboxed display",
+        ),
     },
 )
 def web_search(query, count=None, service=None, web=None, notes=None, limits=None,
-               stop=None):
-    """Send a lookup to the service selected for this call."""
+               stop=None, web_session=None):
+    """Send a lookup to the service selected by the session's search_service."""
     error = search_arguments_error(query, count, limits=limits)
     if error:
         return Result(error, failed=True)
@@ -216,29 +234,24 @@ def web_search(query, count=None, service=None, web=None, notes=None, limits=Non
         return Result("Search is unavailable in this session.", failed=True)
     notes = notes if notes is not None else {}
     route = notes.setdefault("web", {})
-    if route.get("error"):
-        return search_failed(route["service"], route["error"])
-    saved = limit(limits, "web_search_service")
+    saved = active_search_setting(limits, web, web_session)
+    model_server = web.active_model_server(web_session)
     try:
         services = available_services()
     except ModelServerError:
         return search_failed(
-            route.get("service", service or saved),
+            service or (None if saved in (SERVICE_CURRENT_SERVER, SERVICE_OFF)
+                        else saved),
             "The search service configuration could not be read.",
         )
-    if "binding" in route:
-        chosen = services.get(route["service"])
-        if chosen is None or route["binding"] != chosen.binding(query, route["count"]):
-            return search_failed(route["service"],
-                                 "The service or query changed before sending.")
-        count = route["count"]
-    else:
-        chosen, reason = select(services, web.model_server, saved, service)
-        if chosen is None:
-            return search_failed(service or saved, reason)
-        if saved is not None and chosen.name != saved:
-            return search_failed(chosen.name, "This switch needs the user's approval.")
-        count = search_count(chosen, count, limits)
+    chosen, reason = select(services, model_server, saved, service)
+    if chosen is None:
+        reported_service = (
+            service if service is not None
+            else (None if saved in (SERVICE_CURRENT_SERVER, SERVICE_OFF) else saved)
+        )
+        return search_failed(reported_service, reason)
+    count = search_count(chosen, count, limits)
 
     seconds = limit(limits, "web_timeout")
     route.update(search=True, service=chosen.name, billed=None)
@@ -272,7 +285,40 @@ def render_search(service, answer):
 
     sources = [source for source in answer.sources if redact(source.url) == source.url]
     fields = {"service": service.name, "source_urls": [item.url for item in sources]}
+    citations = []
+    for span in getattr(answer, "citations", ()) or ():
+        urls = [url for url in span.urls if redact(url) == url]
+        if not urls:
+            continue
+        row = {"text": redact(span.text), "urls": urls}
+        if span.start_index is not None:
+            row["start_index"] = span.start_index
+        if span.end_index is not None:
+            row["end_index"] = span.end_index
+        citations.append(row)
+    if citations:
+        fields["citations"] = citations
+    suggestions = getattr(answer, "suggestions", None)
+    queries = []
+    if suggestions is not None:
+        queries = [
+            redact(q) for q in suggestions.web_search_queries
+            if isinstance(q, str) and q.strip()
+        ]
+        if queries:
+            fields["web_search_queries"] = queries
+        if suggestions.rendered_content:
+            fields["search_suggestions_html"] = redact(suggestions.rendered_content)
     if not sources:
+        if answer.summary:
+            lines = [
+                f"Summary written by {service.title}",
+                "",
+                answer.summary,
+            ]
+            if queries:
+                lines.extend(("", f"Search queries: {', '.join(queries)}"))
+            return Result(redact("\n".join(lines)), fields=fields)
         return Result(f"No results from {service.label}.", fields=fields)
     lines = [f"{len(sources)} results from {service.label}."]
     if answer.summary:
@@ -287,6 +333,8 @@ def render_search(service, answer):
                           f"   {' '.join(source.summary.split())}"))
         elif source.snippet:
             lines.append(f"   {' '.join(source.snippet.split())}")
+    if queries:
+        lines.extend(("", f"Search queries: {', '.join(queries)}"))
     return Result(redact("\n".join(lines)), fields=fields)
 
 

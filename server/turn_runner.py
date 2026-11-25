@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -19,6 +20,14 @@ from sessions.lock import Busy
 from sessions.log import fresh_log
 
 MAX_RESUMES = 3
+
+
+def _payload_entries(payload):
+    """Reconstruct child entries (e.g. attachments/file) from an inbox payload."""
+    raw = payload.get("entries") if isinstance(payload, dict) else None
+    if not raw:
+        return ()
+    return tuple(entries.Entry.from_dict(item, root=False) for item in raw)
 
 
 def switch_note(changes, session):
@@ -418,10 +427,12 @@ class TurnRunner:
             return
         payload = json.loads(row["payload"])
         text = payload["text"]
+        child_entries = _payload_entries(payload)
         workspace = Path(runtime.store.session(sid)["workspace"])
         if not workspace.is_dir():
             runtime.end_for_missing_workspace(
-                sid, row, log, records, begun, text, workspace
+                sid, row, log, records, begun, text, workspace,
+                child_entries=child_entries,
             )
             return
         try:
@@ -433,7 +444,12 @@ class TurnRunner:
                 ):
                     log.append("tool", **fields)
             else:
-                log.append("user", inbox=row["id"], source=row["source"], text=text)
+                user_fields = {
+                    "inbox": row["id"], "source": row["source"], "text": text,
+                }
+                if child_entries:
+                    user_fields["entries"] = child_entries
+                log.append("user", **user_fields)
             runtime.store.begin(row["arrival"], sid)
             log.append(
                 "turn_end", inbox=row["id"], outcome="crashed",
@@ -445,17 +461,23 @@ class TurnRunner:
         if begun:
             turn = session.resume(inbox=row["id"], control=control)
         else:
+            carried = {
+                name: payload[name] for name in runtime.message_fields()
+                if payload.get(name) is not None and name != "attachments"
+            }
+            if child_entries:
+                carried["entries"] = child_entries
             turn = session.open_turn(
                 text, inbox=row["id"], source=row["source"], control=control,
                 continued=bool(payload.get("continue")),
                 queued=bool(payload.get("follow_up")),
-                carried={name: payload[name] for name in runtime.message_fields()
-                         if payload.get(name) is not None},
+                carried=carried,
             )
         runtime.store.begin(row["arrival"], sid)
         runtime.finish_turn(sid, session, turn, row)
 
-    def end_for_missing_workspace(self, sid, row, log, records, begun, text, workspace):
+    def end_for_missing_workspace(self, sid, row, log, records, begun, text, workspace,
+                                  *, child_entries=()):
         """End the turn, its history kept: no command can run in a folder that
         isn't there."""
         runtime = self.runtime
@@ -465,7 +487,12 @@ class TurnRunner:
             ):
                 log.append("tool", **fields)
         else:
-            log.append("user", inbox=row["id"], source=row["source"], text=text)
+            user_fields = {
+                "inbox": row["id"], "source": row["source"], "text": text,
+            }
+            if child_entries:
+                user_fields["entries"] = child_entries
+            log.append("user", **user_fields)
         runtime.store.begin(row["arrival"], sid)
         log.append(
             "turn_end", inbox=row["id"], outcome="failed",
@@ -528,6 +555,8 @@ class TurnRunner:
             "ask": entry.id, "yes": yes, "inbox": row["id"],
             "source": row["source"], "text": text, "consent": verdict,
         }
+        if child_entries := _payload_entries(payload):
+            fields["entries"] = child_entries
         if payload.get("sender_session"):
             fields["sender_session"] = payload["sender_session"]
         if choice is not None:
@@ -654,6 +683,51 @@ class TurnRunner:
                 runtime.log(sid, lock).append(type, **fields)
             finally:
                 lock.release()
+
+    def append_side_record(self, sid, entry, *, timeout=10.0):
+        """Append a non-turn side entry through the session's single writer.
+
+        Safe whether the session is idle, waiting on an ask, queued, or
+        actively running a turn: when a turn runner already holds the session
+        lock and live harness log, appends through that same log under
+        `state.lock`; otherwise acquires the session lock directly.
+        """
+        runtime = self.runtime
+        if runtime.store.session(sid) is None:
+            raise Refused(f"no session {sid!r}")
+        state = runtime.state(sid)
+        deadline = time.monotonic() + timeout
+        while True:
+            with state.lock:
+                if runtime.store.session(sid) is None:
+                    raise Refused(f"no session {sid!r}")
+                if state.runner is not None:
+                    harness = state.harness
+                    if (
+                        harness is not None
+                        and harness.log.lock is not None
+                        and harness.log.lock.held
+                    ):
+                        return harness.log.append(entry)
+                else:
+                    lock = runtime.session_lock(sid)
+                    try:
+                        lock.acquire()
+                    except Busy as error:
+                        raise Refused(str(error)) from None
+                    try:
+                        log = runtime.read_log(sid)
+                        previous_lock = log.lock
+                        log.lock = lock
+                        try:
+                            return log.append(entry)
+                        finally:
+                            log.lock = previous_lock
+                    finally:
+                        lock.release()
+            if time.monotonic() >= deadline:
+                raise Refused("wait limit exceeded for session writer")
+            time.sleep(0.02)
 
     def run_on_session(self, sid, name, fn, *, if_busy=None, precheck=None):
         """Run `fn(session)` on a background thread held as `sid`'s runner.

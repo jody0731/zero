@@ -94,17 +94,23 @@ def server_pid(paths):
 
 def busy_text(busy):
     """'1 turn and 2 jobs are running', from busy_with()'s reasons."""
+    labels = (
+        ("turns", "turn", "turns"),
+        ("queued", "queued message", "queued messages"),
+        ("jobs", "job", "jobs"),
+        ("dictation", "dictation", "dictations"),
+        ("speech", "speech request", "speech requests"),
+    )
     parts = []
-    for name, one, many in (("turns", "turn", "turns"),
-                            ("queued", "queued message", "queued messages"),
-                            ("jobs", "job", "jobs")):
+    total = 0
+    for name, one, many in labels:
         count = len(busy.get(name, ()))
         if count:
+            total += count
             parts.append(f"{count} {one if count == 1 else many}")
     if not parts:
         return "nothing is running"
     text = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
-    total = sum(len(busy.get(n, ())) for n in ("turns", "queued", "jobs"))
     return f"{text} {'is' if total == 1 else 'are'} running"
 
 

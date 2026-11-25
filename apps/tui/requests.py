@@ -13,37 +13,51 @@ WAITING_MAX = 32
 
 
 class Requests:
-    """`submit(work, then, failed)`: `work()` on the requests thread, then
-    `then(result)` or `failed(error)` handed to `deliver`, which runs them on
-    the screen."""
+    """`submit(work, then, failed, lane="normal")`: runs `work()` off the
+    drawing thread, then hands `then(result)` or `failed(error)` to `deliver`.
+    Normal requests run in FIFO order on one worker; `upload` and `urgent`
+    (such as stop) run on dedicated lanes so slow uploads never block stop."""
 
     def __init__(self, deliver, waiting_max=WAITING_MAX):
         self.deliver = deliver
         self.waiting = queue.Queue(maxsize=waiting_max)
+        self.lanes = {
+            "normal": self.waiting,
+            "upload": queue.Queue(maxsize=waiting_max),
+            "urgent": queue.Queue(maxsize=waiting_max),
+        }
         # Requests submitted and not yet answered, the one running included
         self.open = 0
         self.settled = threading.Condition()
-        self.thread = threading.Thread(target=self.run, name="tui-requests",
-                                       daemon=True)
-        self.thread.start()
+        self.threads = {}
+        for name, box in self.lanes.items():
+            thread_name = "tui-requests" if name == "normal" else f"tui-{name}"
+            thread = threading.Thread(
+                target=self.run, args=(box,), name=thread_name, daemon=True,
+            )
+            thread.start()
+            self.threads[name] = thread
+        self.thread = self.threads["normal"]
 
-    def submit(self, work, then=None, failed=None):
+    def submit(self, work, then=None, failed=None, *, lane="normal"):
+        box = self.lanes.get(lane, self.waiting)
         try:
             with self.settled:
                 self.open += 1
-            self.waiting.put_nowait((work, then, failed))
+            box.put_nowait((work, then, failed))
         except queue.Full:
             self.done()
             error = TimeoutError(
-                f"ZERO's server hasn't answered; {self.waiting.maxsize} "
+                f"ZERO's server hasn't answered; {box.maxsize} "
                 "requests wait, and this one is dropped"
             )
             if failed is not None:
                 failed(error)
 
-    def run(self):
+    def run(self, box=None):
+        box = box or self.waiting
         while True:
-            work, then, failed = self.waiting.get()
+            work, then, failed = box.get()
             if work is None:
                 return
             try:
@@ -68,8 +82,9 @@ class Requests:
             return self.settled.wait_for(lambda: self.open == 0, timeout)
 
     def stop(self):
-        """The thread ends after the requests already waiting."""
-        try:
-            self.waiting.put_nowait((None, None, None))
-        except queue.Full:
-            pass
+        """The threads end after the requests already waiting."""
+        for box in self.lanes.values():
+            try:
+                box.put_nowait((None, None, None))
+            except queue.Full:
+                pass

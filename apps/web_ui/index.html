@@ -53,9 +53,11 @@
     <section id="ask" class="ask" hidden aria-live="polite"></section>
     <form id="composer" class="composer" autocomplete="off">
       <div id="commands" class="command-list" hidden></div>
+      <div id="composer-attachments" class="composer-attachments" hidden></div>
       <textarea id="text" rows="2"
                 placeholder="Message" aria-label="Message"></textarea>
       <div class="composer-row">
+        <span id="composer-controls" class="composer-controls"></span>
         <label class="queue"><input id="queue" type="checkbox"> Queue</label>
         <span id="draft-status" class="sub" role="status"></span>
         <span class="spacer"></span>

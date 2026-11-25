@@ -6,12 +6,35 @@ from core import entries
 from core.entries import EntrySpec
 
 
+def hosted_output_text(entry):
+    """Portable summary of a completed provider-executed output."""
+    if summary := entry.get("summary"):
+        return summary
+    kind = entry.get("kind") or "hosted_output"
+    status = entry.get("status")
+    return f"[Hosted {kind}: {status}]" if status else f"[Hosted {kind}]"
+
+
 ENTRY_SPECS = (
     EntrySpec("model/provider_item", frozenset({"private_continuation"}),
               role="provider_item", required_fields=("route", "kind"), fields_schema={
                   "route": (str, type(None)), "kind": str, "item": object,
                   "call_id": str, "name": str, "arguments": str,
                   "extra_content": Mapping, "thought_signature": str,
+                  "attachment_id": (str, type(None)),
+              }),
+    EntrySpec("model/hosted_output", frozenset({"hosted_output", "model_visible",
+                                                "searchable"}),
+              role="hosted_output",
+              project=hosted_output_text,
+              required_fields=("kind", "execution", "status"),
+              public_fields=("kind", "execution", "status", "item_id", "call_id",
+                             "summary", "output"),
+              fields_schema={
+                  "kind": str, "execution": str, "status": str,
+                  "item_id": (str, type(None)), "call_id": (str, type(None)),
+                  "route": (str, type(None)), "summary": (str, type(None)),
+                  "output": object,
               }),
 )
 
@@ -45,6 +68,9 @@ def reply_from_stream(draft, *, route=None, keep_continuation=True):
     for _, call in sorted(draft.calls.items()):
         fields = {key: value for key, value in call.items() if key != "id"}
         children.append(entries.make("tool_call", id=call["id"], fields=fields))
+    for _, item in sorted(draft.hosted_outputs.items()):
+        children.append(entries.make("hosted_output",
+                                     fields={"route": route, **item}))
     for _, item in sorted(draft.unrecognized_outputs.items()):
         children.append(entries.Entry("model/unrecognized_output", fields=item))
     if route is not None:

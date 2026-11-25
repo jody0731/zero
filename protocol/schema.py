@@ -67,7 +67,8 @@ def build():
         "type": "object",
         "properties": {"ok": {"const": False}, "error": {"type": "string"},
                        "replayed": REPLAYED, "unknown_fields": UNKNOWN_FIELDS,
-                       "model_failure": MODEL_FAILURE_REF},
+                       "model_failure": MODEL_FAILURE_REF,
+                       "over_limit": {"type": "boolean"}},
         "required": ["ok", "error"],
     }}
     defs["entry"] = ENTRY

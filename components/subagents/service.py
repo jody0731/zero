@@ -129,6 +129,7 @@ class SubagentsService(Service):
     # messages that session's subagents (server/server.py checks whose
     # command it is)
     workflow_messages = ("subagent/send",)
+    principal_messages = ("subagent/send",)
 
     def __init__(self, clock=time.time, zero_command=None):
         """`zero_command`: how a command runs this ZERO, as start_subagent
@@ -378,7 +379,8 @@ class SubagentsService(Service):
         )
 
     def made(self, sid, title, start_from, row, task, source,
-             mode=None, model=None, *, parent_log=None):
+             mode=None, model=None, *, parent_log=None, claims=(),
+             after_commits=()):
         """A subagent's session made under `sid` with `row` (its subagents
         row, less the session) and its task's notice, in one
         transaction; (its id, None), or (None, why it wasn't started)."""
@@ -386,9 +388,12 @@ class SubagentsService(Service):
 
         def rows_beside(db, child, *, parent):
             text = template.format(parent=sid, title=parent["title"], task=task)
+            notice_payload = {"text": text, "sender_session": sid}
+            for claim in claims:
+                claim(db, child, notice_payload)
             self.store.add(db, {**row, "session": child},
                            (f"subagent-task:{child}", child, subtools.ACROSS,
-                            {"text": text, "sender_session": sid}))
+                            notice_payload))
 
         try:
             if start_from == "fork":
@@ -401,29 +406,35 @@ class SubagentsService(Service):
                 )
         except Refused as error:
             return None, f"Not started: {error}."
+        for after_commit in after_commits:
+            after_commit(child)
         self.runtime.wake(child)
         return child, None
 
-    def workflow_send(self, request):
+    def workflow_send(self, request, principal=None):
         """subagent/send: a workflow's message for the session it works for
         (`for_session`): a new subagent of it, `text` its task (a handoff,
         no estimate: the workflow reads its answers), or `text` to one of
         its subagents (`session`), as a notice. The kernel has checked that
         a command sending it is that session's."""
-        names = ("id", "text", "for_session", "source")
-        for name in names:
+        for name in ("id", "for_session", "source"):
             if not isinstance(request.get(name), str) or not request[name]:
                 raise Refused(f"subagent/send needs {name}, a string")
+        if not isinstance(request.get("text"), str):
+            raise Refused("subagent/send needs text, a string")
         for name in ("session", "title", "mode", "model"):
             value = request.get(name)
             if value is not None and not isinstance(value, str):
                 raise Refused(f"subagent/send's {name} must be a string")
+        attachments = request.get("attachments")
+        if attachments is not None and not isinstance(attachments, list):
+            raise Refused("subagent/send's attachments must be a list")
         sid, text = request["for_session"], request["text"].strip()
         info = self.runtime.store.session(sid)
         if info is None:
             raise Refused(f"no session {sid!r}")
-        if not text:
-            raise Refused("subagent/send's text is empty")
+        if not text and not attachments:
+            raise Refused("subagent/send needs text or attachments")
         mode, model = request.get("mode"), request.get("model")
         if mode is not None:
             self.runtime.check_mode(mode)
@@ -435,6 +446,23 @@ class SubagentsService(Service):
             if not model:
                 raise Refused("a model needs a name")
         to = request.get("session")
+        extra = {"attachments": attachments} if attachments is not None else None
+        prepared = (
+            self.runtime.prepare_message(
+                Message(request["id"], text, session=to, source=request["source"]),
+                extra,
+                principal=principal,
+            )
+            if extra else ()
+        )
+        claims = tuple(item.claim for item in prepared if item.claim is not None)
+        after_commits = tuple(
+            item.after_commit for item in prepared if item.after_commit is not None
+        )
+        fallback_title = next(
+            (item.fallback_title for item in prepared if item.fallback_title),
+            None,
+        )
         if to is not None:
             if mode is not None or model is not None:
                 raise Refused("mode and model apply to a new subagent only")
@@ -443,7 +471,9 @@ class SubagentsService(Service):
             payload = {"sender_session": sid, "text": subtools.WORKFLOW_MESSAGE.format(
                 parent=sid, title=info["title"], text=text)}
             inbox = f"workflow:{request['id']}"
-            self.store.notice(inbox, to, subtools.ACROSS, payload)
+            self.store.notice(inbox, to, subtools.ACROSS, payload, claims=claims)
+            for after_commit in after_commits:
+                after_commit(to)
             self.runtime.wake(to)
             return {"ok": True, "session": to, "started": False, "inbox": inbox}
         deepest, depth = self.max_depth(), self.depth(sid) + 1
@@ -455,7 +485,12 @@ class SubagentsService(Service):
             raise Refused(f"session {sid} is at level {depth - 1}, and "
                           f"subagents go {deepest} {levels} below a session "
                           "the user started")
-        title = " ".join((request.get("title") or "").split()) or first_words(text)
+        title = (
+            " ".join((request.get("title") or "").split())
+            or first_words(text)
+            or fallback_title
+            or "Attachment"
+        )
         parent_log = self.runtime.read_log(sid)
         branch = self.runtime.read_branch(sid, log=parent_log)
         row = {
@@ -467,6 +502,7 @@ class SubagentsService(Service):
         child, why = self.made(
             sid, title, "handoff", row, text, WORKFLOW,
             mode=mode, model=model, parent_log=parent_log,
+            claims=claims, after_commits=after_commits,
         )
         if child is None:
             raise Refused(why)

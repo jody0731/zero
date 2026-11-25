@@ -420,9 +420,11 @@ def run_doctor():
 
 
 COMMANDS = ("zero", "zero new", "zero -r", "zero -p TEXT", "zero session …",
-            "zero job …", "zero grant …", "zero model …", "zero setting …",
-            "zero server hello|stop|status|run", "zero mcp serve|list|get|add|remove",
-            "zero web", "zero tui", "zero http-door serve|install|uninstall|status",
+            "zero attachment …", "zero transcribe PATH", "zero speak …",
+            "zero job …", "zero grant …", "zero model …",
+            "zero setting …", "zero server hello|stop|status|run",
+            "zero mcp serve|list|get|add|remove", "zero web", "zero tui",
+            "zero http-door serve|install|uninstall|status",
             "zero install|uninstall", "zero update", "zero doctor")
 OWN_COMMANDS = ("server", "mcp", "install", "uninstall", "update", "doctor",
                 "web", "http-door")
@@ -580,8 +582,13 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
         return run_doctor()
     if args.command == "tui" and argv_of(argv)[:1] == ["tui"]:
         return run_tui(argv_of(argv)[1:])
-    if args.command == "tui" or (args.command is None and args.p is None):
+    has_attach = bool(getattr(args, "attach", None))
+    if args.command == "tui" or (
+        args.command is None and args.p is None and not has_attach
+    ):
         return run_http_door(["web", *argv_of(argv)])
+    if args.command is None and args.p is None and has_attach:
+        args.p = ""
     paths = Paths()
     options = {"command": start_command, "popen": start_popen, "systemd": systemd,
                "report": lambda text: print(text, file=sys.stderr)}
@@ -601,7 +608,7 @@ def main(argv=None, start_command=None, start_popen=subprocess.Popen, unit=None,
             return commands.run(argv_of(argv), connection)
         else:
             return print_turn(connection, args, commands.workspace_of(args.cd))
-    except (NotRunning, ProtocolError, LookupError, Hung) as error:
+    except (NotRunning, ProtocolError, LookupError, Hung, ValueError) as error:
         print(error, file=sys.stderr)
         return 1
     except OSError as error:

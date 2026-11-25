@@ -16,17 +16,36 @@ and typed event parser remain the SDK's, without a second request-type walk.
 
 import json
 from collections.abc import Mapping
+from threading import Lock
+from types import SimpleNamespace
 
 import openai
 from openai import Stream
 from openai.types.responses import Response, ResponseStreamEvent
 
 from core import entries
-from core.llm import CutShort, NoReply, StreamFailure, complete, tool_timeline
+from core.llm import (
+    CutShort,
+    ModelHTTPError,
+    NoReply,
+    StreamFailure,
+    UnsupportedModelRequest,
+    complete,
+    tool_timeline,
+)
 from core.replay import tool_output
 from components.model.apis.chat_completions import list_models, make_client
 from components.model.apis.conversation import (
     project_entries, provider_items, reasoning,
+)
+from components.model.apis.multimodal import (
+    TokenEstimate,
+    normalize_media_type,
+    plan_delivery,
+    prepare_with_native_count,
+    read_base64,
+    request_hash,
+    resolve_blob_path,
 )
 from components.model.apis.search import (
     SearchError,
@@ -36,6 +55,7 @@ from components.model.apis.search import (
     http_error,
     is_http_url,
 )
+from components.model.usage import extract_detail_modality_tokens
 
 # Its name in a server's entry (the line `api`), and in words
 NAME = "responses"
@@ -62,12 +82,200 @@ CALL_EVENT_FIELDS = {
     "type", "sequence_number", "item_id", "output_index", "delta", "arguments",
     "name", "obfuscation", "p",
 }
+# Provider-executed items whose SDK schema carries an explicit status field.
+HOSTED_STATUS_KINDS = frozenset({
+    "web_search_call",
+    "code_interpreter_call",
+    "image_generation_call",
+    "file_search_call",
+    "mcp_call",
+})
+# Provider-executed items whose schema may omit status on completion.
+HOSTED_OPTIONAL_STATUS_KINDS = frozenset({
+    "mcp_list_tools",
+    "url_context_call",
+    "url_context_result",
+    "code_execution_call",
+    "code_execution_result",
+})
+# Items carrying an explicit `execution` discriminator ("server" vs "client").
+EXECUTION_SCOPED_KINDS = frozenset({
+    "tool_search_call",
+    "tool_search_output",
+})
+HOSTED_IN_PROGRESS_STATUSES = frozenset({
+    "in_progress", "searching", "interpreting", "generating", "calling",
+})
+HOSTED_PROGRESS_PREFIXES = (
+    "response.web_search_call.",
+    "response.code_interpreter_call.",
+    "response.code_interpreter_call_code.",
+    "response.image_generation_call.",
+    "response.file_search_call.",
+    "response.mcp_call.",
+    "response.mcp_call_arguments.",
+    "response.mcp_list_tools.",
+)
+HOSTED_OUTPUT_FIELDS = (
+    "action", "queries", "results", "outputs", "output", "server_label",
+    "name", "arguments", "tools", "code", "revised_prompt",
+)
+
+
+def classify_output_item(item):
+    """Classify a Responses output item by execution ownership and kind."""
+    kind = _item_field(item, "type")
+    if kind in ("reasoning", "function_call", "message"):
+        return "core"
+    status = _item_field(item, "status")
+    if kind in HOSTED_STATUS_KINDS:
+        if status == "completed":
+            return "hosted_completed"
+        if status is None or status in HOSTED_IN_PROGRESS_STATUSES:
+            return "hosted_pending"
+        return "unsupported"
+    if kind in HOSTED_OPTIONAL_STATUS_KINDS:
+        if _item_field(item, "error"):
+            return "unsupported"
+        if status in (None, "completed"):
+            return "hosted_completed"
+        if status in HOSTED_IN_PROGRESS_STATUSES:
+            return "hosted_pending"
+        return "unsupported"
+    if kind in EXECUTION_SCOPED_KINDS:
+        if _item_field(item, "execution") != "server":
+            return "unsupported"
+        if status == "completed":
+            return "hosted_completed"
+        if status is None or status in HOSTED_IN_PROGRESS_STATUSES:
+            return "hosted_pending"
+        return "unsupported"
+    return "unsupported"
+
+
+def is_completed_hosted_item(item):
+    return classify_output_item(item) == "hosted_completed"
+
+
+def _hosted_summary(kind, data):
+    if kind == "web_search_call":
+        action = data.get("action")
+        if isinstance(action, Mapping):
+            query = action.get("query") or ", ".join(
+                str(q) for q in (action.get("queries") or ())
+            )
+            if query:
+                return f"[Hosted web_search_call: {query}]"
+    elif kind == "file_search_call":
+        queries = data.get("queries")
+        if isinstance(queries, list) and queries:
+            return f"[Hosted file_search_call: {', '.join(map(str, queries))}]"
+    elif kind == "mcp_call":
+        server = data.get("server_label")
+        name = data.get("name")
+        label = f"{server}.{name}" if server and name else (name or server)
+        if label:
+            return f"[Hosted mcp_call: {label}]"
+    elif kind == "mcp_list_tools":
+        if server := data.get("server_label"):
+            return f"[Hosted mcp_list_tools: {server}]"
+    return f"[Hosted {kind}: completed]"
+
+
+def _hosted_output_fields(data):
+    kind = data["type"]
+    fields = {
+        "kind": kind,
+        "execution": "server",
+        "status": "completed",
+        "summary": _hosted_summary(kind, data),
+    }
+    if isinstance(item_id := data.get("id"), str) and item_id:
+        fields["item_id"] = item_id
+    if isinstance(call_id := data.get("call_id"), str) and call_id:
+        fields["call_id"] = call_id
+    output = {
+        key: data[key] for key in HOSTED_OUTPUT_FIELDS
+        if key in data and data[key] is not None
+    }
+    if output:
+        fields["output"] = output
+    return fields
+
+
+def _clear_previous_slot(draft, item_id, index):
+    if not isinstance(item_id, str) or not item_id:
+        return
+    seen = draft.stream_state.setdefault("hosted_ids", {})
+    prev = seen.get(item_id)
+    if prev is not None and prev != index:
+        draft.hosted_outputs.pop(prev, None)
+        draft.unrecognized_outputs.pop(prev, None)
+        stored = draft.continuation_items.get("response_item")
+        if stored and stored.get(prev, {}).get("item", {}).get("id") == item_id:
+            stored.pop(prev, None)
+    seen[item_id] = index
+
+
+def _hosted_image_descriptor(entry, item, attachment_id=None):
+    """Locate the stored `attachments/file` descriptor for a hosted image item."""
+    item_id = item.get("id")
+    by_att_id = None
+    by_item_id = None
+    for hosted in entries.matching(entry, "hosted_output", include_private=False):
+        if hosted.get("kind") != "image_generation_call":
+            continue
+        hosted_atts = [
+            SimpleNamespace(
+                attachment_id=node.get("attachment_id"),
+                sha256=node.get("sha256"),
+                path=node.get("path"),
+            )
+            for node in entries.matching(hosted, "attachment", include_private=False)
+        ]
+        if not hosted_atts:
+            continue
+        if attachment_id:
+            for desc in hosted_atts:
+                if desc.attachment_id == attachment_id:
+                    by_att_id = desc
+                    break
+        if by_att_id is not None:
+            break
+        if item_id and hosted.get("item_id") == item_id and by_item_id is None:
+            by_item_id = hosted_atts[0]
+    return by_att_id or by_item_id
+
+
+def _rehydrate_hosted_item(entry, node, thawed_item):
+    """Reconstruct `image_generation_call.result` from its stored blob on demand."""
+    if thawed_item.get("type") != "image_generation_call":
+        return thawed_item
+    if isinstance(thawed_item.get("result"), str) and thawed_item["result"]:
+        return thawed_item
+    desc = _hosted_image_descriptor(
+        entry, thawed_item, attachment_id=node.get("attachment_id"),
+    )
+    if desc is None:
+        return None
+    blob_path = resolve_blob_path(desc)
+    if blob_path is None:
+        return None
+    try:
+        encoded = read_base64(blob_path, expected_sha256=desc.sha256)
+    except (OSError, ValueError):
+        return None
+    return {**thawed_item, "result": encoded}
 
 
 def response_items(entry, route, content, calls):
     """Provider items still matching the public reply and its calls."""
-    stored = [item for node in provider_items(entry, route, "response_item")
-              if isinstance(item := node.get("item"), Mapping) and "type" in item]
+    stored_nodes = [
+        (node, item)
+        for node in provider_items(entry, route, "response_item")
+        if isinstance(item := node.get("item"), Mapping) and "type" in item
+    ]
+    stored = [item for _, item in stored_nodes]
     native_calls = {item["call_id"]: (item["name"], item["arguments"])
                     for item in stored if item["type"] == "function_call"}
     expected = {entries.call_id(call): (call.get("name"), call.get("arguments"))
@@ -80,9 +288,17 @@ def response_items(entry, route, content, calls):
         parts = [part for item in native_messages for part in item["content"]]
         keep_text = (all(part.get("type") == "output_text" for part in parts)
                      and "".join(part["text"] for part in parts) == content)
-    return [entries.thaw(item) for item in stored
-            if item["type"] in ("reasoning", "function_call")
-            or (item["type"] == "message" and keep_text)]
+    replayed = []
+    for node, item in stored_nodes:
+        if item["type"] in ("reasoning", "function_call") or (
+            item["type"] == "message" and keep_text
+        ):
+            replayed.append(entries.thaw(item))
+        elif is_completed_hosted_item(item):
+            hydrated = _rehydrate_hosted_item(entry, node, entries.thaw(item))
+            if hydrated is not None:
+                replayed.append(hydrated)
+    return replayed
 
 
 def assistant_items(entry, route, encrypted_reasoning, calls, content):
@@ -104,11 +320,167 @@ def assistant_items(entry, route, encrypted_reasoning, calls, content):
                    "name": call.get("name"), "arguments": call.get("arguments")}
 
 
-def items(conversation, *, route=None, encrypted_reasoning=False, project=None):
-    """Instructions and input items from the timeline."""
+_INPUT_TOKENS_LOCK = Lock()
+_INPUT_TOKENS_CACHE = {}
+_NO_INPUT_TOKENS_ROUTES = set()
+_INPUT_TOKENS_CACHE_MAX = 512
+_COUNT_REQUEST_FIELDS = (
+    "model", "input", "instructions", "tools", "tool_choice", "reasoning", "text",
+)
+
+
+def clear_input_tokens_cache():
+    """Clear cached /responses/input_tokens counts and 404 memoization."""
+    with _INPUT_TOKENS_LOCK:
+        _INPUT_TOKENS_CACHE.clear()
+        _NO_INPUT_TOKENS_ROUTES.clear()
+
+
+def _count_route_key(client, route):
+    if route:
+        return str(route)
+    base = getattr(client, "base_url", None)
+    return str(base) if base is not None else str(id(client))
+
+
+def count_input_tokens(client, body, *, route=None):
+    """Count exact input tokens via POST /v1/responses/input_tokens.
+
+    Cached by `(history_route, plan_hash)`. Memoizes 404/405 responses on
+    compatible servers so unsupported endpoints are not probed repeatedly.
+    """
+    count_body = {
+        key: body[key] for key in _COUNT_REQUEST_FIELDS if key in body
+    }
+    route_key = _count_route_key(client, route)
+    digest = request_hash(count_body)
+    cache_key = (route_key, digest)
+    with _INPUT_TOKENS_LOCK:
+        if route_key in _NO_INPUT_TOKENS_ROUTES:
+            return None
+        cached = _INPUT_TOKENS_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+    try:
+        raw = client.post(
+            "/responses/input_tokens", body=count_body, cast_to=object,
+        )
+    except openai.APIStatusError as error:
+        if error.status_code in (404, 405):
+            with _INPUT_TOKENS_LOCK:
+                _NO_INPUT_TOKENS_ROUTES.add(route_key)
+        return None
+    except ModelHTTPError as error:
+        if error.status_code in (404, 405):
+            with _INPUT_TOKENS_LOCK:
+                _NO_INPUT_TOKENS_ROUTES.add(route_key)
+        return None
+    except (openai.APIError, OSError, ValueError):
+        return None
+    if isinstance(raw, Mapping):
+        value = raw.get("input_tokens")
+    else:
+        value = getattr(raw, "input_tokens", None)
+    if type(value) is not int or value < 0:
+        return None
+    estimate = TokenEstimate(
+        tokens=value,
+        method="native_input_tokens",
+        uncertainty="exact (provider input_tokens)",
+        native=True,
+        margin_tokens=0,
+    )
+    with _INPUT_TOKENS_LOCK:
+        if len(_INPUT_TOKENS_CACHE) >= _INPUT_TOKENS_CACHE_MAX:
+            _INPUT_TOKENS_CACHE.clear()
+        _INPUT_TOKENS_CACHE[cache_key] = estimate
+    return estimate
+
+
+def _user_wire_items(text, decisions):
+    """Build Responses message items with native images/PDFs or text references."""
+    if not decisions:
+        if text:
+            yield {"type": "message", "role": "user", "content": text}
+        return
+    parts = []
+    has_native_part = False
+    if text:
+        parts.append({"type": "input_text", "text": text})
+    for decision in decisions:
+        if decision.is_native:
+            encoded = read_base64(
+                decision.blob_path, expected_sha256=decision.descriptor.sha256,
+            )
+            mime = normalize_media_type(decision.descriptor.media_type)
+            if decision.modality == "image":
+                parts.append({
+                    "type": "input_image",
+                    "image_url": f"data:{mime};base64,{encoded}",
+                    "detail": decision.detail,
+                })
+                has_native_part = True
+            elif decision.modality == "pdf":
+                parts.append({
+                    "type": "input_file",
+                    "filename": decision.descriptor.name,
+                    "file_data": f"data:{mime};base64,{encoded}",
+                })
+                has_native_part = True
+            else:
+                parts.append({"type": "input_text", "text": decision.reference_text()})
+        else:
+            parts.append({"type": "input_text", "text": decision.reference_text()})
+    if has_native_part:
+        yield {"type": "message", "role": "user", "content": parts}
+    elif parts:
+        joined = "\n\n".join(part["text"] for part in parts if part.get("text"))
+        if joined:
+            yield {"type": "message", "role": "user", "content": joined}
+
+
+def _tool_output_wire(result, decisions):
+    """Build Responses function_call_output.output string or typed item list."""
+    if not decisions:
+        return tool_output(result)
+    base = tool_output(result, include_attachments=False)
+    if any(decision.is_native for decision in decisions):
+        parts = []
+        if base:
+            parts.append({"type": "input_text", "text": base})
+        for decision in decisions:
+            if decision.is_native:
+                encoded = read_base64(
+                    decision.blob_path, expected_sha256=decision.descriptor.sha256,
+                )
+                mime = normalize_media_type(decision.descriptor.media_type)
+                if decision.modality == "image":
+                    parts.append({
+                        "type": "input_image",
+                        "image_url": f"data:{mime};base64,{encoded}",
+                        "detail": decision.detail,
+                    })
+                elif decision.modality == "pdf":
+                    parts.append({
+                        "type": "input_file",
+                        "filename": decision.descriptor.name,
+                        "file_data": f"data:{mime};base64,{encoded}",
+                    })
+                else:
+                    parts.append({
+                        "type": "input_text", "text": decision.reference_text(),
+                    })
+            else:
+                parts.append({"type": "input_text", "text": decision.reference_text()})
+        return parts
+    refs = [decision.reference_text() for decision in decisions]
+    return "\n\n".join(filter(None, (base, *refs)))
+
+
+def _build_items(conversation, projections, plan, *, route=None,
+                 encrypted_reasoning=False):
     instructions = None
     found = []
-    projections = (project or project_entries)(conversation)
     timeline = tool_timeline(conversation, lambda node: projections[id(node)].tools)
     for index, (entry, calls, results, _) in enumerate(timeline):
         projected = projections[id(entry)]
@@ -118,15 +490,79 @@ def items(conversation, *, route=None, encrypted_reasoning=False, project=None):
             instructions = entries.project(entry)
             if instructions:
                 passages = passages[1:]
+        entry_decisions = list(plan.for_entry(entry))
         if projected.assistant or calls:
-            found.extend(assistant_items(entry, route, encrypted_reasoning, calls,
-                                         projected.content))
+            emitted = list(assistant_items(entry, route, encrypted_reasoning, calls,
+                                           projected.content))
+            if any(is_completed_hosted_item(item) for item in emitted):
+                hosted_texts = {
+                    entries.project(node)
+                    for node in entries.matching(
+                        entry, "hosted_output", include_private=False,
+                    )
+                }
+                passages = tuple(
+                    (role, text) for role, text in passages
+                    if not (role == "assistant" and text in hosted_texts)
+                )
+            assistant_passages = [
+                {"type": "message", "role": "assistant", "content": text}
+                for role, text in passages if role == "assistant"
+            ]
+            if entry_decisions:
+                refs = "\n\n".join(d.reference_text() for d in entry_decisions)
+                assistant_passages.append(
+                    {"type": "message", "role": "assistant", "content": refs},
+                )
+                entry_decisions = []
+            passages = tuple(
+                (role, text) for role, text in passages if role != "assistant"
+            )
+            # Emit cross-route assistant passages inside the assistant turn
+            # before function_call items and function_call_output results.
+            call_idx = next(
+                (i for i, item in enumerate(emitted)
+                 if item.get("type") == "function_call"),
+                len(emitted),
+            )
+            found.extend(emitted[:call_idx])
+            found.extend(assistant_passages)
+            found.extend(emitted[call_idx:])
         for result, call_id in results:
-            found.append({"type": "function_call_output", "call_id": call_id,
-                          "output": tool_output(result)})
+            res_decisions = plan.for_tool(result)
+            found.append({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": _tool_output_wire(result, res_decisions),
+            })
+        attached = False
         for role, content in passages:
-            found.append({"type": "message", "role": role, "content": content})
+            if not attached and entry_decisions and role == "user":
+                found.extend(_user_wire_items(content, entry_decisions))
+                attached = True
+            else:
+                found.append({"type": "message", "role": role, "content": content})
+        if entry_decisions and not attached:
+            found.extend(_user_wire_items("", entry_decisions))
     return instructions, found
+
+
+def items(conversation, *, route=None, encrypted_reasoning=False, project=None,
+          capabilities=None, media_budget=None, plan=None):
+    """Instructions and input items from the timeline."""
+    projections = (project or project_entries)(conversation)
+    if plan is None:
+        plan = plan_delivery(
+            conversation,
+            projections,
+            api_name=NAME,
+            capabilities=capabilities,
+            media_budget=media_budget,
+        )
+    return _build_items(
+        conversation, projections, plan, route=route,
+        encrypted_reasoning=encrypted_reasoning,
+    )
 
 
 def tool(schema):
@@ -142,20 +578,17 @@ def tool(schema):
     }
 
 
-def request(model, messages, *, tools=None, effort=None, json_schema=None,
-            json_mode=False, temperature=None, max_output_tokens=None,
-            encrypted_reasoning=False, reasoning_summary=False, route=None,
-            project=None):
-    """The request's fields. `json_schema`: {"name", "schema"}, strict JSON;
-    `json_mode`: any JSON object."""
-    instructions, found = items(
-        messages, route=route, encrypted_reasoning=encrypted_reasoning, project=project,
-    )
+def _request_fields(model, instructions, found, *, tools=None, tool_choice=None,
+                    effort=None, json_schema=None, json_mode=False,
+                    temperature=None, max_output_tokens=None,
+                    encrypted_reasoning=False, reasoning_summary=False):
     fields = {"model": model, "input": found, "stream": True, "store": False}
     if instructions is not None:
         fields["instructions"] = instructions
     if tools:
         fields["tools"] = [tool(schema) for schema in tools]
+        if tool_choice is not None:
+            fields["tool_choice"] = tool_choice
     if encrypted_reasoning:
         fields["include"] = ["reasoning.encrypted_content"]
     if effort is not None:
@@ -179,6 +612,67 @@ def request(model, messages, *, tools=None, effort=None, json_schema=None,
     return fields
 
 
+def prepare_request(model, messages, *, tools=None, tool_choice=None, effort=None,
+                    json_schema=None, json_mode=False, temperature=None,
+                    max_output_tokens=None, encrypted_reasoning=False,
+                    reasoning_summary=False, route=None, project=None,
+                    capabilities=None, media_budget=None, total_budget=None,
+                    client=None):
+    """Prepare the exact route-specific Responses body and accounting plan."""
+    projections = (project or project_entries)(messages)
+
+    def build_body(plan):
+        instructions, found = _build_items(
+            messages, projections, plan, route=route,
+            encrypted_reasoning=encrypted_reasoning,
+        )
+        return _request_fields(
+            model, instructions, found,
+            tools=tools, tool_choice=tool_choice, effort=effort,
+            json_schema=json_schema, json_mode=json_mode,
+            temperature=temperature, max_output_tokens=max_output_tokens,
+            encrypted_reasoning=encrypted_reasoning,
+            reasoning_summary=reasoning_summary,
+        )
+
+    native_counter = (
+        (lambda body, *, route=None: count_input_tokens(client, body, route=route))
+        if client is not None else None
+    )
+    return prepare_with_native_count(
+        messages,
+        projections,
+        api_name=NAME,
+        capabilities=capabilities,
+        media_budget=media_budget,
+        total_budget=total_budget,
+        route=route,
+        build_body=build_body,
+        native_counter=native_counter,
+    )
+
+
+def request(model, messages, *, tools=None, tool_choice=None, effort=None,
+            json_schema=None, json_mode=False, temperature=None,
+            max_output_tokens=None, encrypted_reasoning=False,
+            reasoning_summary=False, route=None, project=None,
+            capabilities=None, media_budget=None, total_budget=None,
+            client=None):
+    """The request's fields. `json_schema`: {"name", "schema"}, strict JSON;
+    `json_mode`: any JSON object."""
+    return prepare_request(
+        model, messages,
+        tools=tools, tool_choice=tool_choice, effort=effort,
+        json_schema=json_schema, json_mode=json_mode,
+        temperature=temperature, max_output_tokens=max_output_tokens,
+        encrypted_reasoning=encrypted_reasoning,
+        reasoning_summary=reasoning_summary,
+        route=route, project=project, capabilities=capabilities,
+        media_budget=media_budget, total_budget=total_budget,
+        client=client,
+    ).body
+
+
 def request_options(server, *, encrypted=False, zero_temperature=False):
     """Adapter request kwargs implied by a server's declared capabilities."""
     options = {}
@@ -199,6 +693,9 @@ def keeps_continuation(server):
 
 def open_stream(client, model, messages, **standard):
     """Send prepared JSON; the SDK handles HTTP and parses streamed events."""
+    prepared_body = standard.pop("prepared_body", None)
+    if prepared_body is not None:
+        return stream_response(client, prepared_body)
     return stream_response(client, request(model, messages, **standard))
 
 
@@ -216,6 +713,9 @@ def usage(draft, response):
     details = getattr(used, "input_tokens_details", None)
     cached = getattr(details, "cached_tokens", None) or 0
     draft.tokens = (used.input_tokens or 0, cached, used.output_tokens or 0)
+    by_modality = extract_detail_modality_tokens(used, "input_tokens_details")
+    if by_modality:
+        draft.input_tokens_by_modality = by_modality
 
 
 def _is_benign_call_default(key, value):
@@ -240,13 +740,13 @@ def remember_call_fields(call, data, known):
 
 
 def _item_field(item, name, default=None):
-    if isinstance(item, dict):
+    if isinstance(item, Mapping):
         return item.get(name, default)
     return getattr(item, name, default)
 
 
 def _dump_item(item, *, exclude_unset=False, exclude_none=False):
-    if isinstance(item, dict):
+    if isinstance(item, Mapping):
         if exclude_none:
             return {k: v for k, v in item.items() if v is not None}
         return dict(item)
@@ -258,9 +758,31 @@ def _dump_item(item, *, exclude_unset=False, exclude_none=False):
 
 def remember_item(draft, index, item, *, done=True, ignored_kinds=()):
     kind = _item_field(item, "type")
-    if kind not in ("reasoning", "function_call", "message"):
-        if kind not in ignored_kinds:
-            draft.unrecognized_outputs[index] = _dump_item(item)
+    if kind in ignored_kinds:
+        return False
+    category = classify_output_item(item)
+    if category == "hosted_completed":
+        data = _dump_item(item, exclude_none=True)
+        data.pop("obfuscation", None)
+        data.pop("p", None)
+        item_id = data.get("id")
+        _clear_previous_slot(draft, item_id, index)
+        draft.unrecognized_outputs.pop(index, None)
+        stored = draft.continuation_items.setdefault("response_item", {})
+        previous = stored.get(index, {}).get("item")
+        if (isinstance(previous, Mapping) and previous.get("type") == kind
+                and (not item_id or previous.get("id") == item_id)):
+            data = {**previous, **data}
+        draft.hosted_outputs[index] = _hosted_output_fields(data)
+        stored[index] = {"item": data}
+        return True
+    if category == "hosted_pending" and not done:
+        _clear_previous_slot(draft, _item_field(item, "id"), index)
+        draft.unrecognized_outputs[index] = _dump_item(item)
+        return True
+    if category != "core":
+        draft.hosted_outputs.pop(index, None)
+        draft.unrecognized_outputs[index] = _dump_item(item)
         return False
     if kind == "function_call":
         call = draft.call(index)
@@ -343,6 +865,8 @@ def _fold(draft, event, *, ignored_kinds=()):
     if kind == "error":
         raise StreamFailure(getattr(event, "code", None),
                             getattr(event, "message", None))
+    if isinstance(kind, str) and kind.startswith(HOSTED_PROGRESS_PREFIXES):
+        return True
     return False
 
 
@@ -420,7 +944,7 @@ class ResponsesSearch:
         except openai.APIConnectionError:
             raise SearchError("The connection to the search service failed.") \
                 from None
-        except (CutShort, openai.APIError):
+        except (CutShort, UnsupportedModelRequest, openai.APIError):
             raise SearchError("The service did not complete its search response.") \
                 from None
         return lookup.sources(reply.content)

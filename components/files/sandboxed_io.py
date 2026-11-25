@@ -97,10 +97,26 @@ def store(request):
     return {"path": path, "kind": "file", "sha": sha(data)}
 
 
+def stat_file(request):
+    """Inspect a path's kind, size and short header inside the sandbox."""
+    path = write_target(request["path"])
+    found = kind(path)
+    answer = {"path": path, "kind": found}
+    if found != "file":
+        return answer
+    answer["size"] = os.path.getsize(path)
+    sniff = int(request.get("sniff", 4096))
+    with open(path, "rb") as f:
+        head = f.read(max(0, min(sniff, 65536)))
+    answer["head"] = base64.b64encode(head).decode()
+    return answer
+
+
 def main():
     request = json.load(sys.stdin)
     try:
-        answer = {"load": load, "store": store}[request["op"]](request)
+        ops = {"load": load, "store": store, "stat": stat_file}
+        answer = ops[request["op"]](request)
     except OSError as e:
         answer = {"error": e.strerror or str(e), "errno": e.errno}
     json.dump(answer, sys.stdout)

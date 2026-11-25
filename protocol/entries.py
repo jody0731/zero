@@ -5,6 +5,14 @@ Zero imports so `protocol` stays at the bottom of the dependency graph
 records (`{"seq", "time", "entry", ...}`) through these functions.
 """
 
+from html.parser import HTMLParser
+from urllib.parse import urlsplit
+
+ATTACHMENT_TYPE = "attachments/file"
+ATTACHMENT_FIELDS = (
+    "attachment_id", "name", "media_type", "size_bytes", "sha256",
+    "delivery", "path", "width", "height", "duration_seconds", "pages",
+)
 COMPACTION_TYPES = (
     "context/compaction_handoff",
     "context/compaction_failed",
@@ -207,3 +215,85 @@ def model_failure(record):
     """The redacted `model_failure` dict from the entry's fields, or None."""
     value = field(record, "model_failure")
     return value if isinstance(value, dict) else None
+
+
+def attachments_of(record):
+    """Attachment descriptors from direct `attachments/file` children."""
+    found = []
+    for child in children_of(record):
+        if not isinstance(child, dict) or child.get("type") != ATTACHMENT_TYPE:
+            continue
+        raw = child.get("fields")
+        if not isinstance(raw, dict):
+            continue
+        item = {
+            key: raw[key] for key in ATTACHMENT_FIELDS if raw.get(key) is not None
+        }
+        if item:
+            found.append(item)
+    return found
+
+
+def _tool_fields(record):
+    if entry_type(record) != "tools/result":
+        return {}
+    raw = field(record, "fields")
+    return raw if isinstance(raw, dict) else {}
+
+
+class _AnchorParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.links = []
+        self._href = None
+        self._parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "a":
+            return
+        for key, value in attrs:
+            if key.lower() == "href" and isinstance(value, str):
+                scheme = urlsplit(value.strip()).scheme.lower()
+                if scheme in ("http", "https"):
+                    self._href = value.strip()
+                    self._parts = []
+                break
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            label = " ".join("".join(self._parts).split())
+            self.links.append((label or self._href, self._href))
+            self._href = None
+            self._parts = []
+
+
+def search_suggestions(record):
+    """Search suggestion queries and HTML from a `tools/result` record, or None."""
+    extra = _tool_fields(record)
+    raw_queries = extra.get("web_search_queries")
+    queries = (
+        [q.strip() for q in raw_queries if isinstance(q, str) and q.strip()]
+        if isinstance(raw_queries, list) else []
+    )
+    html = extra.get("search_suggestions_html")
+    html = html if isinstance(html, str) and html.strip() else None
+    if not queries and not html:
+        return None
+    links = []
+    if html:
+        parser = _AnchorParser()
+        try:
+            parser.feed(html)
+            parser.close()
+        except Exception:
+            pass
+        seen = set()
+        for label, href in parser.links:
+            if href not in seen:
+                seen.add(href)
+                links.append({"label": label, "url": href})
+    return {"queries": queries, "html": html, "links": links}

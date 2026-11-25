@@ -59,7 +59,10 @@ settings.add(
 for _setting in settings.SETTINGS:
     if _setting.switchable:
         timeline.add_switchable(
-            _setting.name, _setting.aliases, model_visible=_setting.model_visible,
+            _setting.name,
+            _setting.aliases,
+            model_visible=_setting.model_visible,
+            none_default=_setting.default if _setting.none_means_default else None,
         )
 
 for _manifest, _module, _folder, _package in _DISCOVERED:
@@ -201,15 +204,18 @@ def server_session(paths, sid, info, log=None, ask=PARK, config=None, **options)
         if not setting.switchable:
             continue
         if setting.name in options:
-            initial_settings[setting.name] = options[setting.name]
+            value = options[setting.name]
         elif setting.name in info and (
             info[setting.name] is not None or setting.unset_means is not None
         ):
-            initial_settings[setting.name] = info[setting.name]
+            value = info[setting.name]
         elif setting.name in logged:
-            initial_settings[setting.name] = logged[setting.name]
+            value = logged[setting.name]
         else:
-            initial_settings[setting.name] = now.get(setting.name, setting.default)
+            value = now.get(setting.name, setting.default)
+        if value is None and setting.none_means_default:
+            value = setting.default
+        initial_settings[setting.name] = value
     limits = LiveSettings(config, fixed=options.pop("limits", {}))
     merged = {
         "workspace": Path(info["workspace"]),

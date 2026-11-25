@@ -89,7 +89,6 @@ class Session:
         # server's: the session's row, so a log with no row is listed again
         # from it)
         self.header_fields = {}
-        self.entries_redaction = None
         if records:
             self.restore(log)
         else:
@@ -178,31 +177,14 @@ class Session:
 
     def restore_entries(self, records):
         self.entries = replay.replay(records, current_branch=True)
-        self.entries_redaction = None
-
-    def safe_entries(self):
-        """Use the current vault generation without rescanning on every call."""
-        boundary = self.tool_context.get("tool_boundary")
-        if boundary is None:
-            return self.entries
-        while (version := (boundary, boundary.version)) != self.entries_redaction:
-            self.entries = tuple(map(boundary.redact_entry, self.entries))
-            self.entries_redaction = version
-        return self.entries
 
     def write(self, type, **fields):
-        """Append a redacted entry and retain the same immutable model data."""
-        boundary = self.tool_context.get("tool_boundary")
-        version = None
-        if boundary is not None:
-            fields["redact_entry"] = boundary.redact_entry
-            if not self.entries:
-                version = (boundary, boundary.version)
+        """Append an entry and retain the same immutable model data, as the
+        log saved it (its transform redacts what a tool wrote)."""
         self.log.path.parent.mkdir(parents=True, exist_ok=True)
         record = self.log.append(type, **fields)
         if entries.has(record.entry, "header"):
             self.entries = (replay.system_entry(record),)
-            self.entries_redaction = version
         elif entry := replay.model_entry(record):
             self.entries += (entry,)
         return record
@@ -386,6 +368,11 @@ class Session:
         if stop is not None:
             return stop
         reply = step.reply
+        if reply.entry is not None and reply.entry.entries:
+            updated = self.hooks.pipe("assistant_entry", reply.entry, self)
+            if updated is not None and updated is not reply.entry:
+                entries.ensure_executable(updated)
+                reply.entry = updated
         step.read_reply()
         fields = step.assistant_record()
         if self.model is not self.main_model:
@@ -463,7 +450,6 @@ class Session:
             if step.turn.control is not None:
                 step.turn.control.check()
                 self.take_steers(step.turn)
-            self.safe_entries()
             stop = self.hooks.decide("before_model", step)
             if isinstance(stop, ModelAsk):
                 self.park_turn(
@@ -551,17 +537,22 @@ class Session:
             def on_delta(draft):
                 control.draft(step.number, draft)
 
-        conversation = self.safe_entries()
+        conversation = self.entries
         schemas = self.tool_schemas()
         boundary = self.tool_context.get("tool_boundary")
         if boundary is not None:
             schemas = boundary.redact(schemas)
+        step.prepared_request = None
+        step.native_media_count = 0
+        step.native_media_tokens = 0
         stop = self.hooks.decide("before_model_request", step, conversation, schemas)
         if stop is not None:
             return stop
         output = {}
         if step.max_output_tokens is not None:
             output["max_output_tokens"] = step.max_output_tokens
+        if step.prepared_request is not None:
+            output["prepared"] = step.prepared_request
         return self.model.call(
             conversation, schemas, check=check, on_delta=on_delta, **output,
         )
@@ -609,17 +600,29 @@ class Session:
             call.result = call.error
             return False
         decision = self.hooks.decide("before_tool", call)
+        from_approve = False
         # The human is only asked about calls every check let through
         if not isinstance(decision, Deny) and approved is None:
             decision = self.hooks.decide("approve", call)
+            from_approve = True
         if isinstance(decision, Park):
             if before_park is not None:
                 before_park()
             self.park(call, decision)
         if isinstance(decision, Deny):
+            if (
+                from_approve
+                and call.notes.get("soft_limit_fallback")
+                and not any(
+                    call.notes.get(name)
+                    for name in ("rule", "permission", "handoff")
+                )
+            ):
+                call.notes["soft_limit_declined"] = True
+                return True
             call.denied, call.result = True, decision.reason
             return False
-        if approved is not None:
+        if approved:
             call.remarks.append(approved)
         return True
 
@@ -830,6 +833,18 @@ class Session:
 
             return self.run_calls(step, later, answered_question)
         if answer_choice == NO:
+            if (
+                call.notes.get("soft_limit_fallback")
+                and not any(
+                    call.notes.get(name)
+                    for name in ("rule", "permission", "handoff")
+                )
+            ):
+                call.notes["soft_limit_declined"] = True
+                return self.run_calls(
+                    step, later, lambda: self.run_call(call, approved="")
+                )
+
             def decline():
                 call.result, call.denied = DECLINED_STOP, True
                 self.write("tool", **call.record())
@@ -862,6 +877,8 @@ class Session:
         }
         if (source := answer.get("source")) is not None:
             fields["source"] = source
+        if answer.entries:
+            fields["entries"] = answer.entries
         self.write("user", **fields)
 
     def call_context(self, call):

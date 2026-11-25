@@ -512,7 +512,8 @@ class Store:
         """Commit what waits, stop the writer, close every connection."""
         close_all(self.writer, self.readers)
 
-    def admit(self, msg_id, session, kind, source, payload, new_session=None):
+    def admit(self, msg_id, session, kind, source, payload, new_session=None,
+              claims=()):
         """Put a message in the inbox. Returns (admitted, session id).
 
         `new_session`: the row of a session this message starts (title, source,
@@ -520,6 +521,8 @@ class Store:
         the same transaction; a session id already taken raises
         sqlite3.IntegrityError, and nothing is written. A message whose id is
         already in the inbox isn't admitted again; its session is returned.
+        `claims`: transactional callbacks `(db, session, payload)` run in the
+        same transaction before the inbox row is inserted.
         """
         now = time.time()
 
@@ -563,10 +566,13 @@ class Store:
                 ).fetchone()
                 if not open_ask or waiting:
                     raise ReplyUnavailable("the question already has a reply or closed")
+            stored = dict(payload)
+            for claim in claims:
+                claim(db, session, stored)
             db.execute(
                 "INSERT INTO inbox (id, session, kind, source, payload, status, "
                 "created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
-                (msg_id, session, kind, source, json.dumps(payload), now),
+                (msg_id, session, kind, source, json.dumps(stored), now),
             )
             return True, session
 
@@ -670,6 +676,8 @@ class Store:
             for name in attribution.MESSAGE_FIELDS:
                 if payload.get(name) is not None:
                     steer[name] = payload[name]
+            if payload.get("entries"):
+                steer["entries"] = payload["entries"]
             found.append(steer)
         return found
 
@@ -696,10 +704,13 @@ class Store:
         result = []
         for row in rows:
             payload = json.loads(row["payload"])
-            result.append({
+            item = {
                 "id": row["id"], "text": payload["text"], "source": row["source"],
                 "follow_up": bool(payload.get("follow_up")),
-            })
+            }
+            if payload.get("attachments"):
+                item["attachments"] = payload["attachments"]
+            result.append(item)
         return result
 
     def withdraw_messages(self, session, after, before):

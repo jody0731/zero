@@ -33,8 +33,9 @@ DECIDE = {"before_model", "before_model_request", "model_error", "before_tool",
           "approve", "step_end"}
 # tool_result: a call's result before it is logged; notice: a notice's text
 # (a job's end) before it is logged (the context component saves one past
-# its share to a file)
-PIPE = {"tool_result", "notice"}
+# its share to a file); assistant_entry: a model reply's entry before it is
+# logged (e.g. materializing hosted media outputs into session attachments)
+PIPE = {"tool_result", "notice", "assistant_entry"}
 # allows_side_by_side: veto parallel execution of a side_by_side tool call
 VETO = {"allows_side_by_side"}
 EVENTS = WATCH | COLLECT | DECIDE | PIPE | VETO

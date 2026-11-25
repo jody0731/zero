@@ -121,7 +121,6 @@ class WatcherHub:
             "reasoning": len(draft.reasoning),
             "calls": [call["name"] for _, call in sorted(draft.calls.items())],
         }}
-        event = runtime.redact(event, partial=True)
         runtime.state(sid).draft = event
         runtime.publish(sid, event)
 

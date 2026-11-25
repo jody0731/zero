@@ -70,6 +70,24 @@
       "$ref": "#/$defs/session.submit"
     },
     {
+      "$ref": "#/$defs/attachment.upload"
+    },
+    {
+      "$ref": "#/$defs/attachment.add"
+    },
+    {
+      "$ref": "#/$defs/attachment.read"
+    },
+    {
+      "$ref": "#/$defs/attachment.get"
+    },
+    {
+      "$ref": "#/$defs/attachment.list"
+    },
+    {
+      "$ref": "#/$defs/attachment.prune"
+    },
+    {
       "$ref": "#/$defs/session.compact"
     },
     {
@@ -97,6 +115,27 @@
       "$ref": "#/$defs/mcp.remove"
     },
     {
+      "$ref": "#/$defs/dictation.start"
+    },
+    {
+      "$ref": "#/$defs/dictation.chunk"
+    },
+    {
+      "$ref": "#/$defs/dictation.stop"
+    },
+    {
+      "$ref": "#/$defs/dictation.cancel"
+    },
+    {
+      "$ref": "#/$defs/dictation.watch"
+    },
+    {
+      "$ref": "#/$defs/speech.synthesize"
+    },
+    {
+      "$ref": "#/$defs/media.transcribe"
+    },
+    {
       "$ref": "#/$defs/model.list"
     },
     {
@@ -107,6 +146,9 @@
     },
     {
       "$ref": "#/$defs/model.features"
+    },
+    {
+      "$ref": "#/$defs/model.utilities"
     },
     {
       "$ref": "#/$defs/model.server.list"
@@ -149,6 +191,12 @@
     },
     {
       "$ref": "#/$defs/vault.status"
+    },
+    {
+      "$ref": "#/$defs/session.send_with_attachments"
+    },
+    {
+      "$ref": "#/$defs/session.submit_with_attachments"
     }
   ],
   "$defs": {
@@ -174,6 +222,9 @@
         },
         "model_failure": {
           "$ref": "#/$defs/model_failure"
+        },
+        "over_limit": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -317,6 +368,78 @@
         }
       ]
     },
+    "attachment_meta": {
+      "type": "object",
+      "description": "metadata for a stored attachment",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "staged",
+            "claimed",
+            "expired"
+          ]
+        },
+        "created_at": {
+          "type": "number"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "link_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "attachment_id",
+        "sha256",
+        "name",
+        "media_type",
+        "size_bytes",
+        "state"
+      ]
+    },
     "model_failure": {
       "type": "object",
       "description": "What happened on a model request, with provider details redacted",
@@ -365,6 +488,89 @@
         }
       }
     },
+    "utility_service": {
+      "type": "object",
+      "description": "One discovered utility capability service",
+      "required": [
+        "name",
+        "title",
+        "label",
+        "keyless"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "keyless": {
+          "type": "boolean"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "utility_capability": {
+      "type": "object",
+      "description": "Available services for one utility capability",
+      "required": [
+        "capability",
+        "implemented",
+        "available",
+        "current_server_service",
+        "services"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "enum": [
+            "search",
+            "stt",
+            "tts",
+            "image",
+            "video"
+          ]
+        },
+        "implemented": {
+          "type": "boolean"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "current_server_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/utility_service"
+          }
+        }
+      }
+    },
     "command_fields": {
       "type": "object",
       "description": "structured fields carried beside a bash command's text",
@@ -407,6 +613,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         }
       },
       "required": [
@@ -502,6 +712,13 @@
         "init_request": {
           "type": "string"
         },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "optional capabilities this server supports within the current protocol"
+        },
         "unknown_fields": {
           "type": "array",
           "items": {
@@ -533,6 +750,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -616,6 +837,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -696,6 +921,20 @@
           "type": "string",
           "description": "one of the open ask's `choices`, as picked at its box"
         },
+        "auto_speak": {
+          "anyOf": [
+            {
+              "enum": [
+                "off",
+                "on"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's auto-speak replies setting"
+        },
         "thinking_effort": {
           "anyOf": [
             {
@@ -707,9 +946,64 @@
           ],
           "description": "a new session's thinking effort: off, low, high or max"
         },
+        "stt_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's speech-to-text service setting"
+        },
+        "tts_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's text-to-speech service setting"
+        },
+        "image_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's image generation service setting"
+        },
+        "video_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's video generation service setting"
+        },
         "rounds": {
           "type": "boolean",
           "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
+        },
+        "search_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's web search service setting"
         }
       },
       "required": [
@@ -778,6 +1072,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -861,6 +1159,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -908,6 +1210,12 @@
               },
               "source": {
                 "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "additionalProperties": true
@@ -948,6 +1256,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "archived": {
           "anyOf": [
@@ -1084,6 +1396,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -1152,6 +1468,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "session": {
           "type": "string",
@@ -1272,7 +1592,28 @@
             "judge_thinking_effort": {
               "type": "string"
             },
+            "auto_speak": {
+              "enum": [
+                "off",
+                "on"
+              ]
+            },
             "thinking_effort": {
+              "type": "string"
+            },
+            "stt_service": {
+              "type": "string"
+            },
+            "tts_service": {
+              "type": "string"
+            },
+            "image_service": {
+              "type": "string"
+            },
+            "video_service": {
+              "type": "string"
+            },
+            "search_service": {
               "type": "string"
             }
           }
@@ -1344,6 +1685,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "session": {
           "type": "string",
@@ -1560,6 +1905,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1626,6 +1975,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1691,6 +2044,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1752,6 +2109,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -1812,6 +2173,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -1877,6 +2242,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -1909,6 +2278,12 @@
               },
               "text": {
                 "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -1944,6 +2319,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2033,6 +2412,13 @@
             "type": "string"
           },
           "description": "the request's fields this server's protocol doesn't have, left out"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "attachment ids from the rewound user message"
         }
       },
       "required": [
@@ -2058,6 +2444,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2110,6 +2500,13 @@
             "type": "string"
           },
           "description": "the request's fields this server's protocol doesn't have, left out"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "attachment ids from the forked user message"
         }
       },
       "required": [
@@ -2135,6 +2532,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2162,7 +2563,28 @@
         "judge_thinking_effort": {
           "type": "string"
         },
+        "auto_speak": {
+          "enum": [
+            "off",
+            "on"
+          ]
+        },
         "thinking_effort": {
+          "type": "string"
+        },
+        "stt_service": {
+          "type": "string"
+        },
+        "tts_service": {
+          "type": "string"
+        },
+        "image_service": {
+          "type": "string"
+        },
+        "video_service": {
+          "type": "string"
+        },
+        "search_service": {
           "type": "string"
         }
       },
@@ -2233,6 +2655,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         }
       },
       "required": [
@@ -2296,6 +2722,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2361,6 +2791,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2442,6 +2876,20 @@
           "type": "string",
           "description": "one of the open ask's `choices`, as picked at its box"
         },
+        "auto_speak": {
+          "anyOf": [
+            {
+              "enum": [
+                "off",
+                "on"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's auto-speak replies setting"
+        },
         "thinking_effort": {
           "anyOf": [
             {
@@ -2453,9 +2901,64 @@
           ],
           "description": "a new session's thinking effort: off, low, high or max"
         },
+        "stt_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's speech-to-text service setting"
+        },
+        "tts_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's text-to-speech service setting"
+        },
+        "image_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's image generation service setting"
+        },
+        "video_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's video generation service setting"
+        },
         "rounds": {
           "type": "boolean",
           "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
+        },
+        "search_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's web search service setting"
         }
       },
       "required": [
@@ -2505,6 +3008,492 @@
         "ok"
       ]
     },
+    "attachment.upload": {
+      "type": "object",
+      "description": "Stage an attachment in chunks of at most 512 KiB raw bytes.",
+      "properties": {
+        "message": {
+          "const": "attachment/upload"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "upload_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "expected_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "data": {
+          "type": "string",
+          "description": "base64-encoded chunk of at most 512 KiB raw bytes"
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "abort": {
+          "type": "boolean"
+        },
+        "allow_over_limit": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "attachment.upload.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "upload_id": {
+          "type": "string"
+        },
+        "received_bytes": {
+          "type": "integer"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "aborted": {
+          "type": "boolean"
+        },
+        "attachment": {
+          "$ref": "#/$defs/attachment_meta"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "attachment.add": {
+      "type": "object",
+      "description": "Stage an attachment by snapshotting a local host file (local user clients only).",
+      "properties": {
+        "message": {
+          "const": "attachment/add"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "allow_over_limit": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "path"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "attachment.add.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "attachment": {
+          "$ref": "#/$defs/attachment_meta"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "attachment.read": {
+      "type": "object",
+      "description": "Read up to 512 KiB of unmodified bytes from an authorized attachment.",
+      "properties": {
+        "message": {
+          "const": "attachment/read"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "attachment_id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 524288
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "attachment_id"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "attachment.read.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "attachment_id": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "data": {
+          "type": "string"
+        },
+        "bytes_read": {
+          "type": "integer"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "eof": {
+          "type": "boolean"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "attachment.get": {
+      "type": "object",
+      "description": "Read metadata for one authorized attachment.",
+      "properties": {
+        "message": {
+          "const": "attachment/get"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "attachment_id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "attachment_id"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "attachment.get.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "attachment": {
+          "$ref": "#/$defs/attachment_meta"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "attachment.list": {
+      "type": "object",
+      "description": "List attachments for a session or staged attachments owned by the caller.",
+      "properties": {
+        "message": {
+          "const": "attachment/list"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "include_staged": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "attachment.list.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/attachment_meta"
+          }
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "attachment.prune": {
+      "type": "object",
+      "description": "Expire stale staged uploads and remove unreferenced attachment blobs.",
+      "properties": {
+        "message": {
+          "const": "attachment/prune"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "include_trashed": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "attachment.prune.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "expired_staged": {
+          "type": "integer"
+        },
+        "removed_blobs": {
+          "type": "integer"
+        },
+        "freed_bytes": {
+          "type": "integer"
+        },
+        "trashed_pruned": {
+          "type": "integer"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
     "session.compact": {
       "type": "object",
       "description": "Compact a session's context: at once when it rests, before the next step when its turn runs.",
@@ -2524,6 +3513,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2603,6 +3596,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "path": {
           "type": "string"
@@ -2697,6 +3694,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -2752,6 +3753,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "job": {
           "type": "string"
@@ -2810,6 +3815,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -2873,6 +3882,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         }
       },
       "required": [
@@ -2933,6 +3946,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "name": {
           "type": "string"
         }
@@ -2985,6 +4002,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -3104,6 +4125,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -3147,6 +4172,792 @@
         "ok"
       ]
     },
+    "dictation.start": {
+      "type": "object",
+      "description": "Start an owner-scoped live or batch dictation session, freezing the resolved STT route before audio leaves.",
+      "properties": {
+        "message": {
+          "const": "dictation/start"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "optional session id (may be omitted before a session exists)"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "optional draft model for pre-session Same-Provider Default routing"
+        },
+        "stt_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "optional draft stt_service setting"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "enum": [
+            "live",
+            "batch"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "dictation.start.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "enum": [
+            "live",
+            "batch"
+          ]
+        },
+        "sample_rate": {
+          "type": "integer"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "dictation.chunk": {
+      "type": "object",
+      "description": "Send one ordered base64 PCM16 mono audio chunk for an active dictation session.",
+      "properties": {
+        "message": {
+          "const": "dictation/chunk"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "data": {
+          "type": "string",
+          "description": "base64-encoded PCM16 little-endian mono audio chunk"
+        },
+        "sample_rate": {
+          "type": "integer",
+          "minimum": 8000
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "dictation_id",
+        "seq",
+        "data"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "dictation.chunk.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "dictation.stop": {
+      "type": "object",
+      "description": "Finish an active dictation session and return raw verbatim transcript text.",
+      "properties": {
+        "message": {
+          "const": "dictation/stop"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "dictation_id"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "dictation.stop.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "live",
+            "batch"
+          ]
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "dictation.cancel": {
+      "type": "object",
+      "description": "Abort an active dictation session and discard buffered audio.",
+      "properties": {
+        "message": {
+          "const": "dictation/cancel"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "dictation_id"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "dictation.cancel.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "dictation.watch": {
+      "type": "object",
+      "description": "Stream live interim and finalized transcript events for one active dictation session.",
+      "properties": {
+        "message": {
+          "const": "dictation/watch"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "keeps_server_up": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message",
+        "dictation_id"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "dictation.watch.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "dictation.watch.event": {
+      "type": "object",
+      "description": "one event a line, until a bye",
+      "properties": {
+        "event": {
+          "enum": [
+            "interim",
+            "final",
+            "error",
+            "done"
+          ]
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "full_text": {
+          "type": "string"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "type": "string"
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "bye": {
+          "type": "string"
+        }
+      }
+    },
+    "speech.synthesize": {
+      "type": "object",
+      "description": "Synthesize spoken audio for a session reply (deduplicated and cached in session attachments) or standalone text.",
+      "properties": {
+        "message": {
+          "const": "speech/synthesize"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reply_entry_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "voice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allow_over_limit": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message",
+        "id"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "speech.synthesize.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "attachment_id": {
+          "type": "string"
+        },
+        "audio_base64": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "service": {
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "voice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reply_entry_id": {
+          "type": "string"
+        },
+        "cached": {
+          "type": "boolean"
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "media.transcribe": {
+      "type": "object",
+      "description": "Transcribe a local audio file path or authorized attachment verbatim using the resolved STT service.",
+      "properties": {
+        "message": {
+          "const": "media/transcribe"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attachment_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "media.transcribe.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "text": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "duration_seconds": {
+          "type": "number"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
     "model.list": {
       "type": "object",
       "description": "Every server the server can reach, with its models by the names a session takes, or why it lists none. Pass server for one directory, or cached to reuse directories already read for this connection.",
@@ -3166,6 +4977,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "server": {
           "type": "string"
@@ -3225,6 +5040,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "model": {
           "type": "string"
@@ -3318,6 +5137,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -3394,6 +5217,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -3468,6 +5295,104 @@
         "ok"
       ]
     },
+    "model.utilities": {
+      "type": "object",
+      "description": "Live discovery of eligible utility services (keyed servers plus keyless or local fallbacks) for search, speech-to-text, text-to-speech, image, and video capabilities without probing the network.",
+      "properties": {
+        "message": {
+          "const": "model/utilities"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "optional model name to preview which service Current server resolves to"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-changes": false
+    },
+    "model.utilities.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "active_server": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilities": {
+          "type": "object",
+          "required": [
+            "search_service",
+            "stt_service",
+            "tts_service",
+            "image_service",
+            "video_service"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "search_service": {
+              "$ref": "#/$defs/utility_capability"
+            },
+            "stt_service": {
+              "$ref": "#/$defs/utility_capability"
+            },
+            "tts_service": {
+              "$ref": "#/$defs/utility_capability"
+            },
+            "image_service": {
+              "$ref": "#/$defs/utility_capability"
+            },
+            "video_service": {
+              "$ref": "#/$defs/utility_capability"
+            }
+          }
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
     "model.server.list": {
       "type": "object",
       "description": "Every model server the server knows, whether its key is there, the default model and its server, and why a session on it couldn't start (null: it can).",
@@ -3487,6 +5412,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         }
       },
       "required": [
@@ -3572,6 +5501,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "name": {
           "type": "string"
         },
@@ -3636,6 +5569,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -3723,6 +5660,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -3801,6 +5742,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -3868,6 +5813,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -3934,6 +5883,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -3991,6 +5944,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -4060,6 +6017,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "session": {
           "type": "string",
           "description": "a session's id"
@@ -4115,6 +6076,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -4178,6 +6143,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "query": {
           "type": "string",
@@ -4317,6 +6286,10 @@
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
         },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
         "id": {
           "type": "string",
           "minLength": 1,
@@ -4376,6 +6349,14 @@
         "source": {
           "type": "string",
           "description": "who sends it: a client's own name"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "optional attachment ids to claim and attach to the subagent message"
         }
       },
       "required": [
@@ -4440,6 +6421,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         },
         "id": {
           "type": "string",
@@ -4521,6 +6506,10 @@
           "type": "integer",
           "minimum": 2,
           "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
         }
       },
       "required": [
@@ -4537,6 +6526,496 @@
         },
         "status": {
           "type": "string"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.send_with_attachments": {
+      "type": "object",
+      "description": "Start a session or send a message with staged attachments (fail-closed on older servers).",
+      "properties": {
+        "message": {
+          "const": "session/send_with_attachments"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "title": {
+          "type": "string",
+          "description": "initial title for a new session"
+        },
+        "text": {
+          "type": "string"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "a session's id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the open ask's id: this text answers it"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's folder"
+        },
+        "when_busy": {
+          "enum": [
+            "steer",
+            "queue"
+          ]
+        },
+        "choice": {
+          "type": "string",
+          "description": "one of the open ask's `choices`, as picked at its box"
+        },
+        "auto_speak": {
+          "anyOf": [
+            {
+              "enum": [
+                "off",
+                "on"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's auto-speak replies setting"
+        },
+        "thinking_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's thinking effort: off, low, high or max"
+        },
+        "stt_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's speech-to-text service setting"
+        },
+        "tts_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's text-to-speech service setting"
+        },
+        "image_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's image generation service setting"
+        },
+        "video_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's video generation service setting"
+        },
+        "rounds": {
+          "type": "boolean",
+          "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
+        },
+        "search_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's web search service setting"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "attachment ids to claim and attach to this message"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "text",
+        "source",
+        "attachments"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "session.send_with_attachments.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "admitted": {
+          "type": "boolean",
+          "description": "false: this id was sent before and its message is already in"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "handled_as": {
+          "enum": [
+            "started",
+            "steered",
+            "queued",
+            "reply"
+          ]
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
+        },
+        "unknown_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the request's fields this server's protocol doesn't have, left out"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "session.submit_with_attachments": {
+      "type": "object",
+      "description": "Submit a message with staged attachments (fail-closed on older servers).",
+      "properties": {
+        "message": {
+          "const": "session/submit_with_attachments"
+        },
+        "protocol": {
+          "type": "integer",
+          "description": "the protocol the request is written in; omitted requests are read as 4 and refused by servers with OLDEST > 4"
+        },
+        "token": {
+          "type": "string",
+          "description": "the user's token, the token file's text: needed where the socket can't tell who connects; a wrong one is refused"
+        },
+        "relayed_for_pid": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "the process a relay sends this for, where it can tell: the server checks it as it checks a socket's own peer; heeded only from the user's own client"
+        },
+        "relayed": {
+          "type": "boolean",
+          "description": "true when a relay (ZERO's HTTP door) forwards this request for an HTTP client; heeded only from the user's own client"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "picked by the sender, new for each message; the same id sent again gets the first reply and runs nothing"
+        },
+        "title": {
+          "type": "string",
+          "description": "initial title for a new session"
+        },
+        "text": {
+          "type": "string"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "a session's id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the open ask's id: this text answers it"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's folder"
+        },
+        "when_busy": {
+          "enum": [
+            "steer",
+            "queue"
+          ]
+        },
+        "choice": {
+          "type": "string",
+          "description": "one of the open ask's `choices`, as picked at its box"
+        },
+        "auto_speak": {
+          "anyOf": [
+            {
+              "enum": [
+                "off",
+                "on"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's auto-speak replies setting"
+        },
+        "thinking_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's thinking effort: off, low, high or max"
+        },
+        "stt_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's speech-to-text service setting"
+        },
+        "tts_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's text-to-speech service setting"
+        },
+        "image_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's image generation service setting"
+        },
+        "video_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's video generation service setting"
+        },
+        "rounds": {
+          "type": "boolean",
+          "description": "the message is to be worked on in rounds: ZERO is told, and its estimate goes to the user"
+        },
+        "search_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's web search service setting"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "attachment ids to claim and attach to this message"
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "text",
+        "source",
+        "attachments"
+      ],
+      "additionalProperties": false,
+      "x-changes": true
+    },
+    "session.submit_with_attachments.reply": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "admitted": {
+          "type": "boolean",
+          "description": "false: this id was sent before and its message is already in"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "handled_as": {
+          "enum": [
+            "started",
+            "steered",
+            "queued",
+            "reply"
+          ]
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "this id was sent before: the first reply again, and nothing ran"
         },
         "unknown_fields": {
           "type": "array",

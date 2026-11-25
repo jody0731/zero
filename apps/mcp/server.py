@@ -80,7 +80,7 @@ class ZeroTools:
             raise LookupError(f"{found} matching {sid!r}")
         return matches[0]
 
-    def start(self, task, workspace, mode=None, model=None):
+    def start(self, task, workspace, mode=None, model=None, attachments=None):
         folder = Path(workspace).expanduser()
         if not folder.is_absolute() or not folder.is_dir():
             raise ValueError(f"the workspace is a folder's absolute path; "
@@ -90,10 +90,14 @@ class ZeroTools:
             # A workflow's call: a subagent of the session whose command
             # this is, in its workspace, mode and model
             reply = self.connection.send_for(
-                task, working_for, mode=mode, model=model)
+                task, working_for, mode=mode, model=model,
+                attachments=attachments,
+            )
         else:
-            reply = self.connection.send(task, workspace=str(folder.resolve()),
-                                         mode=mode, model=model)
+            reply = self.connection.send(
+                task, workspace=str(folder.resolve()),
+                mode=mode, model=model, attachments=attachments,
+            )
         return {"ok": True, "session": reply["session"],
                 **self.mode_of(reply["session"])}
 
@@ -139,18 +143,19 @@ class ZeroTools:
             time.sleep(min(RECONNECT_SECONDS,
                            max(0.0, deadline - time.monotonic())))
 
-    def reply(self, session, text=None, choice=None, reply_to=None):
+    def reply(self, session, text=None, choice=None, reply_to=None,
+              attachments=None):
         info = self.session(session)
         ask = info.get("ask")
         if choice is not None and reply_to is None and ask is not None:
             raise ValueError("a choice needs the ask id from zero_wait in reply_to")
         if choice is not None and ask is None:
             raise ValueError("no question waits in this session")
-        if choice is None and not text:
-            raise ValueError("a reply takes text, or a choice")
+        if choice is None and not text and not attachments:
+            raise ValueError("a reply takes text, attachments, or a choice")
         sent = self.connection.send(
-            text or choice, session=info["id"],
-            reply_to=reply_to, choice=choice,
+            text if text is not None else (choice or ""), session=info["id"],
+            reply_to=reply_to, choice=choice, attachments=attachments,
         )
         return {"ok": True, "session": info["id"],
                 "handled_as": sent.get("handled_as")}
@@ -193,6 +198,18 @@ def optional(kind, title):
             "title": title}
 
 
+def optional_string_list(title):
+    """An optional array of strings (attachment ids)."""
+    return {
+        "anyOf": [
+            {"type": "array", "items": {"type": "string"}},
+            {"type": "null"},
+        ],
+        "default": None,
+        "title": title,
+    }
+
+
 def arguments_schema(tool, properties, required):
     return {"type": "object", "properties": properties,
             "required": list(required), "title": f"{tool}Arguments"}
@@ -213,19 +230,22 @@ TOOLS = (
         "line (its sandbox, and who answers ZERO's questions: you with "
         "zero_reply, or ZERO's judge). `mode`: one of ZERO's modes by name "
         "(a name it doesn't know is refused with the list); left out, the "
-        "user's default. `model`: left out, the user's default."),
+        "user's default. `model`: left out, the user's default. "
+        "`attachments`: optional staged attachment ids."),
      "inputSchema": arguments_schema("zero_start", {
          "task": {"title": "Task", "type": "string"},
          "workspace": {"title": "Workspace", "type": "string"},
          "mode": optional("string", "Mode"),
          "model": optional("string", "Model"),
+         "attachments": optional_string_list("Attachments"),
      }, ("task", "workspace")),
      "outputSchema": result_schema("zero_start")},
     {"name": "zero_wait", "description": (
         "Wait for a ZERO session to settle, up to `seconds` (300; 3600 at "
         "most). Returns session, outcome (answered, waiting: a question "
         "waits in `ask`, stopped, failed, or running when the seconds ran "
-        "out), answer, ask, tokens and seconds."),
+        "out), answer, ask, tokens, seconds, and any deliverable "
+        "`attachments`."),
      "inputSchema": arguments_schema("zero_wait", {
          "session": {"title": "Session", "type": "string"},
          "seconds": {"default": WAIT_SECONDS, "title": "Seconds",
@@ -236,13 +256,14 @@ TOOLS = (
         "Pass the ask id from zero_wait in `reply_to` to answer that question. "
         "Send `text` in words, or "
         "`choice`, one of the `choices` its ask in zero_wait's result lists "
-        "(their words in `choice_labels`). With no reply_to, `text` "
-        "is a follow-up message. Then zero_wait."),
+        "(their words in `choice_labels`). With no reply_to, `text` and/or "
+        "`attachments` send a follow-up message. Then zero_wait."),
      "inputSchema": arguments_schema("zero_reply", {
          "reply_to": optional("string", "Question id from zero_wait"),
          "session": {"title": "Session", "type": "string"},
          "text": optional("string", "Text"),
          "choice": optional("string", "Choice"),
+         "attachments": optional_string_list("Attachments"),
      }, ("session",)),
      "outputSchema": result_schema("zero_reply")},
     {"name": "zero_stop", "description": "Stop a ZERO session's running turn.",
@@ -441,6 +462,8 @@ def fits(value, kind):
         return isinstance(value, str)
     if kind == "integer":
         return type(value) is int
+    if kind == "array":
+        return isinstance(value, list) and all(isinstance(x, str) for x in value)
     return False
 
 

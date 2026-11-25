@@ -128,8 +128,12 @@ RELAYED_FOR_PID = {**INTEGER, "minimum": 2, "description": "the process a "
                    "relay sends this for, where it can tell: the server "
                    "checks it as it checks a socket's own peer; heeded only "
                    "from the user's own client"}
+RELAYED_FIELD = {**BOOLEAN, "description": "true when a relay (ZERO's HTTP "
+                 "door) forwards this request for an HTTP client; heeded "
+                 "only from the user's own client"}
 EVERY_REQUEST = {"protocol": PROTOCOL_FIELD, "token": TOKEN_FIELD,
-                 "relayed_for_pid": RELAYED_FOR_PID}
+                 "relayed_for_pid": RELAYED_FOR_PID,
+                 "relayed": RELAYED_FIELD}
 # A watch that leaves the server free to go when idle (a web page left open
 # shouldn't keep it up all day): ended with a `bye` of "idle" when it goes
 KEEPS_SERVER_UP = {**BOOLEAN, "description": "false: this watch doesn't keep "
@@ -377,6 +381,8 @@ MESSAGES = {
             "default_model": maybe(STRING),
             "commands": {"type": "object", "additionalProperties": STRING},
             "init_request": STRING,
+            "features": {**STRINGS, "description": "optional capabilities this "
+                         "server supports within the current protocol"},
         },
     ),
     "server/stop": message(
@@ -422,6 +428,7 @@ MESSAGES = {
                "withdrawn": {"type": "array", "items": shape(
                    "a message the turn hadn't taken", {
                        "id": STRING, "text": STRING, "source": STRING,
+                       "attachments": STRINGS,
                    }, open_to_more=True)}},
         changes=True,
     ),
@@ -503,6 +510,7 @@ MESSAGES = {
         reply={"messages": {"type": "array", "items": shape(
             "one of the user's messages", {
                 "seq": INTEGER, "time": STRING, "text": STRING,
+                "attachments": STRINGS,
             })}},
     ),
     "session/rewind": message(
@@ -603,6 +611,7 @@ def _merge_field_extension(target, field_name, ext):
 def load_protocol_files(root, *, defs=DEFS, rows=ROWS, messages=MESSAGES):
     """Load pure-data component `protocol.json` files into `defs`, `rows`,
     and `messages` without importing component code."""
+    deferred = []
     for path in protocol_files(root):
         data = json.loads(path.read_text(encoding="utf-8"))
         for name, schema in (data.get("defs") or {}).items():
@@ -610,6 +619,9 @@ def load_protocol_files(root, *, defs=DEFS, rows=ROWS, messages=MESSAGES):
         for name, schema in (data.get("rows") or {}).items():
             rows[name] = copy.deepcopy(schema)
         for name, spec in (data.get("messages") or {}).items():
+            if "extends" in spec:
+                deferred.append((name, spec))
+                continue
             messages[name] = message(
                 spec["about"],
                 copy.deepcopy(spec.get("fields")),
@@ -639,6 +651,27 @@ def load_protocol_files(root, *, defs=DEFS, rows=ROWS, messages=MESSAGES):
             if ext.get("stream") and isinstance(target.get("stream"), dict):
                 for stream_key, schema in ext["stream"].items():
                     _merge_field_extension(target["stream"], stream_key, schema)
+    # Resolve `extends` after all message_extensions so derived ops inherit them.
+    for name, spec in deferred:
+        base = copy.deepcopy(messages[spec["extends"]])
+        base["about"] = spec.get("about", base["about"])
+        for field_name, schema in (spec.get("fields") or {}).items():
+            _merge_field_extension(base["fields"], field_name, schema)
+        if extra_req := spec.get("required"):
+            req = list(base["required"])
+            for field_name in extra_req:
+                if field_name not in req:
+                    req.append(field_name)
+            base["required"] = tuple(req)
+        for reply_key, schema in (spec.get("reply") or {}).items():
+            _merge_field_extension(base["reply"], reply_key, schema)
+        if "changes" in spec:
+            base["changes"] = bool(spec["changes"])
+        if "timeout_seconds" in spec:
+            base["timeout_seconds"] = spec["timeout_seconds"]
+        if "stamp_source" in spec:
+            base["stamp_source"] = bool(spec["stamp_source"])
+        messages[name] = base
 
 
 load_protocol_files(Path(__file__).resolve().parent.parent)

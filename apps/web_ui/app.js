@@ -8,22 +8,24 @@
  */
 
 import {
-  change, clearModelFeatures, look, pairBrowser, setWakeHandler,
+  change, clearModelFeatures, look, modelUtilities, pairBrowser,
+  setWakeHandler, uploadAttachment,
 } from "./api.js";
 import { drawAsk } from "./ask.js";
 import { createHost, loadComponents } from "./components.js";
 import {
-  checkDeliveries, historyActions, initComposer, restoreComposerDraft,
-  restoreWithdrawn, rewindMessage, saveComposerDraft, saveSubmissions,
-  sizeComposer,
+  checkDeliveries, historyActions, initComposer, mountComposerPlugins,
+  restoreComposerDraft, restoreWithdrawn, rewindMessage, saveComposerDraft,
+  saveSubmissions, sizeComposer,
 } from "./composer.js";
 import {
   acceptModelDirectory, drawDetails, editModelWindow, ensureModelWindow,
   initDetails, nextModelVersion,
 } from "./details.js";
 import {
-  $, HIDDEN_SECONDS, PAGE_RECORDS, WIDTHS, actionDialog, applyTheme, el,
-  failureDetails, modelFailureView, rowOf, showPanel, state, tokens,
+  $, HIDDEN_SECONDS, PAGE_RECORDS, UTILITY_CAPABILITIES, WIDTHS, actionDialog,
+  applyTheme, el, failureDetails, formatBytes, modelFailureView, rowOf,
+  showPanel, state, tokens,
 } from "./dom.js";
 import * as entries from "./entries.js";
 import { applyListEvent, drawSessions, initSessions } from "./sessions.js";
@@ -156,6 +158,7 @@ async function openSession(id, draft = null) {
     drawDetails();
     drawAsk();
     connect();
+    window.dispatchEvent(new CustomEvent("zero:session-changed"));
     $("text").focus();
     return;
   }
@@ -183,6 +186,7 @@ async function openSession(id, draft = null) {
   drawAsk();
   connect();
   markSeen();
+  window.dispatchEvent(new CustomEvent("zero:session-changed"));
 }
 
 function closeSession() {
@@ -244,12 +248,17 @@ function openNew() {
   const defaults = Object.fromEntries(state.settings.map((s) => [s.name, s.value]));
   const { workspace, mode, model, thinking_effort } = state.launch;
   state.firstSend = null;
+  const utilities = Object.fromEntries(UTILITY_CAPABILITIES.map(([name]) => [
+    name, state.launch[name] || defaults[name] || "current_server",
+  ]));
   openSession(null, {
     title: "New session",
     workspace: workspace || "/",
     mode: mode || defaults.mode || state.hello?.mode || "default",
     model: model || defaults.model || state.hello?.model,
     thinking_effort: thinking_effort || defaults.thinking_effort || undefined,
+    auto_speak: state.launch.auto_speak || defaults.auto_speak || "off",
+    ...utilities,
   });
 }
 
@@ -379,10 +388,10 @@ async function start() {
   applyTheme();
 
   const host = createHost({
-    api: { change, look },
+    api: { change, look, modelUtilities, uploadAttachment },
     dom: {
       $, el, rowOf, showPanel, state, actionDialog, tokens,
-      failureDetails, modelFailureView,
+      failureDetails, formatBytes, modelFailureView,
     },
     entries,
     models: {
@@ -397,6 +406,7 @@ async function start() {
     drawSessions,
   });
   await loadComponents(host);
+  mountComposerPlugins();
 
   showPanel("sessions");
   drawDetails();

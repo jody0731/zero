@@ -24,7 +24,9 @@ are, and never take its place.
 """
 
 import json
+import re
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from uuid import uuid4
 
@@ -61,7 +63,7 @@ and why]
 
 ## Next
 - [what was under way when this was written; the next step]
-{saved}{asked}
+{saved}{attachments}{asked}
 Paths, commands, error text, numbers and names in the handoff are copied \
 exactly. Write only the handoff.]"""
 # Why a compaction comes, by its reason, as the handoff call reads it
@@ -92,6 +94,9 @@ SAVED = (
     "\n## Saved outputs\n- [a saved output that matters]: [its path]\n\n"
     "These outputs are saved whole:\n{lines}\n"
 )
+ATTACHMENTS = (
+    "\n## Attachments\n- [id]: [name] ([media_type]) [path]\n{lines}\n"
+)
 # The words the user or ZERO gave on what the handoff keeps (a compaction
 # entry's `instructions`; whose, as replay.ASKERS names them), as the
 # handoff call reads them, each line quoted, after the fixed form (OpenClaw's
@@ -103,6 +108,12 @@ ASKED = (
     "the form it belongs to.\n"
 )
 CLEARED = "[Output cleared from view: {tokens:,} tokens, saved whole in {path}.]"
+CLEARED_MEDIA = (
+    "[Tool output media cleared from inline view; attachment reference kept.]"
+)
+_ATTACHMENTS_SECTION_RE = re.compile(
+    r"(?ms)^## Attachments[ \t]*(?:\n.*?)?(?=^## |\Z)",
+)
 # The newest steps kept as they are at the line: this share of it
 TAIL_SHARE = 0.2
 # An older output this many tokens or fewer stays as it is
@@ -118,22 +129,97 @@ CLEAR_FROM_TOKENS = 100
 CLEARED_ENOUGH_STEPS = 3
 
 
-def handoff_instructions(reason, saved="", asked="", keeps_answer=False):
+def handoff_instructions(reason, saved="", asked="", keeps_answer=False,
+                         attachments=""):
     """What the handoff call reads after the conversation, for a compaction
     for `reason` ("line", "refused", "user" or "zero"): why it comes, what the
     handoff replaces and whether what stays `keeps_answer` (begins with an
-    answer), its form, then `saved` (SAVED, filled) and `asked` (asked())."""
+    answer), its form, then `saved` (SAVED, filled), `attachments`
+    (ATTACHMENTS, filled) and `asked` (asked())."""
     replaced = (REPLACED_BEFORE_STEP if reason in ASKERS
                 else REPLACED_BEFORE_STEPS)
     return INSTRUCTIONS.format(occasion=OCCASIONS[reason], replaced=replaced,
                                answered=ANSWER_KEPT if keeps_answer else "",
-                               saved=saved, asked=asked)
+                               saved=saved, attachments=attachments, asked=asked)
 
 
 # The room kept for them: the longest
 INSTRUCTION_TOKENS = max(
-    room.tokens(handoff_instructions(reason, saved=SAVED, keeps_answer=True))
+    room.tokens(handoff_instructions(
+        reason, saved=SAVED, attachments=ATTACHMENTS, keeps_answer=True,
+    ))
     for reason in OCCASIONS)
+
+
+def _iter_visible_attachment_nodes(entry):
+    """Yield descendant `attachments/file` nodes reachable only via visible parents."""
+    for child in entry.entries or ():
+        if entries.has(child, "private_continuation"):
+            continue
+        if not entries.has(child, "model_visible"):
+            continue
+        if entries.has(child, "attachment"):
+            yield child
+        yield from _iter_visible_attachment_nodes(child)
+
+
+def collect_active_attachments(previous, records):
+    """Collect unique active attachment summaries in chronological order."""
+    ordered = {}
+    if previous is not None:
+        for item in previous.get("attachments") or ():
+            if not isinstance(item, Mapping):
+                continue
+            aid = item.get("attachment_id")
+            if isinstance(aid, str) and aid:
+                row = {
+                    "attachment_id": aid,
+                    "name": item.get("name") or aid,
+                    "media_type": item.get("media_type") or "application/octet-stream",
+                }
+                if item.get("path"):
+                    row["path"] = str(item["path"])
+                ordered[aid] = row
+    for record in records:
+        if replay.model_entry(record) is None:
+            continue
+        for node in _iter_visible_attachment_nodes(record.entry):
+            aid = node.get("attachment_id")
+            if not isinstance(aid, str) or not aid:
+                continue
+            row = {
+                "attachment_id": aid,
+                "name": node.get("name") or aid,
+                "media_type": node.get("media_type") or "application/octet-stream",
+            }
+            if node.get("path"):
+                row["path"] = str(node.get("path"))
+            ordered[aid] = row
+    return list(ordered.values())
+
+
+def format_attachment_lines(attachments):
+    """Format active attachment summaries as compact bullet lines."""
+    lines = []
+    for item in attachments:
+        aid = item["attachment_id"]
+        name = item.get("name") or aid
+        media = item.get("media_type") or "application/octet-stream"
+        path = item.get("path")
+        if path:
+            lines.append(f"- {aid}: {name} ({media}) at {path}")
+        else:
+            lines.append(f"- {aid}: {name} ({media})")
+    return "\n".join(lines)
+
+
+def with_attachments_section(summary, attachments):
+    """Deterministically attach the authoritative `## Attachments` section."""
+    if not attachments:
+        return summary
+    cleaned = _ATTACHMENTS_SECTION_RE.sub("", summary or "").rstrip()
+    section = f"## Attachments\n{format_attachment_lines(attachments)}"
+    return f"{cleaned}\n\n{section}" if cleaned else section
 
 
 def is_answer(record):
@@ -230,8 +316,9 @@ def tool_name(record):
 
 def save_outputs(body, upto, folder, cleared, tokens=room.tokens):
     """The outputs already cleared, and each one before `upto` in `body` big
-    enough to clear (`tokens`: text's tokens), saved whole: {seq: line}. An
-    output its tool never clears (a skill's instructions) stays."""
+    enough to clear (`tokens`: text's tokens) or carrying stale inline media,
+    saved whole: {seq: line}. An output its tool never clears (a skill's
+    instructions) stays."""
     lines = dict(cleared)
     for record in body[:upto]:
         if (not entries.has(record.entry, "tool_result")
@@ -242,11 +329,20 @@ def save_outputs(body, upto, folder, cleared, tokens=room.tokens):
             continue
         result = record.entry.get("result") or ""
         cost = tokens(result)
-        if cost <= CLEAR_FROM_TOKENS:
-            continue
-        path = results.save(folder, f"{seq}-{tool_name(record)}.txt", result)
-        lines[seq] = CLEARED.format(tokens=cost, path=path)
+        has_media = room.entry_has_inline_media(record.entry)
+        if cost > CLEAR_FROM_TOKENS:
+            path = results.save(folder, f"{seq}-{tool_name(record)}.txt", result)
+            lines[seq] = CLEARED.format(tokens=cost, path=path)
+        elif has_media:
+            lines[seq] = (
+                f"{result}\n{CLEARED_MEDIA}" if result else CLEARED_MEDIA
+            )
     return lines
+
+
+def has_saved_file(line):
+    """Whether a cleared line names a saved output file on disk."""
+    return " saved whole in " in line
 
 
 def path_in(line):
@@ -275,7 +371,8 @@ def has_conversation(records):
 def write_compaction(session, *, reason, summary, kept_from, tokens_before=None,
                      line=None, cleared=None, tokens_after=None, handoff_at=None,
                      handoff_call=None, saved=None, cleared_only=False,
-                     fresh=False, occasion=None, instructions=None):
+                     fresh=False, occasion=None, instructions=None,
+                     attachments=None):
     """Append a native compaction handoff entry and refresh the session view."""
     fields = {
         "reason": reason, "tokens_before": tokens_before, "line": line,
@@ -284,6 +381,7 @@ def write_compaction(session, *, reason, summary, kept_from, tokens_before=None,
         "handoff_call": handoff_call, "saved": saved,
         "cleared_only": cleared_only or None, "fresh": fresh or None,
         "occasion": occasion, "instructions": instructions or None,
+        "attachments": attachments or None,
         **session.marked(),
     }
     fields = {k: v for k, v in fields.items() if v is not None}
@@ -298,10 +396,8 @@ def write_compaction(session, *, reason, summary, kept_from, tokens_before=None,
         created_at=stamp, fields=fields, entries=tuple(children),
     )
     entry = attribution.logged_interaction(entry, session.log.path.stem)
-    boundary = session.tool_context.get("tool_boundary")
-    redact = boundary.redact_entry if boundary is not None else None
     session.log.path.parent.mkdir(parents=True, exist_ok=True)
-    record = session.log.append(entry, redact_entry=redact)
+    record = session.log.append(entry)
     session.restore_entries(session.log.branch())
     return record
 
@@ -317,13 +413,18 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     CompactionFailed when no handoff comes back, NothingToCompact when there
     is nothing to hand off."""
     records = session.log.branch()
-    conversation = session.safe_entries()
-    before = room.measure(records, conversation, session.tool_schemas(), tokens)
+    conversation = session.entries
+    model_caps = getattr(session.model, "capabilities", None)
+    before = room.measure(
+        records, conversation, session.tool_schemas(), tokens,
+        capabilities=model_caps,
+    )
     body = replay.in_context(records)
     previous_record = replay.latest_context_boundary(records)
     previous = previous_record.entry if previous_record is not None else None
     cleared = dict(previous.get("cleared") or {}) if previous else {}
     summary = (replay.boundary_summary(previous) or None) if previous else None
+    active_attachments = collect_active_attachments(previous, body)
     asked_for = reason in ASKERS
     by_id = {entry.id: entry for entry in conversation}
     start = kept_from(body, 0 if asked_for else int(at * TAIL_SHARE), tokens,
@@ -337,7 +438,11 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
             by_id[entry.id] for record in newest
             if (entry := replay.model_entry(record)) is not None
         ))
-        size = room.measure((), newest_entries, schemas, tokens)
+        # Inline media is withholdable on the next request; only irreducible
+        # text and compact references exceeding the bound should fail.
+        size = room.measure(
+            (), newest_entries, schemas, tokens, include_media=False,
+        )
         room.bound_output(session.model, size.tokens, operation="The newest step")
     caps = room.model_limits(session.model)
     instructions = {whose: words.strip() for whose, words in
@@ -353,12 +458,14 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
     after = tokens(entries.project(conversation[0]))
     after += tokens(json.dumps(schemas, ensure_ascii=False))
     if summary:
+        if active_attachments:
+            summary = with_attachments_section(summary, active_attachments)
         after += tokens(summary)
     for record, entry in view:
         seq = str(record.seq)
         if seq in lines:
             entry = replay.with_result(entry, lines[seq])
-        after += room.entry_tokens(entry, tokens)
+        after += room.entry_tokens(entry, tokens, capabilities=model_caps)
     # At the line, enough when it cleared something and leaves room for the
     # next steps; a clearing of nothing that looks enough means the estimate
     # is off from the server's count, which the handoff trusts
@@ -371,6 +478,7 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
         return write_compaction(
             session, **fields, summary=summary, kept_from=kept, cleared=lines,
             tokens_after=after, cleared_only=True,
+            attachments=active_attachments or None,
         )
     # Then a handoff: the conversation before the kept steps, as last sent
     offset = len(conversation) - len(view)
@@ -378,31 +486,47 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
                if record.seq < body[start].seq]
     saved = "\n".join(
         f"- {described(r)}: {path_in(lines[str(r.seq)])}"
-        for r in body[:start] if str(r.seq) in lines
+        for r in body[:start]
+        if str(r.seq) in lines and has_saved_file(lines[str(r.seq)])
+    )
+    att_block = (
+        ATTACHMENTS.format(lines=format_attachment_lines(active_attachments))
+        if active_attachments else ""
     )
     ask = handoff_instructions(
         reason, saved=SAVED.format(lines=saved) if saved else "",
+        attachments=att_block,
         asked=asked(instructions), keeps_answer=is_answer(body[start]))
     request = handoff_request(session, ask)
     prefix = conversation[:offset]
     handoff_entries = prefix + tuple(entry for _, entry in earlier) + (request,)
     cap = room.handoff_room(at, limits, caps["output_limit"])
+    h_schemas = _handoff_schemas(session)
+    prepared = _prepare_handoff(session, handoff_entries, h_schemas, tokens, cap)
     try:
-        cap = handoff_output(session, handoff_entries, schemas, tokens, cap)
+        cap = handoff_output(
+            session, handoff_entries, h_schemas, tokens, cap, prepared=prepared,
+        )
     except room.ModelLimitExceeded:
-        if not saved:
+        if not saved and not any(str(r.seq) in lines for r, _ in earlier):
             raise
         # The original tool results remain in the log and the saved files.
         reduced = tuple(replay.with_result(entry, lines[str(record.seq)])
                         if str(record.seq) in lines else entry
                         for record, entry in earlier)
         handoff_entries = (*prefix, *reduced, request)
-        cap = handoff_output(session, handoff_entries, schemas, tokens, cap)
+        prepared = _prepare_handoff(
+            session, handoff_entries, h_schemas, tokens, cap,
+        )
+        cap = handoff_output(
+            session, handoff_entries, h_schemas, tokens, cap, prepared=prepared,
+        )
     t0 = time.monotonic()
-    reply = handoff_call(session, handoff_entries, cap, check)
+    reply = handoff_call(session, handoff_entries, cap, check, prepared=prepared)
     summary = (reply.content or "").strip()
     if not summary:
         raise CompactionFailed("the handoff call came back empty")
+    summary = with_attachments_section(summary, active_attachments)
     fields["handoff_call"] = {
         "prompt_tokens": reply.prompt_tokens, "cached_tokens": reply.cached_tokens,
         "completion_tokens": reply.completion_tokens,
@@ -416,10 +540,12 @@ def compact(session, reason, at, folder, check=None, tokens=room.tokens, *,
             for record, entry in view if record.seq >= first]
     after = tokens(entries.project(conversation[0])) + tokens(summary)
     after += tokens(json.dumps(schemas, ensure_ascii=False))
-    after += sum(room.entry_tokens(m, tokens) for m in tail)
+    after += sum(room.entry_tokens(m, tokens, capabilities=model_caps) for m in tail)
+    saved_files = sorted(line for line in lines.values() if has_saved_file(line))
     return write_compaction(
         session, **fields, summary=summary, kept_from=first, cleared=still,
-        saved=sorted(lines.values()), tokens_after=after,
+        saved=saved_files, tokens_after=after,
+        attachments=active_attachments or None,
     )
 
 
@@ -429,7 +555,7 @@ ROUND = INSTRUCTIONS.format(
     occasion="this round of the work in rounds has ended",
     replaced="the whole conversation is about to be replaced by a handoff that "
              "you write now; the next round starts from it.",
-    answered="", saved="", asked="",
+    answered="", saved="", attachments="", asked="",
 )
 
 
@@ -442,18 +568,43 @@ def fresh(session, handoff, at, tokens=room.tokens, check=None, *, limits,
     `occasion`: what happened, in the asker's words. The log keeps
     everything. Raises CompactionFailed when no handoff comes back."""
     records = session.log.branch()
-    conversation = session.safe_entries()
-    before = room.measure(records, conversation, session.tool_schemas(), tokens)
+    conversation = session.entries
+    body = replay.in_context(records)
+    previous_record = replay.latest_context_boundary(records)
+    previous = previous_record.entry if previous_record is not None else None
+    active_attachments = collect_active_attachments(previous, body)
+    model_caps = getattr(session.model, "capabilities", None)
+    before = room.measure(
+        records, conversation, session.tool_schemas(), tokens,
+        capabilities=model_caps,
+    )
     fields = {"reason": reason, "tokens_before": before.tokens, "line": at,
               "fresh": True, "occasion": occasion}
     if not (handoff or "").strip():
-        handoff_entries = (*conversation, handoff_request(session, ROUND))
+        att_block = (
+            ATTACHMENTS.format(lines=format_attachment_lines(active_attachments))
+            if active_attachments else ""
+        )
+        round_ask = INSTRUCTIONS.format(
+            occasion="this round of the work in rounds has ended",
+            replaced="the whole conversation is about to be replaced by a "
+                     "handoff that you write now; the next round starts from it.",
+            answered="", saved="", attachments=att_block, asked="",
+        )
+        handoff_entries = (*conversation, handoff_request(session, round_ask))
         caps = room.model_limits(session.model)
         cap = room.handoff_room(at, limits, caps["output_limit"])
+        h_schemas = _handoff_schemas(session)
+        prepared = _prepare_handoff(
+            session, handoff_entries, h_schemas, tokens, cap,
+        )
         cap = handoff_output(
-            session, handoff_entries, session.tool_schemas(), tokens, cap)
+            session, handoff_entries, h_schemas, tokens, cap, prepared=prepared,
+        )
         t0 = time.monotonic()
-        reply = handoff_call(session, handoff_entries, cap, check)
+        reply = handoff_call(
+            session, handoff_entries, cap, check, prepared=prepared,
+        )
         handoff = (reply.content or "").strip()
         if not handoff:
             raise CompactionFailed("the round's handoff call came back empty")
@@ -463,38 +614,80 @@ def fresh(session, handoff, at, tokens=room.tokens, check=None, *, limits,
             "completion_tokens": reply.completion_tokens,
             "seconds": round(time.monotonic() - t0, 1),
         }
+    handoff = with_attachments_section(handoff.strip(), active_attachments)
     after = tokens(entries.project(conversation[0])) + tokens(handoff)
     after += tokens(json.dumps(session.tool_schemas(), ensure_ascii=False))
     # Nothing before the compaction stays: the context starts at its own
     # record, the next one appended
     return write_compaction(
-        session, **fields, summary=handoff.strip(), kept_from=records[-1].seq + 1,
+        session, **fields, summary=handoff, kept_from=records[-1].seq + 1,
         cleared={}, tokens_after=after,
+        attachments=active_attachments or None,
     )
 
 
 def handoff_request(session, text):
-    entry = entries.root("note", "system", text=text)
+    return entries.root("note", "system", text=text)
+
+
+def _handoff_schemas(session):
+    schemas = session.tool_schemas()
     boundary = session.tool_context.get("tool_boundary")
-    return boundary.redact_entry(entry) if boundary is not None else entry
+    if boundary is not None:
+        schemas = boundary.redact(schemas)
+    return schemas
 
 
-def handoff_output(session, messages, schemas, tokens, cap):
+def _prepare_handoff(session, messages, schemas, tokens, cap):
+    """Bound inline media inside a compaction handoff call to its input room."""
+    prepare = getattr(session.model, "prepare_request", None)
+    if prepare is None or not room.has_attachments(messages):
+        return None
+    server = getattr(session.model, "server", None)
+    window = (
+        getattr(server, "request_context_window", None)
+        or getattr(server, "context_window", None)
+    )
+    max_in = getattr(server, "max_input_tokens", None)
+    budgets = []
+    if window is not None:
+        budgets.append(max(window - (cap or 0), 0))
+    if max_in is not None:
+        budgets.append(max_in)
+    total_budget = min(budgets) if budgets else None
+    text_size = room.measure((), messages, schemas, tokens, include_media=False)
+    media_budget = (
+        max(total_budget - text_size.tokens, 0)
+        if total_budget is not None else None
+    )
+    return prepare(
+        messages, schemas, max_output_tokens=cap, tool_choice="none",
+        media_budget=media_budget, total_budget=total_budget,
+    )
+
+
+def handoff_output(session, messages, schemas, tokens, cap, *, prepared=None):
     """The cap on the handoff's reply after checking its complete input."""
     if not room.has_input_bound(session.model):
         return cap
-    size = room.measure((), messages, schemas, tokens)
+    size = room.measure((), messages, schemas, tokens, prepared=prepared)
     return room.bound_output(session.model, size.tokens, cap,
                              operation="The compaction handoff")
 
 
-def handoff_call(session, messages, cap, check=None):
+def handoff_call(session, messages, cap, check=None, *, prepared=None):
     """The handoff, written by the session's own model, `cap` tokens at most.
-    The tools are sent as the last request sent them, so the cache serves the
-    prefix; a reply that calls a tool instead is asked again without them."""
-    reply = session.model.call(messages, session.tool_schemas(), check=check,
-                               max_output_tokens=cap)
-    if not (reply.content or "").strip() and reply.tool_calls:
-        reply = session.model.call(messages, [], check=check,
-                                   max_output_tokens=cap)
+    The redacted tools stay attached with `tool_choice="none"` so the prompt
+    prefix remains cached; any tool calls returned anyway are rejected without
+    executing or retrying without tools."""
+    schemas = _handoff_schemas(session)
+    extra = {"prepared": prepared} if prepared is not None else {}
+    reply = session.model.call(
+        messages, schemas, check=check, max_output_tokens=cap,
+        tool_choice="none", **extra,
+    )
+    if reply.tool_calls:
+        raise CompactionFailed(
+            "the handoff call returned tool calls despite tool_choice='none'"
+        )
     return reply

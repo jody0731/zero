@@ -1,0 +1,53 @@
+{
+  "message_extensions": {
+    "session/send": {
+      "fields": {
+        "search_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's web search service setting"
+        }
+      }
+    },
+    "session/submit": {
+      "fields": {
+        "search_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's web search service setting"
+        }
+      }
+    },
+    "session/set": {
+      "fields": {
+        "search_service": {
+          "type": "string"
+        }
+      }
+    },
+    "session/read": {
+      "reply": {
+        "runs_with": {
+          "type": "object",
+          "properties": {
+            "search_service": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

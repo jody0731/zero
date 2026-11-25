@@ -1,11 +1,17 @@
 # The packages ZERO's code imports, at the versions it is tested with
 beautifulsoup4==4.15.0
 cryptography==50.0.2
-keyring==25.7.0
 httpx2==2.16.0
+keyring==25.7.0
 markdownify==1.2.3
 mcp==2.3.0
 openai==3.37.0
+openpyxl==3.1.5
+pdfplumber==0.11.11
+Pillow==13.0.0
+pypdfium2==5.15.2
 PyYAML==6.0.3
 rich==15.0.0
 textual==8.2.8
+tinytag==2.3.2
+websockets==17.4

@@ -160,7 +160,56 @@ export function interaction(record) {
   return value && typeof value === "object" ? value : null;
 }
 
+export const ATTACHMENT_TYPE = "attachments/file";
+
 export function modelFailure(record) {
   const value = field(record, "model_failure");
   return value && typeof value === "object" ? value : null;
+}
+
+export function attachmentsOf(record) {
+  const found = [];
+  const seen = new Set();
+  for (const [node] of walkEntry(entryOf(record))) {
+    if (node.type !== ATTACHMENT_TYPE) continue;
+    const fields = node.fields;
+    if (!fields || typeof fields !== "object") continue;
+    const id = typeof fields.attachment_id === "string" ? fields.attachment_id : "";
+    const path = typeof fields.path === "string" ? fields.path : "";
+    const key = id || (path ? `path:${path}` : "");
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    found.push({
+      attachment_id: id,
+      name: fields.name || "file",
+      media_type: fields.media_type || "application/octet-stream",
+      size_bytes: typeof fields.size_bytes === "number" ? fields.size_bytes : 0,
+      sha256: fields.sha256 || "",
+      delivery: fields.delivery || "inline",
+      path,
+      origin: fields.origin || node.origin || "",
+      kind: fields.kind || "",
+      title: fields.title || "",
+      source_path: fields.source_path || "",
+      duration_seconds: fields.duration_seconds,
+      width: fields.width,
+      height: fields.height,
+      pages: fields.pages,
+    });
+  }
+  return found;
+}
+
+export function searchSuggestions(record) {
+  const outer = fieldsOf(record);
+  const inner = outer.fields && typeof outer.fields === "object"
+    ? outer.fields : {};
+  const rawQueries = inner.web_search_queries ?? outer.web_search_queries;
+  const queries = Array.isArray(rawQueries)
+    ? rawQueries.filter((q) => typeof q === "string" && q.trim())
+    : [];
+  const rawHtml = inner.search_suggestions_html ?? outer.search_suggestions_html;
+  const html = typeof rawHtml === "string" && rawHtml.trim() ? rawHtml : "";
+  if (!queries.length && !html) return null;
+  return { queries, html };
 }

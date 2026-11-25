@@ -48,6 +48,13 @@ def adopted_row(sid, records, title):
         first = next((r.entry for r in records if attribution.is_turn_input(r.entry)
                       and not r.entry.get("steer")), None)
         text = attribution.delivered_text(first).strip() if first else ""
+        if not text and first is not None:
+            att = next(
+                (c for c in first.entries or () if entries.has(c, "attachment")),
+                None,
+            )
+            if att is not None:
+                text = (att.get("name") or "").strip()
         source = first.get("source") if first else None
         row.setdefault("title", title(text) if text else sid)
         row.setdefault("source", source or ADOPTED_SOURCE)

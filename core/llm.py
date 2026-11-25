@@ -285,6 +285,8 @@ class Draft:
         # A tool call's index → {"id", "name", "arguments"}, the arguments as
         # far as they have come
         self.calls = {}
+        # Completed provider-executed hosted outputs: index -> fields dict
+        self.hosted_outputs = {}
         # Provider-agnostic continuation items: {kind: {index: fields}}
         self.continuation_items = {}
         # Unrecognized output items: index -> fields dict
@@ -296,6 +298,8 @@ class Draft:
         # Prompt tokens, of those the cache's, and output tokens; None until
         # the API says
         self.tokens = None
+        # Optional per-modality input token breakdown reported by the provider.
+        self.input_tokens_by_modality = None
 
     def call(self, index):
         """The tool call at `index`, made empty when it is new."""
@@ -333,15 +337,20 @@ class Reply:
         self.prompt_tokens, self.cached_tokens, self.completion_tokens = (
             draft.tokens or (0, 0, 0)
         )
+        self.input_tokens_by_modality = (
+            dict(draft.input_tokens_by_modality)
+            if draft.input_tokens_by_modality else None
+        )
 
 
 def complete(api, client, model, conversation, *, silence, check=None,
-             on_delta=None, route=None, keep_continuation=True, **request):
+             on_delta=None, route=None, keep_continuation=True,
+             tool_choice=None, **request):
     """One streamed model call: its Reply.
 
     `api`: the API the server speaks (model/apis/), which opens the stream on
     `client` from the entries and the request's standard fields (`tools`,
-    `effort`, `json_schema`, `json_mode`, `temperature`,
+    `tool_choice`, `effort`, `json_schema`, `json_mode`, `temperature`,
     `max_output_tokens`) and folds each event into the draft. `silence`:
     seconds the model may send nothing, before its first token and between
     two; past that, NoReply. The SDK's own timeout counts per read, so a
@@ -362,6 +371,8 @@ def complete(api, client, model, conversation, *, silence, check=None,
         try:
             if route is not None:
                 request["route"] = route
+            if tool_choice is not None:
+                request["tool_choice"] = tool_choice
             stream = api.open_stream(client, model, conversation, **request)
             streams.append(stream)
             if closed.is_set():

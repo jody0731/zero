@@ -84,7 +84,11 @@ class SubagentStore:
             (at, session),
         ))
 
-    def notice(self, msg_id, session, source, payload):
+    def notice(self, msg_id, session, source, payload, *, claims=()):
         """A notice into a session's inbox, kept once by its id."""
-        self.store.write(lambda db: self.store.queue_notice(
-            db, msg_id, session, source, payload))
+        def change(db):
+            for claim in claims:
+                claim(db, session, payload)
+            self.store.queue_notice(db, msg_id, session, source, payload)
+
+        self.store.write(change)

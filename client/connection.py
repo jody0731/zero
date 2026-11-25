@@ -9,6 +9,7 @@ the server runs once. A server that takes the connection but never answers is
 NoAnswer: the request may still be running there, so it isn't sent again.
 """
 
+import base64
 import json
 import os
 from types import SimpleNamespace
@@ -37,9 +38,10 @@ class NoAnswer(NotRunning):
 
 
 class ProtocolError(Exception):
-    def __init__(self, *args, model_failure=None):
+    def __init__(self, *args, model_failure=None, over_limit=False):
         super().__init__(*args)
         self.model_failure = model_failure
+        self.over_limit = bool(over_limit)
 
 
 def connect(path, timeout=30):
@@ -87,7 +89,7 @@ def read_token(path):
         return None
 
 
-def whole(payload, token=None, relayed_for_pid=None):
+def whole(payload, token=None, relayed_for_pid=None, relayed=False):
     """A request as it goes out: its protocol, the token where there is one,
     an id of its own for a message that changes something and has none, and
     for a relay, the process it sends this for."""
@@ -99,6 +101,8 @@ def whole(payload, token=None, relayed_for_pid=None):
         payload["token"] = token
     if relayed_for_pid is not None:
         payload["relayed_for_pid"] = relayed_for_pid
+    if relayed:
+        payload["relayed"] = True
     return payload
 
 
@@ -107,13 +111,15 @@ class Watch:
     list's (`session/list` with `watch`, `payload` given)."""
 
     def __init__(self, path, session=None, after=0, payload=None, token=None,
-                 relayed_for_pid=None):
+                 relayed_for_pid=None, relayed=False):
         self.conn = connect(path)
         self.stream = None
         # The reason the server gave when it closed this watch, if it did
         self.bye = None
-        payload = whole(payload or build("session/watch", session=session,
-                                         after=after), token, relayed_for_pid)
+        payload = whole(
+            payload or build("session/watch", session=session, after=after),
+            token, relayed_for_pid, relayed=relayed,
+        )
         try:
             self.conn.sendall((json.dumps(payload) + "\n").encode())
             self.conn.settimeout(None)
@@ -159,10 +165,12 @@ class Connection:
     `relayed_for_pid`: for a relay (ZERO's HTTP door), the process of its own
     client that each request is sent for, where the kernel named it."""
 
-    def __init__(self, paths, ensure=None, source=None, relayed_for_pid=None):
+    def __init__(self, paths, ensure=None, source=None, relayed_for_pid=None,
+                 relayed=False):
         socket_path = os.environ.get(WORKFLOW_SOCKET_ENV)
         workflow_token = os.environ.get(WORKFLOW_TOKEN_ENV)
-        if socket_path and workflow_token:
+        self._workflow_scoped = bool(socket_path and workflow_token)
+        if self._workflow_scoped:
             paths = SimpleNamespace(
                 socket=Path(socket_path),
             )
@@ -171,8 +179,10 @@ class Connection:
         self.ensure = ensure
         self.source = source or f"terminal-{os.getpid()}"
         self.relayed_for_pid = relayed_for_pid
+        self.relayed = bool(relayed)
         self.checked = False
         self._token = workflow_token if socket_path else None
+        self._features = None
 
     def token(self):
         """The app token, read once there is one to read."""
@@ -190,7 +200,9 @@ class Connection:
         reply = self.reply_to(payload, timeout)
         if not reply["ok"]:
             raise ProtocolError(
-                reply["error"], model_failure=reply.get("model_failure"),
+                reply["error"],
+                model_failure=reply.get("model_failure"),
+                over_limit=bool(reply.get("over_limit")),
             )
         return reply
 
@@ -203,37 +215,65 @@ class Connection:
             timeout = spec.get("timeout_seconds", 30)
         if spec.get("stamp_source"):
             payload = {**payload, "source": self.source}
-        payload = whole(payload, self.token(), self.relayed_for_pid)
+        payload = whole(
+            payload, self.token(), self.relayed_for_pid, relayed=self.relayed,
+        )
         try:
             reply = request(self.paths.socket, payload, timeout)
         except NoAnswer:
             raise
         except NotRunning:
+            self._features = None
             if self.ensure is None:
                 raise
             self.ensure()
             # The same request, its id too: the server runs it once
-            payload = whole(payload, self.token(), self.relayed_for_pid)
+            payload = whole(
+                payload, self.token(), self.relayed_for_pid,
+                relayed=self.relayed,
+            )
             reply = request(self.paths.socket, payload, timeout)
         return reply
 
     def send(self, text, session=None, mode=None, model=None, reply_to=None,
              workspace=None, when_busy="steer", choice=None, thinking_effort=None,
-             rounds=False):
+             rounds=False, attachments=None, search_service=None,
+             stt_service=None, tts_service=None, image_service=None,
+             video_service=None, auto_speak=None):
         """`reply_to`: the open ask's id, for a line typed at its prompt.
         `workspace` and `thinking_effort`: a new session's folder and thinking.
         `when_busy`: "queue" makes a follow-up that waits for the running
         turn's answer. `choice`: one of the open ask's choices, picked at its
-        box. `rounds`: to be worked on in rounds."""
+        box. `rounds`: to be worked on in rounds. `attachments`: staged
+        attachment ids (routes through fail-closed `*_with_attachments` ops)."""
         msg_id = str(uuid.uuid4())
+        att_list = list(attachments) if attachments else None
+        if att_list:
+            op = (
+                "session/submit_with_attachments"
+                if session else "session/send_with_attachments"
+            )
+        else:
+            op = "session/submit" if session else "session/send"
         request = build(
-            "session/submit" if session else "session/send",
+            op,
             id=msg_id, text=text, session=session, mode=mode,
             model=model, source=self.source, reply_to=reply_to,
             workspace=workspace, when_busy=when_busy,
+            **({"attachments": att_list} if att_list else {}),
         )
         if thinking_effort is not None:
             request["thinking_effort"] = thinking_effort
+        for name, value in (
+            ("search_service", search_service),
+            ("stt_service", stt_service),
+            ("tts_service", tts_service),
+            ("image_service", image_service),
+            ("video_service", video_service),
+            ("auto_speak", auto_speak),
+        ):
+            if value is not None:
+                request[name] = value
         if choice is not None:
             request["choice"] = choice
         if rounds:
@@ -241,15 +281,28 @@ class Connection:
         return {**self.call(request), "id": msg_id}
 
     def send_for(self, text, for_session, session=None, title=None,
-                 mode=None, model=None):
+                 mode=None, model=None, attachments=None):
         """`subagent/send`, a workflow's message: a new subagent of
         `for_session` with `text` as its task, or `text` to `session`, one
         of its subagents."""
         msg_id = str(uuid.uuid4())
-        request = build("subagent/send", id=msg_id, text=text,
-                        for_session=for_session, session=session, title=title,
-                        mode=mode, model=model,
-                        source=self.source)
+        att_list = list(attachments) if attachments else None
+        if att_list:
+            if self._workflow_scoped:
+                # Scoped workflow sockets disallow server/hello; probe
+                # attachment/get so older servers without attachments fail closed.
+                self.get_attachment(att_list[0])
+            elif not self.has_feature("attachments"):
+                raise ProtocolError(
+                    "connected ZERO server does not support attachments on "
+                    "subagent/send"
+                )
+        request = build(
+            "subagent/send", id=msg_id, text=text,
+            for_session=for_session, session=session, title=title,
+            mode=mode, model=model, source=self.source,
+            **({"attachments": att_list} if att_list else {}),
+        )
         return {**self.call(request), "id": msg_id}
 
     def continue_session(self, session):
@@ -260,12 +313,20 @@ class Connection:
         )), "id": msg_id}
 
     def set(self, session, mode=None, model=None, workspace=None, thinking_effort=None,
-            judge_model=None, judge_thinking_effort=None):
-        """Change a session's mode, model, workspace, thinking effort or judge from its
-        next turn; a `judge_model` of "" is the session's own model again."""
-        given = {"mode": mode, "model": model, "workspace": workspace,
-                 "thinking_effort": thinking_effort, "judge_model": judge_model,
-                 "judge_thinking_effort": judge_thinking_effort}
+            judge_model=None, judge_thinking_effort=None, search_service=None,
+            stt_service=None, tts_service=None, image_service=None,
+            video_service=None, auto_speak=None):
+        """Change a session's mode, model, workspace, thinking effort, judge or
+        utility service settings from its next turn; a `judge_model` of "" is
+        the session's own model again."""
+        given = {
+            "mode": mode, "model": model, "workspace": workspace,
+            "thinking_effort": thinking_effort, "judge_model": judge_model,
+            "judge_thinking_effort": judge_thinking_effort,
+            "search_service": search_service, "stt_service": stt_service,
+            "tts_service": tts_service, "image_service": image_service,
+            "video_service": video_service, "auto_speak": auto_speak,
+        }
         return self.call(build("session/set", session=session, **{
             name: value for name, value in given.items() if value is not None
         }))
@@ -279,7 +340,24 @@ class Connection:
         return self.call(build("grant/forget", session=session, grant=grant))
 
     def hello(self):
-        return self.call(build("server/hello"))
+        reply = self.call(build("server/hello"))
+        self._features = frozenset(reply.get("features") or ())
+        return reply
+
+    def server_features(self, *, refresh=False):
+        """Lazy cache of `server/hello` features, invalidated on NotRunning."""
+        if refresh or self._features is None:
+            self.hello()
+        return self._features
+
+    def has_feature(self, name):
+        """Whether the running server advertises feature `name`."""
+        return name in self.server_features()
+
+    def utilities(self, model=None):
+        """Live utility capability discovery across all 5 service settings."""
+        fields = {"model": model} if model is not None else {}
+        return self.call(build("model/utilities", **fields))
 
     def models(self, *, server=None, cached=False):
         """Available directories, or one server's, using session-ready names."""
@@ -490,15 +568,265 @@ class Connection:
         """Whether the work in rounds was open and is stopped now."""
         return self.call(build("rounds/stop", rounds=rounds))
 
+    def add_attachment(self, path, *, name=None, media_type=None,
+                       allow_over_limit=False):
+        """Stage a local host file as an attachment."""
+        fields = {"path": str(path)}
+        if name is not None:
+            fields["name"] = name
+        if media_type is not None:
+            fields["media_type"] = media_type
+        if allow_over_limit:
+            fields["allow_over_limit"] = True
+        return self.call(build("attachment/add", **fields))["attachment"]
+
+    def upload_attachment_chunks(
+        self,
+        name,
+        chunks,
+        *,
+        expected_size=None,
+        media_type=None,
+        allow_over_limit=False,
+        chunk_bytes=512 * 1024,
+    ):
+        """Stream an iterable of byte chunks in <= 512 KiB slices."""
+        chunk_bytes = min(int(chunk_bytes), 512 * 1024)
+        upload_id = None
+        offset = 0
+        pending = bytearray()
+
+        def send_piece(piece, *, final):
+            nonlocal upload_id, offset
+            fields = {
+                "offset": offset,
+                "data": base64.b64encode(piece).decode("ascii"),
+                "final": final,
+            }
+            if upload_id is None:
+                fields["name"] = name
+                if expected_size is not None:
+                    fields["expected_size"] = int(expected_size)
+                if media_type is not None:
+                    fields["media_type"] = media_type
+                if allow_over_limit:
+                    fields["allow_over_limit"] = True
+            else:
+                fields["upload_id"] = upload_id
+            reply = self.call(build("attachment/upload", **fields))
+            upload_id = reply["upload_id"]
+            offset += len(piece)
+            return reply
+
+        try:
+            for raw in chunks:
+                if not raw:
+                    continue
+                pending.extend(raw)
+                # Flush full chunks while holding back up to chunk_bytes so we
+                # know whether the final piece can finish in one call.
+                while len(pending) > chunk_bytes:
+                    piece = bytes(pending[:chunk_bytes])
+                    del pending[:chunk_bytes]
+                    send_piece(piece, final=False)
+            reply = send_piece(bytes(pending), final=True)
+            return reply["attachment"]
+        except BaseException:
+            if upload_id is not None:
+                try:
+                    self.call(build(
+                        "attachment/upload", upload_id=upload_id, abort=True,
+                    ))
+                except Exception:
+                    pass
+            raise
+
+    def upload_attachment(self, name, data, *, media_type=None,
+                          allow_over_limit=False, chunk_bytes=512 * 1024):
+        """Upload raw bytes in <= 512 KiB chunks and return staged metadata."""
+        raw = bytes(data)
+        return self.upload_attachment_chunks(
+            name,
+            (raw[i : i + chunk_bytes] for i in range(0, len(raw), chunk_bytes)),
+            expected_size=len(raw),
+            media_type=media_type,
+            allow_over_limit=allow_over_limit,
+            chunk_bytes=chunk_bytes,
+        )
+
+    def read_attachment_chunk(self, attachment_id, *, session=None,
+                              offset=0, length=512 * 1024):
+        """Read one <= 512 KiB chunk; returns `(chunk_bytes, size_bytes, eof)`."""
+        fields = {
+            "attachment_id": attachment_id,
+            "offset": offset,
+            "length": min(int(length), 512 * 1024),
+        }
+        if session is not None:
+            fields["session"] = session
+        reply = self.call(build("attachment/read", **fields))
+        return (
+            base64.b64decode(reply["data"]),
+            int(reply["size_bytes"]),
+            bool(reply["eof"]),
+        )
+
+    def iter_attachment(self, attachment_id, *, session=None,
+                        start=0, end=None, chunk_bytes=512 * 1024):
+        """Yield exact unmodified bytes for `[start, end]` in <= 512 KiB chunks."""
+        offset = int(start)
+        step = min(int(chunk_bytes), 512 * 1024)
+        while True:
+            if end is not None:
+                remaining = int(end) - offset + 1
+                if remaining <= 0:
+                    return
+                want = min(step, remaining)
+            else:
+                want = step
+            chunk, _, eof = self.read_attachment_chunk(
+                attachment_id, session=session, offset=offset, length=want,
+            )
+            if chunk:
+                yield chunk
+                offset += len(chunk)
+            if eof or not chunk:
+                return
+
+    def read_attachment(self, attachment_id, *, session=None,
+                        chunk_bytes=512 * 1024):
+        """Read an attachment's exact unmodified bytes across <= 512 KiB chunks."""
+        return b"".join(self.iter_attachment(
+            attachment_id, session=session, chunk_bytes=chunk_bytes,
+        ))
+
+    def get_attachment(self, attachment_id, *, session=None):
+        """Read metadata for one attachment."""
+        fields = {"attachment_id": attachment_id}
+        if session is not None:
+            fields["session"] = session
+        return self.call(build("attachment/get", **fields))["attachment"]
+
+    def list_attachments(self, *, session=None, include_staged=False):
+        """List attachments for a session or owned staged attachments."""
+        fields = {}
+        if session is not None:
+            fields["session"] = session
+        if include_staged:
+            fields["include_staged"] = True
+        return self.call(build("attachment/list", **fields))["attachments"]
+
+    def prune_attachments(self, *, include_trashed=False):
+        """Prune expired staged uploads and unreferenced blobs."""
+        fields = {"include_trashed": True} if include_trashed else {}
+        return self.call(build("attachment/prune", **fields))
+
+    def start_dictation(
+        self,
+        *,
+        session=None,
+        model=None,
+        stt_service=None,
+        language=None,
+        mode=None,
+    ):
+        """Start an owner-scoped live or batch dictation session."""
+        fields = {
+            k: v for k, v in (
+                ("session", session),
+                ("model", model),
+                ("stt_service", stt_service),
+                ("language", language),
+                ("mode", mode),
+            ) if v is not None
+        }
+        return self.call(build("dictation/start", **fields))
+
+    def send_dictation_chunk(
+        self, dictation_id, seq, pcm_bytes, *, sample_rate=None,
+    ):
+        """Send one ordered PCM16 mono audio chunk for an active dictation."""
+        fields = {
+            "dictation_id": dictation_id,
+            "seq": int(seq),
+            "data": base64.b64encode(bytes(pcm_bytes)).decode("ascii"),
+        }
+        if sample_rate is not None:
+            fields["sample_rate"] = int(sample_rate)
+        return self.call(build("dictation/chunk", **fields))
+
+    def stop_dictation(self, dictation_id):
+        """Stop an active dictation and return raw verbatim transcript text."""
+        return self.call(build("dictation/stop", dictation_id=dictation_id))
+
+    def cancel_dictation(self, dictation_id):
+        """Abort an active dictation and discard buffered audio."""
+        return self.call(build("dictation/cancel", dictation_id=dictation_id))
+
+    def watch_dictation(self, dictation_id, *, keeps_server_up=False):
+        """Stream live interim and finalized dictation events."""
+        return self.stream(build(
+            "dictation/watch",
+            dictation_id=dictation_id,
+            keeps_server_up=keeps_server_up,
+        ))
+
+    def synthesize_speech(
+        self,
+        *,
+        session=None,
+        reply_entry_id=None,
+        text=None,
+        voice=None,
+        service=None,
+        model=None,
+    ):
+        """Synthesize spoken audio for a session reply (cached) or plain text."""
+        fields = {
+            k: v for k, v in (
+                ("session", session),
+                ("reply_entry_id", reply_entry_id),
+                ("text", text),
+                ("voice", voice),
+                ("service", service),
+                ("model", model),
+            ) if v is not None
+        }
+        return self.call(build("speech/synthesize", **fields))
+
+    def transcribe_audio(
+        self,
+        *,
+        path=None,
+        attachment_id=None,
+        session=None,
+        model=None,
+        service=None,
+        language=None,
+    ):
+        """Transcribe a local audio path or attachment verbatim via the server."""
+        fields = {
+            k: v for k, v in (
+                ("path", str(path) if path is not None else None),
+                ("attachment_id", attachment_id),
+                ("session", session),
+                ("model", model),
+                ("service", service),
+                ("language", language),
+            ) if v is not None
+        }
+        return self.call(build("media/transcribe", **fields))
+
     def stream(self, payload):
         self.ready()
         relayed = self.relayed_for_pid
         try:
             return Watch(self.paths.socket, payload=payload, token=self.token(),
-                         relayed_for_pid=relayed)
+                         relayed_for_pid=relayed, relayed=self.relayed)
         except NotRunning:
+            self._features = None
             if self.ensure is None:
                 raise
             self.ensure()
             return Watch(self.paths.socket, payload=payload, token=self.token(),
-                         relayed_for_pid=relayed)
+                         relayed_for_pid=relayed, relayed=self.relayed)

@@ -1,0 +1,524 @@
+{
+  "message_extensions": {
+    "session/send": {
+      "fields": {
+        "auto_speak": {
+          "anyOf": [
+            {
+              "enum": [
+                "off",
+                "on"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's auto-speak replies setting"
+        }
+      }
+    },
+    "session/submit": {
+      "fields": {
+        "auto_speak": {
+          "anyOf": [
+            {
+              "enum": [
+                "off",
+                "on"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's auto-speak replies setting"
+        }
+      }
+    },
+    "session/set": {
+      "fields": {
+        "auto_speak": {
+          "enum": [
+            "off",
+            "on"
+          ]
+        }
+      }
+    },
+    "session/read": {
+      "reply": {
+        "runs_with": {
+          "type": "object",
+          "properties": {
+            "auto_speak": {
+              "enum": [
+                "off",
+                "on"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "messages": {
+    "dictation/start": {
+      "about": "Start an owner-scoped live or batch dictation session, freezing the resolved STT route before audio leaves.",
+      "fields": {
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "optional session id (may be omitted before a session exists)"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "optional draft model for pre-session Same-Provider Default routing"
+        },
+        "stt_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "optional draft stt_service setting"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "enum": [
+            "live",
+            "batch"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "reply": {
+        "dictation_id": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "enum": [
+            "live",
+            "batch"
+          ]
+        },
+        "sample_rate": {
+          "type": "integer"
+        }
+      },
+      "changes": true,
+      "stamp_source": true
+    },
+    "dictation/chunk": {
+      "about": "Send one ordered base64 PCM16 mono audio chunk for an active dictation session.",
+      "fields": {
+        "dictation_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "data": {
+          "type": "string",
+          "description": "base64-encoded PCM16 little-endian mono audio chunk"
+        },
+        "sample_rate": {
+          "type": "integer",
+          "minimum": 8000
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "dictation_id",
+        "seq",
+        "data"
+      ],
+      "reply": {
+        "dictation_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer"
+        },
+        "bytes": {
+          "type": "integer"
+        }
+      },
+      "changes": true,
+      "stamp_source": true
+    },
+    "dictation/stop": {
+      "about": "Finish an active dictation session and return raw verbatim transcript text.",
+      "fields": {
+        "dictation_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "dictation_id"
+      ],
+      "reply": {
+        "dictation_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "live",
+            "batch"
+          ]
+        }
+      },
+      "changes": true,
+      "timeout_seconds": 120,
+      "stamp_source": true
+    },
+    "dictation/cancel": {
+      "about": "Abort an active dictation session and discard buffered audio.",
+      "fields": {
+        "dictation_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "dictation_id"
+      ],
+      "reply": {
+        "dictation_id": {
+          "type": "string"
+        },
+        "cancelled": {
+          "type": "boolean"
+        }
+      },
+      "changes": true,
+      "stamp_source": true
+    },
+    "dictation/watch": {
+      "about": "Stream live interim and finalized transcript events for one active dictation session.",
+      "fields": {
+        "dictation_id": {
+          "type": "string"
+        },
+        "keeps_server_up": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "dictation_id"
+      ],
+      "stream": {
+        "event": {
+          "enum": [
+            "interim",
+            "final",
+            "error",
+            "done"
+          ]
+        },
+        "dictation_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "full_text": {
+          "type": "string"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "type": "string"
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "bye": {
+          "type": "string"
+        }
+      }
+    },
+    "speech/synthesize": {
+      "about": "Synthesize spoken audio for a session reply (deduplicated and cached in session attachments) or standalone text.",
+      "fields": {
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reply_entry_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "voice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allow_over_limit": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "reply": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "audio_base64": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "service": {
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "voice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reply_entry_id": {
+          "type": "string"
+        },
+        "cached": {
+          "type": "boolean"
+        }
+      },
+      "changes": true,
+      "timeout_seconds": 90,
+      "stamp_source": true
+    },
+    "media/transcribe": {
+      "about": "Transcribe a local audio file path or authorized attachment verbatim using the resolved STT service.",
+      "fields": {
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attachment_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "reply": {
+        "text": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "duration_seconds": {
+          "type": "number"
+        }
+      },
+      "timeout_seconds": 120,
+      "stamp_source": true
+    }
+  },
+  "commands": {
+    "/dictate": "dictate into the input (mic or /dictate PATH)",
+    "/speak": "speak the last reply (or /speak TEXT)"
+  }
+}

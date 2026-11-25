@@ -5,7 +5,7 @@ The loop (core/loop.py) fills them in; hooks read them at every hook.
 
 import time
 
-from core import entries, tools
+from core import entries, replay, tools
 
 
 class Turn:
@@ -61,6 +61,9 @@ class Step:
         self.started = time.monotonic()
         self.reply = None
         self.max_output_tokens = None
+        self.prepared_request = None
+        self.native_media_count = 0
+        self.native_media_tokens = 0
         self.retries = 0
         self.calls = []
         self.cut_off = self.malformed = self.empty = False
@@ -76,7 +79,11 @@ class Step:
         self.cut_off = reply.finish_reason == "length"
         self.content = reply.content
         self.calls = [Call(self, entry) for entry in entries.tool_calls(reply.entry)]
-        self.empty = not self.calls and not (self.content or "").strip()
+        self.empty = (
+            not self.calls
+            and not (self.content or "").strip()
+            and not replay.reply_has_output(reply.entry)
+        )
 
     def assistant_record(self):
         reply = self.reply
@@ -90,6 +97,12 @@ class Step:
             "retries": self.retries,
             "model_seconds": round(reply.seconds, 1),
         }
+        if reply.input_tokens_by_modality:
+            fields["input_tokens_by_modality"] = reply.input_tokens_by_modality
+        if self.native_media_count:
+            fields["native_media_count"] = self.native_media_count
+        if self.native_media_tokens:
+            fields["native_media_tokens"] = self.native_media_tokens
         if self.empty:
             fields["empty"] = True
         return fields

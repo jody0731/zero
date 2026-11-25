@@ -51,6 +51,7 @@ class Setting:
     aliases: tuple = field(default=(), compare=False)
     switchable: bool = field(default=False, compare=False)
     empty_means_none: bool = field(default=False, compare=False)
+    none_means_default: bool = field(default=False, compare=False)
     validate: object = field(default=None, compare=False)
     model_visible: bool = field(default=False, compare=False)
 
@@ -117,14 +118,16 @@ def check(setting, value):
     """What is wrong with `value` for `setting` (a Setting, or its name);
     None if nothing."""
     if not isinstance(setting, Setting):
-        setting = BY_NAME[setting]
+        setting = BY_NAME[ALIASES.get(setting, setting)]
     name = setting.name
     if value is None:
-        return None if setting.unset_means else f"{name} needs a value"
+        if setting.unset_means or setting.none_means_default:
+            return None
+        return f"{name} needs a value"
     # A bool is an int in Python, and never a count of steps or minutes
     if isinstance(value, bool):
         return f"{name} has the wrong type"
-    if setting.kind in ("choice", "mode", "model", "string"):
+    if setting.kind in ("choice", "mode", "model", "service", "string"):
         if not isinstance(value, str) or not value.strip():
             return f"{name} has the wrong type"
         if setting.kind == "choice" and value not in setting.choices:
@@ -206,6 +209,7 @@ class LiveSettings(Mapping):
         self.fixed = renamed(dict(fixed or {}))
 
     def __getitem__(self, name):
+        name = ALIASES.get(name, name)
         if name in self.fixed:
             return self.fixed[name]
         values = self.current()
@@ -230,7 +234,15 @@ def renamed(values):
            if name in ALIASES}
     out.update({name: value for name, value in values.items()
                 if name not in ALIASES})
-    return {name: value for name, value in out.items() if name not in RETIRED}
+    result = {}
+    for name, value in out.items():
+        if name in RETIRED:
+            continue
+        setting = BY_NAME.get(name)
+        if value is None and setting is not None and setting.none_means_default:
+            value = setting.default
+        result[name] = value
+    return result
 
 
 def save(values, path=None):
@@ -362,8 +374,12 @@ class Config:
 
     def set(self, name, value):
         """Write one setting; what is wrong with it, or None once written."""
+        name = ALIASES.get(name, name)
         if name not in BY_NAME:
             return f"no setting {name!r}"
+        setting = BY_NAME[name]
+        if value is None and setting.none_means_default:
+            value = setting.default
         self()
         if self.error is not None:
             return "config.toml can't be read: fix it first"

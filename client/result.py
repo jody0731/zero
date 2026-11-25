@@ -23,6 +23,19 @@ class Result:
         self.still_running = {}
         self.tokens = {"prompt": 0, "cached": 0, "completion": 0}
         self.seconds = 0.0
+        # Deliverables and produced attachments from tools/assistant replies.
+        self.attachments = []
+        self._seen_attachments = set()
+        # Provider search suggestion queries/links from web_search tool results.
+        self.search_suggestions = []
+
+    def _collect_attachments(self, record):
+        for item in entries.attachments_of(record):
+            key = (item.get("attachment_id"), item.get("path"))
+            if key in self._seen_attachments:
+                continue
+            self._seen_attachments.add(key)
+            self.attachments.append(item)
 
     def add(self, event):
         """Take one event; True once the session has settled."""
@@ -42,9 +55,22 @@ class Result:
                 self.delivered = True
             if record and not self.delivered:
                 return False
+        if (
+            self.message_id is None
+            and self.last is not None
+            and entries.is_turn_start(record)
+        ):
+            self.attachments.clear()
+            self._seen_attachments.clear()
+            self.search_suggestions.clear()
         if kind == "chat/assistant_reply":
             for name in self.tokens:
                 self.tokens[name] += fields.get(f"{name}_tokens") or 0
+            self._collect_attachments(record)
+        elif kind == "tools/result":
+            self._collect_attachments(record)
+            if suggestion := entries.search_suggestions(record):
+                self.search_suggestions.append(suggestion)
         elif kind == "sessions/turn_end":
             self.last = record
             self.seconds += fields.get("seconds") or 0
@@ -87,6 +113,7 @@ class Result:
             "answer": answer, "ask": self.ask,
             **({"reply": last["reply"]} if answer is not None
                and "reply" in last else {}),
+            **({"attachments": list(self.attachments)} if self.attachments else {}),
             "still_running": dict(self.still_running),
             "tokens": dict(self.tokens),
             "seconds": round(self.seconds, 1),

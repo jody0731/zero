@@ -1,10 +1,13 @@
 """Search and fetch run through the server's network connection."""
 
+from components.model import SERVICE_CHOICES, SERVICE_CURRENT_SERVER
 from settings import Setting
 
 SETTINGS = (
-    Setting("web_search_service", "Default", "Web search service", None, "string",
-            unset_means="Automatic"),
+    Setting("search_service", "Default", "Web search service",
+            SERVICE_CURRENT_SERVER, "service", choices=SERVICE_CHOICES,
+            aliases=("web_search_service",), switchable=True,
+            none_means_default=True),
     # The time a fetch's or a search's every request may take
     Setting("web_timeout", "Limits", "Seconds a web request may take", 30,
             "number"),

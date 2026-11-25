@@ -9,6 +9,7 @@ client/session_list.py's, the plain texts client/render.py's.
 """
 
 import os
+import shlex
 import time
 from pathlib import Path
 
@@ -64,11 +65,15 @@ class SessionInput(SessionState):
         """Whether this line means leave, as Ctrl+D does."""
         return text.strip().lower() in LEAVE
 
-    def line(self, text, follow_up=False, choice=None, reply_to=None, *, check=None):
+    def line(self, text, follow_up=False, choice=None, reply_to=None, *,
+             check=None, attachments=None):
         """A line typed disarms Ctrl+C's second press (SessionState.line)."""
         with self.lock:
             self.interrupt_armed = False
-        return super().line(text, follow_up, choice, reply_to, check=check)
+        return super().line(
+            text, follow_up, choice, reply_to,
+            check=check, attachments=attachments,
+        )
 
     def ctrl_c(self, empty=True, stop=None):
         """Stop a moving turn; a parked one isn't moving, so only say so.
@@ -305,8 +310,45 @@ SETTING_NOTES = {
     "judge_thinking_effort": "Sent in the judge model's API format where supported.",
 }
 # How a switch names what it changed, in a notice
-SWITCHED = {"thinking_effort": "thinking effort", "judge_model": "the judge's model",
-            "judge_thinking_effort": "the judge's thinking"}
+SWITCHED = {
+    "thinking_effort": "thinking effort",
+    "judge_model": "the judge's model",
+    "judge_thinking_effort": "the judge's thinking",
+    "search_service": "web search",
+    "stt_service": "speech to text",
+    "tts_service": "text to speech",
+    "image_service": "image generation",
+    "video_service": "video generation",
+    "auto_speak": "auto-speak replies",
+}
+
+
+def parse_attach_args(rest):
+    """Parse `/attach` arguments: returns `(action, value, force)`.
+
+    `action` is one of `"add"`, `"clear"`, `"remove"`, `"empty"`.
+    """
+    text = (rest or "").strip()
+    if not text:
+        return "empty", "", False
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        tokens = text.split()
+    force = False
+    clean = []
+    for token in tokens:
+        if token in ("--force", "-f"):
+            force = True
+        else:
+            clean.append(token)
+    if not clean:
+        return "empty", "", force
+    if clean[0] == "clear" and len(clean) == 1:
+        return "clear", "", False
+    if clean[0] == "remove" and len(clean) == 2:
+        return "remove", clean[1], False
+    return "add", " ".join(clean), force
 
 
 def switched_text(changes):
@@ -316,6 +358,8 @@ def switched_text(changes):
     for name, value in changes.items():
         if name == "judge_model" and not value:
             value = "the session's own"
+        elif value == "current_server":
+            value = "current server"
         said.append(f"{SWITCHED.get(name, name)} {value}")
     text = ", ".join(said)
     return text[:1].upper() + text[1:]
@@ -330,6 +374,11 @@ def setting_text(setting, value, default_model=None):
         return setting.unset_means or "the API's default"
     if value == "model_default":
         return "Model default"
+    if getattr(setting, "kind", None) == "service":
+        if value == "current_server":
+            return "Current server"
+        if value == "off":
+            return "Off"
     if isinstance(value, float):
         return f"{value:g}"
     return str(value)

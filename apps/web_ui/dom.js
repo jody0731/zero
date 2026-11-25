@@ -52,10 +52,34 @@ export const state = {
   settingsStatus: "",
   sessionRead: null,
   features: new Map(),
+  utilities: new Map(),
+  composerAttachments: new Map(),
   turnStarted: null,
   openVersion: 0,
   firstSend: null,
 };
+
+export const UTILITY_CAPABILITIES = [
+  ["search_service", "Search"],
+  ["stt_service", "Speech to text"],
+  ["tts_service", "Text to speech"],
+  ["image_service", "Images"],
+  ["video_service", "Video"],
+];
+
+export function draftKey(session = state.open) {
+  return session || "__new__";
+}
+
+export function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  if (n < 1024 * 1024 * 1024) {
+    return `${(n / (1024 * 1024)).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  }
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 
 try {
   state.submissions = new Map(JSON.parse(

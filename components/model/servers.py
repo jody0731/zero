@@ -30,9 +30,30 @@ from urllib.parse import urlsplit
 
 import paths
 from core.llm import complete
-from components.model import THINKING_EFFORTS, directory, features, limit_catalog
-from components.model.apis import APIS, DEFAULT, SEARCH_APIS
+from components.model import (
+    MODALITIES,
+    ModelCapabilities,
+    THINKING_EFFORTS,
+    directory,
+    features,
+    limit_catalog,
+)
+from components.model.apis import (
+    APIS,
+    DEFAULT,
+    IMAGE_APIS,
+    SEARCH_APIS,
+    STT_APIS,
+    TTS_APIS,
+    VIDEO_APIS,
+    adapter_capabilities,
+    chat_completions,
+)
 from components.model.apis.conversation import ProjectionCache
+from components.model.apis.multimodal import (
+    has_conversation_attachments,
+    with_max_output_tokens,
+)
 from components.model.limits import (
     TokenLimits, endpoint, model_id, smaller, token_count,
 )
@@ -49,6 +70,10 @@ SERVER_FIELDS = {
     "context_window": int, "context_stop": int, "price": list, "models": dict,
     "refuses_overlong_requests": bool,
     "search_api": str, "search_model": str, "bare_model_names": bool,
+    "stt_api": str, "stt_model": str, "stt_live_model": str,
+    "tts_api": str, "tts_model": str,
+    "image_api": str, "image_model": str,
+    "video_api": str, "video_model": str,
     "max_reasoning_effort": str, "context_windows": dict,
     "max_input_tokens": int, "max_output_tokens": int,
     "models_dev_provider": str,
@@ -60,13 +85,14 @@ SERVER_FIELDS = {
     "replays_encrypted_reasoning": bool, "replays_response_items": bool,
     "requests_reasoning_summary": bool, "reports_reasoning_efforts": bool,
     "suggested_models": list,
+    "capabilities": dict, "supports_model_show": bool,
 }
 MODEL_FIELDS = ("context_window", "max_input_tokens", "max_output_tokens",
                 "context_stop", "price", "max_reasoning_effort", "reply_api",
                 "reasoning_efforts", "chat_reasoning_efforts", "chat_tool_efforts",
                 "responses_reasoning_efforts",
                 "accepts_zero_temperature", "requests_reasoning_summary",
-                "chat_thinking_field")
+                "chat_thinking_field", "capabilities")
 LIMIT_FIELDS = ("context_window", "max_input_tokens", "max_output_tokens")
 REPLY_FIELDS = (
     "reply_api", "responses_url", "responses_since_version",
@@ -77,9 +103,19 @@ REPLY_FIELDS = (
     "requests_reasoning_summary", "chat_thinking_field",
     "reports_reasoning_efforts",
     "suggested_models",
+    "capabilities",
 )
-ENDPOINT_FIELDS = ("key_env", "search_api", "search_model",
-                   "refuses_overlong_requests", *LIMIT_FIELDS, *REPLY_FIELDS)
+ENDPOINT_FIELDS = (
+    "key_env", "search_api", "search_model",
+    "stt_api", "stt_model", "stt_live_model",
+    "tts_api", "tts_model",
+    "image_api", "image_model",
+    "video_api", "video_model",
+    "refuses_overlong_requests", *LIMIT_FIELDS, *REPLY_FIELDS,
+)
+CAPABILITY_KEYS = frozenset({
+    "input", "output", "reasoning", "tool_calling", "reply_capable",
+})
 # Lines named otherwise before 0.6.2.8, read under their names now
 RENAMED = {"name": "title", "context": "context_window"}
 # Lines a server had before 0.6.2.7: what a model honours is measured now;
@@ -196,10 +232,29 @@ class ModelServer:
         if not price and model:
             price = filled_prices().get(name, {}).get(model)
         self.price = tuple(price) if price else None
+        self._endpoint_key = directory.endpoint_key(self.url) if self.url else ""
+        self._caps_reports_token = None
+        self._caps_sig = ""
+        self._caps_cache = {}
+        self.capabilities = self.capabilities_for("chat", refresh=refresh)
+        self._caps_key = self._capability_revision()
+
+    def _capability_revision(self):
+        token = directory.reports_token()
+        if token != self._caps_reports_token:
+            self._caps_sig = (
+                directory.capabilities_signature(
+                    self.url, self._model, ep_key=self._endpoint_key,
+                )
+                if self._model else ""
+            )
+            self._caps_reports_token = directory.reports_token()
+        return (CACHE.get("key"), self._reported, self._caps_sig)
 
     def set_limits(self, reported, *, refresh=False):
         entry, model = self._entry, self._model
         self._reported = reported
+        self._caps_cache = {}
         self.verified_limits, limits = (
             model_limits(self.name, entry, model, refresh=refresh, reported=reported)
             if model is not None else (TokenLimits(), TokenLimits.read(entry))
@@ -211,6 +266,9 @@ class ModelServer:
         # windows bind requests, including any smaller saved cap.
         bounded = self.verified_limits.context_window or saved_window(entry, model)
         self.request_context_window = limits.context_window if bounded else None
+        if hasattr(self, "api"):
+            self.capabilities = self.capabilities_for("chat", refresh=False)
+            self._caps_key = self._capability_revision()
 
     def refresh_limits(self):
         """Apply new endpoint observations or saved window edits to an open session."""
@@ -226,6 +284,38 @@ class ModelServer:
         reported = directory.reported(self.url, self._model)
         if entry_changed or reported != self._reported:
             self.set_limits(reported)
+        else:
+            caps_key = self._capability_revision()
+            if getattr(self, "_caps_key", None) != caps_key:
+                self._caps_cache = {}
+                self.capabilities = self.capabilities_for("chat", refresh=False)
+                self._caps_key = caps_key
+
+    def capabilities_for(self, role="chat", *, api=None, refresh=False):
+        """Effective passive ModelCapabilities for `(model, endpoint, api, role)`."""
+        use_api = api or self.api
+        rev = self._capability_revision()
+        cache_key = (role, use_api, rev)
+        if not refresh:
+            cached = self._caps_cache.get(cache_key)
+            if cached is not None:
+                return cached
+        if getattr(self, "_caps_key", None) != rev:
+            self._caps_cache = {}
+            self._caps_key = rev
+        caps = model_capabilities(
+            self.name,
+            self._entry,
+            self._model,
+            api=use_api,
+            role=role,
+            refresh=refresh,
+            reported=self._reported if self._model else None,
+        )
+        self._caps_cache[cache_key] = caps
+        if role == "chat" and use_api is self.api:
+            self.capabilities = caps
+        return caps
 
     def reported_reasoning(self):
         if self.reports_reasoning_efforts:
@@ -345,8 +435,16 @@ def check(name, entry):
     version = entry.get("responses_since_version", [0, 0, 0])
     if len(version) != 3 or any(type(part) is not int or part < 0 for part in version):
         return f"[{name}] responses_since_version needs major, minor and patch numbers"
-    if "search_api" in entry and entry["search_api"] not in SEARCH_APIS:
-        return f"[{name}] search_api is one of {', '.join(SEARCH_APIS)}"
+    for api_field, registry in (
+        ("search_api", SEARCH_APIS),
+        ("stt_api", STT_APIS),
+        ("tts_api", TTS_APIS),
+        ("image_api", IMAGE_APIS),
+        ("video_api", VIDEO_APIS),
+    ):
+        if api_field in entry and entry[api_field] not in registry:
+            known = ", ".join(registry) if registry else "(none registered)"
+            return f"[{name}] {api_field} is one of {known}"
     for url, windows in entry.get("context_windows", {}).items():
         if not isinstance(windows, dict) or any(
             not model_id(model) or not token_count(window)
@@ -368,8 +466,54 @@ def check(name, entry):
         problem = check_reasoning(line)
         if problem:
             return f"[{name}.models] {model!r} {problem}"
+        problem = check_capabilities(line)
+        if problem:
+            return f"[{name}.models] {model!r} {problem}"
     if problem := check_reasoning(entry):
         return f"[{name}] {problem}"
+    if problem := check_capabilities(entry):
+        return f"[{name}] {problem}"
+    return None
+
+
+def check_capabilities(entry):
+    """Validate optional `capabilities` table on a server or model entry."""
+    caps = entry.get("capabilities")
+    if caps is None:
+        return None
+    if not isinstance(caps, dict):
+        return "capabilities must be a table"
+    for key, value in caps.items():
+        if key not in CAPABILITY_KEYS:
+            return (
+                f"capabilities has unknown key {key!r}; known: "
+                f"{', '.join(sorted(CAPABILITY_KEYS))}"
+            )
+        if key in ("input", "output"):
+            if isinstance(value, dict):
+                for modality, flag in value.items():
+                    if modality not in MODALITIES:
+                        return (
+                            f"capabilities.{key} has unknown modality "
+                            f"{modality!r}"
+                        )
+                    if not isinstance(flag, bool):
+                        return (
+                            f"capabilities.{key}.{modality} must be a boolean"
+                        )
+            elif isinstance(value, list):
+                if any(
+                    not isinstance(item, str) or item not in MODALITIES
+                    for item in value
+                ):
+                    return (
+                        f"capabilities.{key} list may only name "
+                        f"{', '.join(MODALITIES)}"
+                    )
+            else:
+                return f"capabilities.{key} must be a table or list"
+        elif not isinstance(value, bool):
+            return f"capabilities.{key} must be a boolean"
     return None
 
 
@@ -438,12 +582,20 @@ def table():
     key = (path, stamp(path))
     if CACHE.get("key") != key:
         found = []
-        CACHE["table"] = merge(shipped, load(path, path, found), path)
+        mine = load(path, path, found)
+        CACHE["mine"] = mine
+        CACHE["table"] = merge(shipped, mine, path)
         CACHE["key"] = key
         CACHE["notes"] = found
         for note in found:
             print(f"ZERO: {note}", file=sys.stderr, flush=True)
     return CACHE["table"]
+
+
+def user_table():
+    """The user's own models.toml tables before merging over catalog.toml."""
+    table()
+    return CACHE.get("mine", {})
 
 
 def notes():
@@ -534,16 +686,154 @@ def model_limits(name, entry, model, *, refresh=True, reported=None):
     return verified, limits
 
 
-def read_directory(name, entry):
-    """Refresh deployed limits when a custom endpoint is used directly."""
-    if canonical_endpoint(name, entry["url"]) and name in limit_catalog.providers():
-        return
-    server = ModelServer(name, entry)
+def _merge_caps_dict(base, override):
+    """Merge model-level capabilities over server-level capabilities."""
+    if not base and not override:
+        return {}
+    merged = dict(base or {})
+    for key, value in (override or {}).items():
+        if (
+            key in ("input", "output")
+            and isinstance(merged.get(key), dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def _efforts_reasoning(entry, line, api_name):
+    """Infer explicit reasoning bool from declared effort lists when absent."""
+    merged = {**(entry or {}), **(line or {})}
+    efforts = merged.get("reasoning_efforts")
+    if api_name == "chat_completions":
+        efforts = merged.get("chat_reasoning_efforts", efforts)
+    elif api_name == "responses":
+        efforts = merged.get("responses_reasoning_efforts", efforts)
+    if efforts is None:
+        return None
+    return bool(efforts)
+
+
+def _entry_caps(entry, model, api_name):
+    """Extract a capability dict from one server/model config layer."""
+    if not isinstance(entry, dict):
+        return {}
+    line = entry.get("models", {}).get(model, {}) if model else {}
+    caps = _merge_caps_dict(entry.get("capabilities"), line.get("capabilities"))
+    if "reasoning" not in caps:
+        inferred = _efforts_reasoning(entry, line, api_name)
+        if inferred is not None:
+            caps["reasoning"] = inferred
+    return caps
+
+
+def _user_caps(name, entry, model, api_name):
+    """Extract highest-precedence user_config capabilities."""
     try:
-        directory.listing(server.url, api_key(server), api=server.api, cached=True)
+        mine = user_table().get(name)
+    except ModelServerError:
+        mine = None
+    if mine is not None:
+        return _entry_caps(mine, model, api_name)
+    shipped = catalog().get(name)
+    if shipped is None or not canonical_endpoint(name, entry["url"]):
+        return _entry_caps(entry, model, api_name)
+    # Direct synthetic override passed to ModelServer without models.toml.
+    entry_caps = _entry_caps(entry, model, api_name)
+    shipped_caps = _entry_caps(shipped, model, api_name)
+    if entry_caps != shipped_caps:
+        return entry_caps
+    return {}
+
+
+def model_capabilities(
+    name, entry, model, *, api=None, role="chat", refresh=False, reported=None,
+):
+    """Compute effective passive ModelCapabilities for `(model, endpoint, api, role)`.
+
+    effective = adapter_declared ∩ resolved(
+        user_config > endpoint_metadata > catalog.toml > published_catalog > unknown
+    )
+    """
+    line = entry.get("models", {}).get(model, {}) if model else {}
+    chosen_api = api or reply_api(name, entry, model, line)
+    adapter = adapter_capabilities(chosen_api, role=role)
+    url = entry["url"]
+
+    user_layer = _user_caps(name, entry, model, chosen_api.NAME)
+    endpoint_layer = directory.reported_capabilities(url, model) if model else {}
+    catalog_layer = {}
+    published_layer = None
+    if canonical_endpoint(name, url):
+        shipped = catalog().get(name)
+        catalog_layer = _entry_caps(shipped, model, chosen_api.NAME)
+        if model and name in limit_catalog.providers():
+            published_layer = limit_catalog.capabilities(name, model)
+
+    if model is not None:
+        _, limits = model_limits(
+            name, entry, model, refresh=refresh, reported=reported,
+        )
+    else:
+        limits = TokenLimits.read(entry)
+
+    return ModelCapabilities.resolve(
+        adapter,
+        user_layer,
+        endpoint_layer,
+        catalog_layer,
+        published_layer,
+        context_window=limits.context_window,
+        max_input_tokens=limits.max_input_tokens,
+        max_output_tokens=limits.max_output_tokens,
+        supported_methods=directory.reported_methods(url, model) if model else (),
+        role=role,
+        api=chosen_api.NAME,
+    )
+
+
+def _has_configured_window(entry, model):
+    line = entry.get("models", {}).get(model, {}) if model else {}
+    return bool(
+        saved_window(entry, model)
+        or token_count(line.get("context_window"))
+        or token_count(entry.get("context_window"))
+    )
+
+
+def read_directory(name, entry, model=None):
+    """Refresh deployed limits and lazy model metadata on endpoint selection."""
+    is_published = (
+        canonical_endpoint(name, entry["url"]) and name in limit_catalog.providers()
+    )
+    if is_published:
+        return
+    server = ModelServer(name, entry, refresh=False)
+    try:
+        key = api_key(server)
+    except ModelServerError:
+        return
+    listed_ok = False
+    try:
+        directory.listing(server.url, key, api=server.api, cached=True)
+        listed_ok = True
     except Exception:
         # Startup still uses verified and configured limits it already has.
         pass
+    if model is None or server.api.NAME not in ("chat_completions", "responses"):
+        return
+    wants_show = bool(entry.get("supports_model_show")) or (
+        listed_ok
+        and directory.reported(server.url, model).context_window is None
+        and not _has_configured_window(entry, model)
+    )
+    if not wants_show:
+        return
+    shown = chat_completions.show_model(server.url, model, key)
+    if shown:
+        directory.remember_model(server.url, model, shown)
 
 
 def resolve(model, *, check_endpoint=False, refresh=True):
@@ -552,7 +842,7 @@ def resolve(model, *, check_endpoint=False, refresh=True):
     name, served_name = model_address(model, entries)
     entry = entries[name]
     if check_endpoint:
-        read_directory(name, entry)
+        read_directory(name, entry, served_name)
     server = ModelServer(name, entry, served_name, refresh=refresh)
     if server.context_window is None:
         raise ModelServerError(
@@ -571,14 +861,71 @@ def key_envs():
 
 
 def read_keys(path=None):
-    """The saved key slots in ZERO's home."""
-    path = Path(path or paths.keys_file())
+    """The saved key slots in ZERO's home, cached by file mtime and size."""
+    path = paths.keys_file() if path is None else Path(path)
+    key = (path, stamp(path))
+    cached = CACHE.get("keys")
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    if key[1] is None:
+        data = {}
+        CACHE["keys"] = (key, data)
+        return data
     try:
-        return tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text())
     except FileNotFoundError:
-        return {}
+        data = {}
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         raise ModelServerError(f"can't read {path}") from None
+    CACHE["keys"] = (key, data)
+    return data
+
+
+def entry_api_key(name, entry, keys):
+    """Fast key lookup for a catalog/models.toml entry without building ModelServer."""
+    key_env = entry.get("key_env")
+    if key_env:
+        env_key = os.environ.get(key_env)
+        if env_key and env_key != NO_KEY:
+            return env_key
+    key = stored_key(name, keys)
+    if key is None or key == NO_KEY:
+        return None
+    entry_url = entry.get("url")
+    if not isinstance(entry_url, str) or not entry_url:
+        return None
+    saved_url = keys[name].get("url")
+    if isinstance(saved_url, str) and endpoint(saved_url) == endpoint(entry_url):
+        return key
+    if saved_url is None and canonical_endpoint(name, entry_url):
+        return key
+    return None
+
+
+def utility_services(capability, discover_fn, *, extra_key=None):
+    """Cached utility discovery keyed by models.toml, keys.toml, and key_env values."""
+    tbl = table()
+    try:
+        keys = read_keys()
+    except ModelServerError:
+        keys = {}
+    env_vals = tuple(
+        (name, os.environ.get(entry["key_env"]))
+        for name, entry in tbl.items()
+        if "key_env" in entry
+    )
+    cache_key = (capability, id(tbl), id(keys), env_vals, extra_key)
+    bucket = CACHE.setdefault("utility_services", {})
+    cached = bucket.get(capability)
+    if cached is not None and cached[0] == cache_key:
+        return dict(cached[1])
+    found = discover_fn(
+        capability,
+        tbl,
+        lambda name, entry: entry_api_key(name, entry, keys),
+    )
+    bucket[capability] = (cache_key, found)
+    return dict(found)
 
 
 def stored_key(name, keys):
@@ -720,26 +1067,88 @@ class Model:
             self.name, self.api, schema, route=self.server.history_route,
         )
 
+    @property
+    def capabilities(self):
+        """Effective passive ModelCapabilities for this model's chat role."""
+        return self.capabilities_for("chat")
+
+    def capabilities_for(self, role="chat"):
+        """Effective passive ModelCapabilities for `(model, endpoint, api, role)`."""
+        return self.server.capabilities_for(role, api=self.api)
+
+    def _native_count_client(self, seconds):
+        """Return a client suitable for native input-token counting, or None."""
+        client = self.client_for(seconds)
+        if not self._scripted:
+            return client
+        if (getattr(client, "supports_native_counting", False)
+                or hasattr(client, "post_json")
+                or (hasattr(client, "post") and hasattr(client, "base_url"))):
+            return client
+        return None
+
+    def prepare_request(self, conversation, schemas, *, max_output_tokens=None,
+                        tool_choice=None, media_budget=None, total_budget=None):
+        """Build the exact route-specific prepared request and accounting plan."""
+        seconds = self.silence()
+        effort = features.request_effort(self.name, self.server, self.effort,
+                                         tools=bool(schemas))
+        capped = smaller(max_output_tokens, self.server.max_output_tokens)
+        return self.api.prepare_request(
+            self.served_name,
+            conversation,
+            route=self.server.history_route,
+            project=self.projections.project,
+            tools=schemas,
+            tool_choice=tool_choice,
+            effort=effort,
+            max_output_tokens=capped,
+            capabilities=self.capabilities,
+            media_budget=media_budget,
+            total_budget=total_budget,
+            client=self._native_count_client(seconds),
+            **self.progress(),
+            **self.request_options(encrypted=True),
+        )
+
     def call(self, conversation, schemas, check=None, on_delta=None,
-             max_output_tokens=None):
+             max_output_tokens=None, tool_choice=None, prepared=None):
         """One model call, streamed (complete). API errors, a silence past the
         timeout and replies that didn't complete are raised for the loop to
         handle (MODEL_ERRORS); what `check` raises ends it at once. The
         effort is checked for the model, endpoint and attached tools.
-        `max_output_tokens`: a cap on the
-        reply (a compaction's handoff); None sends none."""
+        `max_output_tokens`: a cap on the reply (a compaction's handoff); None
+        sends none. `tool_choice`: optional native tool-choice directive (e.g.
+        "none" for cache-preserving handoffs). `prepared`: optional pre-built
+        PreparedRequest so the exact counted request is sent."""
         seconds = self.silence()
+        capped = smaller(max_output_tokens, self.server.max_output_tokens)
+        if prepared is not None:
+            body = with_max_output_tokens(self.api.NAME, prepared.body, capped)
+            return complete(
+                self.api, self.client_for(seconds), self.served_name, conversation,
+                route=self.server.history_route,
+                keep_continuation=self.server.keeps_continuation(self.api),
+                silence=seconds, check=check, on_delta=on_delta,
+                prepared_body=body,
+            )
         effort = features.request_effort(self.name, self.server, self.effort,
                                          tools=bool(schemas))
+        extra = {}
+        if has_conversation_attachments(conversation):
+            extra["capabilities"] = self.capabilities
+            count_client = self._native_count_client(seconds)
+            if count_client is not None:
+                extra["client"] = count_client
         return complete(
             self.api, self.client_for(seconds), self.served_name, conversation,
             route=self.server.history_route,
             keep_continuation=self.server.keeps_continuation(self.api),
             project=self.projections.project,
             silence=seconds, check=check, on_delta=on_delta,
-            tools=schemas, effort=effort,
-            max_output_tokens=smaller(max_output_tokens, self.server.max_output_tokens),
-            **self.progress(), **self.request_options(encrypted=True),
+            tools=schemas, tool_choice=tool_choice, effort=effort,
+            max_output_tokens=capped,
+            **extra, **self.progress(), **self.request_options(encrypted=True),
         )
 
     def progress(self):

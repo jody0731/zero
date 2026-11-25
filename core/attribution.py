@@ -272,6 +272,11 @@ def steer_fields(steer):
     for name in ("inbox", "source", *MESSAGE_FIELDS):
         if steer.get(name) is not None:
             fields[name] = steer[name]
+    if raw_entries := steer.get("entries"):
+        fields["entries"] = tuple(
+            item if isinstance(item, Entry) else Entry.from_dict(item, root=False)
+            for item in raw_entries
+        )
     if not is_notice(steer):
         fields["mid_turn"] = True
     return fields

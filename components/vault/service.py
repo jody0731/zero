@@ -27,8 +27,8 @@ class VaultService(Service):
         self.vault = self.make_vault(runtime.paths.home)
         self.boundary = Boundary(self.vault)
 
-    def redact(self, value, partial=False):
-        return self.boundary.redact(value, partial=partial)
+    def redact(self, value):
+        return self.boundary.redact(value)
 
     def redact_entry(self, entry):
         return self.boundary.redact_entry(entry)

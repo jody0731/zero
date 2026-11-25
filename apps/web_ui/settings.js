@@ -1,11 +1,15 @@
 /* Settings dialog: General, component tabs, and Advanced tabs. */
 
-import { change, labelEfforts, look, modelCapabilities } from "./api.js";
+import {
+  change, labelEfforts, look, modelCapabilities, modelUtilities,
+} from "./api.js";
 import { registry } from "./components.js";
 import {
-  $, el, getThemePreference, setThemePreference, state,
+  $, UTILITY_CAPABILITIES, el, getThemePreference, setThemePreference, state,
 } from "./dom.js";
-import { drawDetails, ensureModelWindow, fieldInput } from "./details.js";
+import {
+  drawDetails, ensureModelWindow, fieldInput, populateServiceSelect,
+} from "./details.js";
 
 export function initSettings() {
   $("settings-open").addEventListener("click", () => {
@@ -100,13 +104,47 @@ export async function openSettings(view = "General") {
       form.append(note);
     }
     form.append(status);
-    input.addEventListener("input", () => {
+    const onEdit = () => {
       state.settingsDraft.set(setting.name, input.value);
       state.settingsErrors.delete(setting.name);
       status.hidden = true;
-    });
+    };
+    input.addEventListener("input", onEdit);
+    if (input.tagName === "SELECT") input.addEventListener("change", onEdit);
     container.append(form);
   }
+  const wireUtilities = () => {
+    const pickers = UTILITY_CAPABILITIES
+      .map(([name]) => [name, inputs.get(name)])
+      .filter(([, input]) => Boolean(input));
+    if (!pickers.length) return;
+    const resolveModel = () => {
+      const control = inputs.get("model");
+      const raw = control
+        ? control.value
+        : (state.settingsDraft.has("model")
+          ? state.settingsDraft.get("model")
+          : state.settings.find((each) => each.name === "model")?.value);
+      return (raw || "").trim();
+    };
+    let version = 0;
+    const updateUtilities = async () => {
+      const model = resolveModel();
+      const current = ++version;
+      const reply = await modelUtilities(model || null, true);
+      if (current !== version || model !== resolveModel()) return;
+      for (const [name, select] of pickers) {
+        if (!select.isConnected) continue;
+        populateServiceSelect(select, name, select.value, reply);
+      }
+    };
+    const modelInput = inputs.get("model");
+    if (modelInput) {
+      modelInput.addEventListener("input", updateUtilities);
+      modelInput.addEventListener("change", updateUtilities);
+    }
+    updateUtilities();
+  };
   const wireEfforts = (modelName, effortName, tools) => {
     const effortInput = inputs.get(effortName);
     const note = notes.get(effortName);
@@ -152,7 +190,10 @@ export async function openSettings(view = "General") {
     effortInput.addEventListener("change", updateEfforts);
     updateEfforts();
   };
-  if (view === "General") wireEfforts("model", "thinking_effort", true);
+  if (view === "General") {
+    wireEfforts("model", "thinking_effort", true);
+    wireUtilities();
+  }
   if (view === "Advanced") {
     wireEfforts("judge_model", "judge_thinking_effort", false);
   }

@@ -24,7 +24,7 @@ class EntryError(ValueError):
 
 
 class UnsupportedCondition(EntryError):
-    """A call carries an execution condition the harness cannot enforce."""
+    """A reply carries an execution condition or pending obligation ZERO won't run."""
 
 
 def nonempty(value):
@@ -183,40 +183,33 @@ def walk(entry, origin=None, created_at=None, depth=0, *, include_private=True,
                         include_private=include_private, stop_at=stop_at)
 
 
-def _transform(value, fn, include_numbers, include_keys):
-    if isinstance(value, str) or (include_numbers and type(value) in (int, float)):
-        original = str(value)
-        text = fn(original)
+def _transform(value, fn):
+    if isinstance(value, str):
+        text = fn(value)
         if type(text) is not str:
             raise EntryError("a text transform must return a string")
-        return value if original == text else text
+        return value if value == text else text
     if isinstance(value, Mapping):
-        changed = {}
-        difference = False
-        for key, item in value.items():
-            name = _transform(key, fn, False, False) if include_keys else key
-            result = _transform(item, fn, include_numbers, include_keys)
-            changed[name] = result
-            difference |= name != key or result is not item
-        if difference:
+        changed = {key: _transform(item, fn) for key, item in value.items()}
+        if any(changed[key] is not item for key, item in value.items()):
             return MappingProxyType(changed)
     elif isinstance(value, tuple):
-        changed = tuple(_transform(item, fn, include_numbers, include_keys)
-                        for item in value)
+        changed = tuple(_transform(item, fn) for item in value)
         if any(after is not before for before, after in zip(value, changed)):
             return changed
     return value
 
 
-def transform_text(entry, fn, *, include_numbers=False, include_keys=False):
-    """Transform text in entry data, sharing everything unchanged."""
-    fields = _transform(entry.fields, fn, include_numbers, include_keys)
-    extra = _transform(entry.extra, fn, include_numbers, include_keys)
-    children = tuple(
-        transform_text(child, fn, include_numbers=include_numbers,
-                       include_keys=include_keys)
-        for child in entry.entries or ()
-    )
+def transform_text(entry, fn):
+    """Transform the strings in entry data, sharing everything unchanged.
+    Keys, numbers and an entry whose spec says `redact=False` (its ids,
+    digests and byte counts are structure, never prose) stay as they are."""
+    spec = SPECS.get(entry.type)
+    if spec is not None and not spec.redact:
+        return entry
+    fields = _transform(entry.fields, fn)
+    extra = _transform(entry.extra, fn)
+    children = tuple(transform_text(child, fn) for child in entry.entries or ())
     if not any(a is not b for a, b in zip(children, entry.entries or ())):
         children = entry.entries
     if fields is entry.fields and extra is entry.extra and children is entry.entries:
@@ -252,6 +245,7 @@ class EntrySpec:
     required_fields: tuple[str, ...] = ()
     public_fields: tuple[str, ...] = ()
     replay_notice: object = None
+    redact: bool = True
 
 
 SPECS = {}
@@ -347,7 +341,18 @@ def ensure_executable(entry, *, origin=None):
     for node, effective, _, _ in walk(entry, origin=origin):
         spec = SPECS.get(node.type)
         if spec is None or spec.fields_schema is None:
-            raise EntryError(f"unsupported executable entry type: {node.type}")
+            details = []
+            if isinstance(item_type := node.get("type"), str) and item_type:
+                details.append(item_type)
+            if isinstance(execution := node.get("execution"), str) and execution:
+                details.append(f"execution={execution}")
+            if (isinstance(status := node.get("status"), str) and status
+                    and status != "completed"):
+                details.append(f"status={status}")
+            suffix = f" ({', '.join(details)})" if details else ""
+            raise UnsupportedCondition(
+                f"unsupported executable entry type: {node.type}{suffix}"
+            )
         fields = node.fields or {}
         schema = spec.fields_schema
         extra_fields = sorted(fields.keys() - schema.keys())
@@ -371,8 +376,23 @@ def ensure_executable(entry, *, origin=None):
             isinstance(value, schema[name]) for name, value in fields.items()
         ):
             raise EntryError(f"invalid executable fields on {node.type}")
-        if node.entries is not None and not has(node, "assistant_reply"):
+        if node.entries is not None and not (
+            has(node, "assistant_reply") or has(node, "hosted_output")
+        ):
             raise EntryError(f"executable entry cannot have children: {node.type}")
+        if has(node, "hosted_output"):
+            if (fields.get("execution") != "server"
+                    or fields.get("status") != "completed"):
+                raise UnsupportedCondition(
+                    f"unsupported hosted output state on {node.type}: "
+                    f"execution={fields.get('execution')!r}, "
+                    f"status={fields.get('status')!r}"
+                )
+            for child in node.entries or ():
+                if has(child, "executable") or has(child, "tool_call"):
+                    raise UnsupportedCondition(
+                        f"hosted output cannot contain executable entry: {child.type}"
+                    )
         if has(node, "executable"):
             identifier = call_id(node)
             if (effective != "model" or not nonempty(identifier) or identifier in seen

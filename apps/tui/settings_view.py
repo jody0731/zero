@@ -33,8 +33,15 @@ LINKS = {MODELS: "Models and keys…", KEYS: "Key bindings…",
 # these groups, then the links. The judge is a design choice, not a user's
 # knob, so it sits in Advanced with the limits and the server
 VIEW_ROWS = {
-    "main": (("mode", "model", "thinking_effort"), ("Default", "TUI"),
-             (MODELS, KEYS, ADVANCED)),
+    "main": (
+        (
+            "mode", "model", "thinking_effort",
+            "search_service", "stt_service", "tts_service",
+            "image_service", "video_service", "auto_speak",
+        ),
+        ("Default", "TUI"),
+        (MODELS, KEYS, ADVANCED),
+    ),
     "advanced": (("judge_model", "judge_thinking_effort"),
                  ("Judge", "Limits", "Server"), ()),
     "model": (("model", "thinking_effort"), (), ()),
@@ -113,6 +120,8 @@ class SettingsView(Scrolled, Screen):
         self.window_model = None
         # Support on the selected route, separately for agent and judge calls.
         self.features = {}
+        # Discovered utility services keyed by model (model/utilities)
+        self.utilities_by_model = {}
         self.rows = []
         # Each row's line in the list, for the scrolling
         self.lines = []
@@ -135,14 +144,28 @@ class SettingsView(Scrolled, Screen):
                 found["now"] = {}
                 found.setdefault("failed", []).append(str(error))
             listed_values = {row["name"]: row["value"] for row in found["listed"]}
-            model = found["now"].get("model") or listed_values.get("model")
-            found["window_model"] = model
+            session_model = found["now"].get("model") or listed_values.get("model")
+            default_model = listed_values.get("model")
+            found["window_model"] = session_model
             found["window"] = None
-            if self.place in ("main", "model") and model:
+            found["utilities_by_model"] = {}
+            if self.place in ("main", "model") and session_model:
                 try:
-                    found["window"] = self.zero.connection.model_window(model)
+                    found["window"] = self.zero.connection.model_window(session_model)
                 except ERRORS:
                     found["window"] = None
+            if self.place == "main":
+                models_to_query = []
+                for candidate in (session_model, default_model):
+                    if candidate not in models_to_query:
+                        models_to_query.append(candidate)
+                for candidate in models_to_query:
+                    try:
+                        found["utilities_by_model"][candidate] = (
+                            self.zero.connection.utilities(model=candidate)
+                        )
+                    except ERRORS:
+                        found["utilities_by_model"][candidate] = {}
             return found
 
         self.zero.request(work, then=self.fetched)
@@ -155,6 +178,7 @@ class SettingsView(Scrolled, Screen):
         self.now = found["now"]
         self.window = found.get("window")
         self.window_model = found.get("window_model")
+        self.utilities_by_model = dict(found.get("utilities_by_model") or {})
         shown = []
         for row in listed:
             fields = {k: v for k, v in row.items() if k != "value"}
@@ -271,6 +295,85 @@ class SettingsView(Scrolled, Screen):
                 return " (unverified)"
         return ""
 
+    def utilities_for(self, row):
+        """Discovered utility services resolved for the row's model."""
+        if isinstance(row, SessionRow):
+            model = self.now.get("model") or self.values.get("model")
+        else:
+            model = self.values.get("model")
+        if model in self.utilities_by_model:
+            return self.utilities_by_model[model]
+        return self.utilities_by_model.get(None) or {}
+
+    def service_status_note(self, row, value):
+        """Live availability suffix for a `kind == "service"` capability row."""
+        setting = row.setting if isinstance(row, SessionRow) else row
+        if not isinstance(setting, settings.Setting) or setting.kind != "service":
+            return ""
+        cap = (self.utilities_for(row).get("capabilities") or {}).get(setting.name)
+        if not isinstance(cap, dict):
+            return ""
+        effective = value or "current_server"
+        if effective == "off":
+            return ""
+        if effective == "current_server":
+            current = cap.get("current_server_service")
+            if current:
+                title = next(
+                    (s.get("title") or s["name"] for s in cap.get("services") or ()
+                     if s.get("name") == current),
+                    current,
+                )
+                return f" ({title})"
+            if not cap.get("implemented") or not cap.get("available"):
+                return " (unavailable)"
+            return ""
+        for svc in cap.get("services") or ():
+            if svc.get("name") == effective:
+                return "" if svc.get("available") else " (unavailable)"
+        return " (unavailable)"
+
+    def service_picker(self, row, title, now, chosen):
+        """Structured ChoiceView dropdown for a 5-capability service row."""
+        setting = row.setting if isinstance(row, SessionRow) else row
+        cap = (self.utilities_for(row).get("capabilities") or {}).get(
+            setting.name,
+        ) or {}
+        effective = now or "current_server"
+        labels, values, disabled = [], [], []
+
+        def add_choice(val, label, is_disabled=False):
+            if val in values:
+                return
+            values.append(val)
+            labels.append(label)
+            if is_disabled:
+                disabled.append(label)
+
+        current_label = "Current server" + self.service_status_note(
+            row, "current_server",
+        )
+        add_choice("current_server", current_label)
+        for svc in cap.get("services") or ():
+            name = svc.get("name")
+            if not name:
+                continue
+            svc_title = svc.get("title") or name
+            avail = bool(svc.get("available"))
+            label = svc_title if avail else f"{svc_title} (unavailable)"
+            add_choice(name, label, is_disabled=not avail and name != effective)
+        add_choice("off", "Off")
+        if effective not in values:
+            add_choice(
+                effective,
+                f"{effective} (unavailable)" if cap else effective,
+            )
+        current = labels[values.index(effective)] if effective in values else None
+        self.app.push_screen(
+            ChoiceView(title, labels, current, values=values, disabled=disabled),
+            lambda value: value is not None and chosen(value),
+        )
+
     def effort_picker(self, row, title, choices, now, chosen):
         setting = row.setting if isinstance(row, SessionRow) else row
         notes = {value: self.unavailable_note(row, value) for value in choices}
@@ -331,11 +434,17 @@ class SettingsView(Scrolled, Screen):
             # The judge's model, unset, is the session's own
             model = self.now.get("model") if row.name == "judge_model" else None
             text = controller.setting_text(setting, now, model)
-            return text + self.unavailable_note(row, now), False
+            note = (self.service_status_note(row, now)
+                    if setting.kind == "service"
+                    else self.unavailable_note(row, now))
+            return text + note, False
         now = self.value(row)
         default_model = self.zero.default_model()
         text = controller.setting_text(row, now, default_model)
-        return text + self.unavailable_note(row, now), now != row.default
+        note = (self.service_status_note(row, now)
+                if row.kind == "service"
+                else self.unavailable_note(row, now))
+        return text + note, now != row.default
 
     def draw(self):
         self.selected = max(0, min(self.selected, len(self.rows) - 1))
@@ -444,7 +553,10 @@ class SettingsView(Scrolled, Screen):
             self.app.push_screen(KeyBindingsView(self.zero))
             return
         now = self.value(row)
-        if row.kind in ("choice", "mode"):
+        if row.kind == "service":
+            self.service_picker(row, row.label, now,
+                                lambda value: self.set(row, value))
+        elif row.kind in ("choice", "mode"):
             choices = (row.choices if row.kind == "choice"
                        else self.zero.modes())
             self.effort_picker(row, row.label, choices, now,
@@ -466,6 +578,10 @@ class SettingsView(Scrolled, Screen):
         """A row of the session in view: what its next turn runs with."""
         setting, now = row.setting, self.value(row)
         label = f"{setting.label}, from this session's next turn"
+        if setting.kind == "service":
+            self.service_picker(row, label, now,
+                                lambda value: self.switch(row, value))
+            return
         if setting.kind == "model":
             if row.name == "model":
                 self.pick_model(setting, now, lambda value: self.switch(row, value),

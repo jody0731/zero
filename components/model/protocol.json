@@ -47,6 +47,89 @@
           "type": "string"
         }
       }
+    },
+    "utility_service": {
+      "type": "object",
+      "description": "One discovered utility capability service",
+      "required": [
+        "name",
+        "title",
+        "label",
+        "keyless"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "keyless": {
+          "type": "boolean"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "utility_capability": {
+      "type": "object",
+      "description": "Available services for one utility capability",
+      "required": [
+        "capability",
+        "implemented",
+        "available",
+        "current_server_service",
+        "services"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "enum": [
+            "search",
+            "stt",
+            "tts",
+            "image",
+            "video"
+          ]
+        },
+        "implemented": {
+          "type": "boolean"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "current_server_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/utility_service"
+          }
+        }
+      }
     }
   },
   "message_extensions": {
@@ -62,6 +145,50 @@
             }
           ],
           "description": "a new session's thinking effort: off, low, high or max"
+        },
+        "stt_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's speech-to-text service setting"
+        },
+        "tts_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's text-to-speech service setting"
+        },
+        "image_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's image generation service setting"
+        },
+        "video_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's video generation service setting"
         }
       }
     },
@@ -77,12 +204,68 @@
             }
           ],
           "description": "a new session's thinking effort: off, low, high or max"
+        },
+        "stt_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's speech-to-text service setting"
+        },
+        "tts_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's text-to-speech service setting"
+        },
+        "image_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's image generation service setting"
+        },
+        "video_service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "a new session's video generation service setting"
         }
       }
     },
     "session/set": {
       "fields": {
         "thinking_effort": {
+          "type": "string"
+        },
+        "stt_service": {
+          "type": "string"
+        },
+        "tts_service": {
+          "type": "string"
+        },
+        "image_service": {
+          "type": "string"
+        },
+        "video_service": {
           "type": "string"
         }
       }
@@ -93,6 +276,18 @@
           "type": "object",
           "properties": {
             "thinking_effort": {
+              "type": "string"
+            },
+            "stt_service": {
+              "type": "string"
+            },
+            "tts_service": {
+              "type": "string"
+            },
+            "image_service": {
+              "type": "string"
+            },
+            "video_service": {
               "type": "string"
             }
           }
@@ -254,6 +449,62 @@
       },
       "changes": true,
       "timeout_seconds": 300
+    },
+    "model/utilities": {
+      "about": "Live discovery of eligible utility services (keyed servers plus keyless or local fallbacks) for search, speech-to-text, text-to-speech, image, and video capabilities without probing the network.",
+      "fields": {
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "optional model name to preview which service Current server resolves to"
+        }
+      },
+      "reply": {
+        "active_server": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilities": {
+          "type": "object",
+          "required": [
+            "search_service",
+            "stt_service",
+            "tts_service",
+            "image_service",
+            "video_service"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "search_service": {
+              "$ref": "#/$defs/utility_capability"
+            },
+            "stt_service": {
+              "$ref": "#/$defs/utility_capability"
+            },
+            "tts_service": {
+              "$ref": "#/$defs/utility_capability"
+            },
+            "image_service": {
+              "$ref": "#/$defs/utility_capability"
+            },
+            "video_service": {
+              "$ref": "#/$defs/utility_capability"
+            }
+          }
+        }
+      }
     },
     "model/server/list": {
       "about": "Every model server the server knows, whether its key is there, the default model and its server, and why a session on it couldn't start (null: it can).",

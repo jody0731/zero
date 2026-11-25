@@ -36,8 +36,11 @@ key_env = "DEEPSEEK_API_KEY"
 replays_response_items = false
 suggested_models = ["deepseek-flash", "deepseek-v4-pro"]
 search_api = "deepseek_search"
+stt_api = "deepseek_audio"
+tts_api = "deepseek_speech"
 # Tried: 1.78M tokens came back 400, "maximum context length is 1048576"
 refuses_overlong_requests = true
+capabilities = { input = { text = true, image = false, audio = false, video = false, pdf = false }, output = { text = true }, tool_calling = true }
 
 [deepseek.models]
 # Off-peak prices are half these
@@ -52,6 +55,7 @@ title = "Ollama (on this computer)"
 url = "http://localhost:11434/v1"
 bare_model_names = true
 responses_since_version = [0, 13, 3]
+supports_model_show = true
 
 [openai]
 models_dev_provider = "openai"
@@ -64,19 +68,27 @@ accepts_zero_temperature = false
 suggested_models = ["gpt-5.4-mini", "gpt-6.2-sol"]
 search_api = "responses_search"
 search_model = "gpt-5.4-mini"
+stt_api = "openai_audio"
+stt_model = "gpt-transcribe"
+stt_live_model = "gpt-live-transcribe"
+tts_api = "openai_speech"
+tts_model = "gpt-realtime-2.1-mini"
+image_api = "openai_images"
+image_model = "gpt-image-2.6-flare"
 # Its docs: context_length_exceeded
 refuses_overlong_requests = true
+capabilities = { input = { text = true, image = true, pdf = true }, output = { text = true }, tool_calling = true }
 
 [openai.models]
 # Search and audio models have separate Chat contracts.
-"gpt-5-search-api" = { reply_api = "chat_completions", reasoning_efforts = [] }
-"gpt-4o-audio-preview" = { reply_api = "chat_completions", reasoning_efforts = [] }
-"gpt-4o-mini-audio-preview" = { reply_api = "chat_completions", reasoning_efforts = [] }
-"gpt-4" = { reasoning_efforts = [] }
-"gpt-4-0613" = { reasoning_efforts = [] }
-"gpt-3.5-turbo" = { reasoning_efforts = [] }
-"gpt-3.5-turbo-0125" = { reasoning_efforts = [] }
-"gpt-3.5-turbo-1106" = { reasoning_efforts = [] }
+"gpt-5-search-api" = { reply_api = "chat_completions", reasoning_efforts = [], capabilities = { input = { text = true, image = false, pdf = false }, output = { text = true }, tool_calling = false } }
+"gpt-4o-audio-preview" = { reply_api = "chat_completions", reasoning_efforts = [], capabilities = { input = { text = true, audio = true, image = false, pdf = false }, output = { text = true, audio = true }, tool_calling = true } }
+"gpt-4o-mini-audio-preview" = { reply_api = "chat_completions", reasoning_efforts = [], capabilities = { input = { text = true, audio = true, image = false, pdf = false }, output = { text = true, audio = true }, tool_calling = true } }
+"gpt-4" = { reasoning_efforts = [], capabilities = { input = { text = true, image = false, pdf = false, audio = false, video = false }, output = { text = true }, tool_calling = true } }
+"gpt-4-0613" = { reasoning_efforts = [], capabilities = { input = { text = true, image = false, pdf = false, audio = false, video = false }, output = { text = true }, tool_calling = true } }
+"gpt-3.5-turbo" = { reasoning_efforts = [], capabilities = { input = { text = true, image = false, pdf = false, audio = false, video = false }, output = { text = true }, tool_calling = true } }
+"gpt-3.5-turbo-0125" = { reasoning_efforts = [], capabilities = { input = { text = true, image = false, pdf = false, audio = false, video = false }, output = { text = true }, tool_calling = true } }
+"gpt-3.5-turbo-1106" = { reasoning_efforts = [], capabilities = { input = { text = true, image = false, pdf = false, audio = false, video = false }, output = { text = true }, tool_calling = true } }
 "gpt-4o" = { reasoning_efforts = [] }
 "gpt-4o-2024-05-13" = { reasoning_efforts = [] }
 "gpt-4o-2024-08-06" = { reasoning_efforts = [] }
@@ -94,7 +106,7 @@ refuses_overlong_requests = true
 "gpt-5-nano" = { reasoning_efforts = ["low", "high"] }
 "o1" = { reasoning_efforts = ["low", "high"] }
 "o3" = { reasoning_efforts = ["low", "high"] }
-"o3-mini" = { reasoning_efforts = ["low", "high"] }
+"o3-mini" = { reasoning_efforts = ["low", "high"], capabilities = { input = { text = true, image = false, pdf = false }, output = { text = true }, tool_calling = true } }
 "o4-mini" = { reasoning_efforts = ["low", "high"] }
 "gpt-5.1" = { reasoning_efforts = ["off", "low", "high"] }
 
@@ -162,10 +174,22 @@ title = "Google Gemini"
 url = "https://generativelanguage.googleapis.com/v1beta"
 key_env = "GEMINI_API_KEY"
 reply_api = "google_interactions"
+search_api = "google_search"
+search_model = "gemini-3.1-flash-lite"
+stt_api = "google_audio"
+stt_model = "gemini-3.5-transcribe"
+stt_live_model = "gemini-3.5-transcribe-live"
+tts_api = "google_speech"
+tts_model = "gemini-3.8-flash-lite-tts"
+image_api = "google_images"
+image_model = "gemini-3.1-flash-image"
+video_api = "google_videos"
+video_model = "gemini-omni-1.2-flash"
 requests_reasoning_summary = true
 accepts_zero_temperature = false
 refuses_overlong_requests = true
 suggested_models = ["gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon"]
+capabilities = { input = { text = true, image = true, audio = true, video = true, pdf = true }, output = { text = true }, tool_calling = true }
 
 [google.models]
 "gemini-2.5-flash" = { reasoning_efforts = ["off", "low", "high"] }
@@ -190,6 +214,7 @@ models_dev_provider = "alibaba-cn"
 title = "Qwen (Alibaba Cloud, China)"
 url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 key_env = "DASHSCOPE_API_KEY"
+capabilities = { input = { text = true }, output = { text = true }, tool_calling = true }
 
 [qwen.models."qwen-plus"]
 chat_reasoning_efforts = ["off"]
@@ -247,6 +272,7 @@ title = "Kimi (Moonshot AI, China)"
 url = "https://api.moonshot.cn/v1"
 key_env = "MOONSHOT_API_KEY"
 search_api = "moonshot_search"
+capabilities = { input = { text = true }, output = { text = true }, tool_calling = true }
 
 [kimi.models]
 [kimi.models."kimi-k2.6"]
@@ -284,6 +310,7 @@ url = "https://open.bigmodel.cn/api/paas/v4"
 key_env = "ZHIPU_API_KEY"
 responses_url = "https://open.bigmodel.cn/api/v1"
 chat_thinking_field = "thinking"
+capabilities = { input = { text = true }, output = { text = true }, tool_calling = true }
 
 [glm.models]
 "glm-4.5" = { chat_reasoning_efforts = ["off"] }

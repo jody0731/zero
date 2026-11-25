@@ -3,6 +3,39 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.10.5
+
+- Added content-addressed session attachments (`components/attachments/`) without
+  extension whitelists under configurable soft caps (`max_attachment_megabytes`,
+  `max_attachment_store_megabytes`), read-only per-session sandbox hardlinks,
+  header metadata probing, chunked socket transfer, and streaming HTTP binary
+  relay (`Range` `206`, safe `Content-Disposition`, sandboxed CSP).
+- Added passive structured `ModelCapabilities` discovery, bounded native
+  multimodal delivery across `responses`, `chat_completions`, and
+  `google_interactions`, prepared-request modality token accounting (including
+  native OpenAI/Gemini counting for known-supported content), Google native
+  `google_search` with citations/Search Suggestions, `tool_choice="none"`
+  compaction handoffs, hosted-output entry folding, and **Same-Provider
+  Default** capability routing (`search`, `stt`, `tts`, `image`, `video`).
+- Added isolated `bwrap` general file readers (`inspect_file`, `read_file_part`,
+  `present_file`, and `read(attachment_id=...)`) for PDFs, Office documents,
+  archives, images, and audio/video with visual PNG page/slide rendering and
+  `transcribe_audio` (`openai_audio`, `google_audio`, `deepseek_audio`,
+  `local_whisper`).
+- Added verified Nov 2026 provider media & live speech adapters (`TTS_APIS`,
+  `IMAGE_APIS`, `VIDEO_APIS`, and `websockets`-backed live streaming STT for
+  OpenAI Realtime `gpt-live-transcribe` and Gemini Live
+  `gemini-3.5-transcribe-live` with automatic same-route batch fallback), plus
+  permission-gated `generate_image`, `generate_speech`, and durable
+  pre-submit-claimed `generate_video` tools returning inline deliverable cards.
+- Added pre-session live dictation (frozen draft route before audio leaves),
+  on-demand per-reply **Listen** with single-flight deduplicated timeline
+  caching (`media/speech_cache`), and `auto_speak` (`off`/`on`) across the Web
+  UI (`AudioWorklet` mic, per-reply Listen, inline media cards, Settings &
+  Details capability selectors), TUI (`/dictate`, `/speak`, `/settings`), CLI
+  (`--attach`, `zero attachment`, `zero transcribe`, `zero speak`, audio binary
+  checks in `zero doctor`), and MCP (`zero_start`/`zero_reply`/`zero_wait`).
+
 ## 0.7.9.5
 
 - Added a native Google Interactions API adapter (`/v1beta/interactions`) with

@@ -23,6 +23,8 @@ session's limits as they stand (settings.LiveSettings).
 """
 
 import json
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from core import entries, replay
@@ -34,6 +36,141 @@ PACE_STEPS = 20
 # A step with less between its two calls tells too little of the bytes a
 # token: a message's own wrapping counts for more there
 LEAST_STEP_BYTES = 1_000
+_INLINE_MEDIA_PREFIXES = ("image/", "audio/", "video/")
+_INLINE_MEDIA_EXACT = frozenset({"application/pdf"})
+
+
+def _is_media_mime(media_type):
+    if not isinstance(media_type, str):
+        return False
+    norm = media_type.split(";", 1)[0].strip().lower()
+    return norm in _INLINE_MEDIA_EXACT or norm.startswith(_INLINE_MEDIA_PREFIXES)
+
+
+def has_attachments(conversation):
+    """Fast check for whether any entry in `conversation` carries attachments."""
+    for entry in conversation:
+        if not entry.entries:
+            continue
+        for node, _, _, depth in entries.walk(entry, include_private=False):
+            if depth and entries.has(node, "attachment"):
+                return True
+    return False
+
+
+def entry_has_inline_media(entry):
+    """True when `entry` carries a non-reference media attachment child."""
+    if entry is None or not entry.entries:
+        return False
+    for node, _, _, depth in entries.walk(entry, include_private=False):
+        if (depth and entries.has(node, "attachment")
+                and node.get("delivery") != "reference"
+                and _is_media_mime(node.get("media_type"))):
+            return True
+    return False
+
+
+def _non_text_modality_tokens(entry):
+    """Positive non-text token total from an assistant reply's modality usage."""
+    by_mod = entry.get("input_tokens_by_modality")
+    if not isinstance(by_mod, Mapping):
+        return 0
+    return sum(
+        val for key, val in by_mod.items()
+        if key != "text" and type(val) is int and val > 0
+    )
+
+
+def _prior_media_tokens(entry):
+    """Native media tokens already included in `entry`'s prompt_tokens."""
+    by_mod = _non_text_modality_tokens(entry)
+    if by_mod > 0:
+        return by_mod
+    recorded = entry.get("native_media_tokens")
+    if type(recorded) is int and recorded > 0:
+        return recorded
+    return 0
+
+
+def _modality_for_mime(mime):
+    if mime.startswith("image/"):
+        return "image"
+    if mime.startswith("audio/"):
+        return "audio"
+    if mime.startswith("video/"):
+        return "video"
+    if mime == "application/pdf":
+        return "pdf"
+    return None
+
+
+def _attachment_nodes(entry):
+    if entry is None or not entry.entries:
+        return ()
+    return tuple(
+        node for node, _, _, depth in entries.walk(entry, include_private=False)
+        if depth and entries.has(node, "attachment")
+    )
+
+
+def attachment_tokens(node, count=None, *, capabilities=None, media_cap=None):
+    """Estimate one attachment's tokens from validated modality metadata only.
+
+    Reference attachments, unsupported modalities, attachments exceeding
+    `media_cap`, and unvalidated/non-media attachments count only their
+    compact text reference, never raw file bytes.
+    """
+    counter = count or tokens
+    ref = lambda: counter(entries.project(node) or "")
+    if node.get("delivery") == "reference":
+        return ref()
+    raw_mime = node.get("media_type")
+    mime = (
+        raw_mime.split(";", 1)[0].strip().lower()
+        if isinstance(raw_mime, str) else ""
+    )
+    modality = _modality_for_mime(mime)
+    if modality is None:
+        return ref()
+    if capabilities is not None:
+        inp = getattr(capabilities, "input", None)
+        if inp is None or inp.get(modality) is not True:
+            return ref()
+    est = None
+    if modality == "image":
+        width, height = node.get("width"), node.get("height")
+        if (type(width) is int and width > 0
+                and type(height) is int and height > 0):
+            w, h = float(width), float(height)
+            if max(w, h) > 2048:
+                scale = 2048 / max(w, h)
+                w *= scale
+                h *= scale
+            if min(w, h) > 768:
+                scale = 768 / min(w, h)
+                w *= scale
+                h *= scale
+            tiles = math.ceil(w / 512) * math.ceil(h / 512)
+            est = 85 + 170 * max(1, tiles)
+    elif modality == "audio":
+        duration = node.get("duration_seconds")
+        if (isinstance(duration, (int, float)) and not isinstance(duration, bool)
+                and math.isfinite(duration) and duration > 0):
+            est = max(50, math.ceil(duration * 50))
+    elif modality == "video":
+        duration = node.get("duration_seconds")
+        if (isinstance(duration, (int, float)) and not isinstance(duration, bool)
+                and math.isfinite(duration) and duration > 0):
+            est = max(300, math.ceil(duration * 300))
+    elif modality == "pdf":
+        pages = node.get("pages")
+        if type(pages) is int and pages > 0:
+            est = pages * 2000
+    if est is None:
+        return ref()
+    if media_cap is not None and est > media_cap:
+        return ref()
+    return est
 
 
 def changes_model(entry):
@@ -61,21 +198,33 @@ def entry_text(entry):
                 })
         elif entries.has(node, "tool_result"):
             if origin == "tool":
-                parts.append({"answer": entries.linked_to(node, "answers"),
-                              "text": replay.tool_output(node)})
-        elif entries.has(node, "model_visible") and not entries.has(
-            node, "assistant_reply"
-        ):
+                parts.append({
+                    "answer": entries.linked_to(node, "answers"),
+                    "text": replay.tool_output(node, include_attachments=False),
+                })
+        elif (entries.has(node, "model_visible")
+              and not entries.has(node, "assistant_reply")
+              and not entries.has(node, "attachment")):
             parts.append({"origin": origin, "text": entries.project(node)})
     return json.dumps(parts, ensure_ascii=False) if parts else ""
 
 
-def entry_tokens(entry, count=tokens):
-    """Measure visible text and estimate opaque continuation locally."""
+def entry_tokens(entry, count=tokens, *, include_media=True, capabilities=None,
+                 media_cap=None):
+    """Measure visible text, validated media bounds, and opaque continuation."""
     public = entry_text(entry)
     private = sum(tokens(json.dumps(entries.thaw(node.fields), ensure_ascii=False))
                   for node in entries.matching(entry, "private_continuation"))
-    return (count(public) if public else 0) + private
+    attachments = _attachment_nodes(entry)
+    media = 0
+    for child in attachments:
+        if include_media:
+            media += attachment_tokens(
+                child, count, capabilities=capabilities, media_cap=media_cap,
+            )
+        else:
+            media += count(entries.project(child) or "")
+    return (count(public) if public else 0) + private + media
 
 
 @dataclass(frozen=True)
@@ -92,15 +241,43 @@ def _schema_tokens(schemas, tokens):
                              ensure_ascii=False))
 
 
-def measure(records, conversation, schemas, tokens=tokens):
+def _owner_ids(entries_slice):
+    entry_ids = {id(entry) for entry in entries_slice}
+    tool_ids = set()
+    for entry in entries_slice:
+        for node, origin, _, _ in entries.walk(
+            entry, include_private=False, stop_at="tool_result",
+        ):
+            if origin == "tool" and entries.has(node, "tool_result"):
+                tool_ids.add(id(node))
+    return entry_ids, tool_ids
+
+
+def _prepared_prefix_ref_tokens(prefix, prepared, count):
+    """Reference tokens for prefix attachments not delivered natively."""
+    entry_ids, tool_ids = _owner_ids(prefix)
+    total = 0
+    for decision in prepared.plan.estimates:
+        if decision.is_native:
+            continue
+        kind, owner_id, _ = decision.key
+        if ((kind == "entry" and owner_id in entry_ids)
+                or (kind == "tool" and owner_id in tool_ids)):
+            total += count(decision.reference_text())
+    return total
+
+
+def measure(records, conversation, schemas, tokens=tokens, *, prepared=None,
+            include_media=True, capabilities=None, media_cap=None):
     """The context's size: the last call's count plus what came after it
     (`tokens`: text's tokens, the server's count where there is one), when
     that call saw the conversation as it stands; else all of it so (no call
-    yet, or a model switch or a compaction since). New code since that call
-    rewrote the system message and the tools around the same conversation
-    on the same model: the count holds, and those two are added whole, so
-    their old copies are counted twice, never low. `schemas` can be a
-    callable, used only when the tools' size needs estimating."""
+    yet, or a model switch or a compaction since). When `prepared` is supplied,
+    accounts directly on the prepared request plan (using provider native count
+    when available, else text baseline plus planned native media tokens)."""
+    if prepared is not None and prepared.native_token_estimate is not None:
+        exact = prepared.native_token_estimate.tokens
+        return Size(exact, exact)
     last, rewritten = None, False
     for record in reversed(records):
         entry = record.entry
@@ -114,13 +291,59 @@ def measure(records, conversation, schemas, tokens=tokens):
     if last is not None:
         for index in range(len(conversation) - 1, -1, -1):
             if conversation[index].id == last.id:
-                guessed = sum(entry_tokens(entry, tokens)
-                              for entry in conversation[index:])
+                tail = conversation[index:]
+                last_media = _prior_media_tokens(last)
+                base_text = max(last.get("prompt_tokens") - last_media, 0)
+                if prepared is not None:
+                    guessed = sum(
+                        entry_tokens(entry, tokens, include_media=False)
+                        for entry in tail
+                    )
+                    if last_media > 0:
+                        guessed += _prepared_prefix_ref_tokens(
+                            conversation[:index], prepared, tokens,
+                        )
+                    guessed += prepared.media_tokens
+                    if rewritten:
+                        guessed += entry_tokens(
+                            conversation[0], tokens, include_media=False,
+                        )
+                        guessed += _schema_tokens(schemas, tokens)
+                    return Size(base_text + guessed, guessed)
+                if not include_media:
+                    guessed = sum(
+                        entry_tokens(entry, tokens, include_media=False)
+                        for entry in tail
+                    )
+                    if rewritten:
+                        guessed += entry_tokens(
+                            conversation[0], tokens, include_media=False,
+                        )
+                        guessed += _schema_tokens(schemas, tokens)
+                    return Size(base_text + guessed, guessed)
+                guessed = sum(
+                    entry_tokens(
+                        entry, tokens, include_media=True,
+                        capabilities=capabilities, media_cap=media_cap,
+                    )
+                    for entry in tail
+                )
                 if rewritten:
-                    guessed += entry_tokens(conversation[0], tokens)
+                    guessed += entry_tokens(
+                        conversation[0], tokens, include_media=False,
+                    )
                     guessed += _schema_tokens(schemas, tokens)
                 return Size(last.get("prompt_tokens") + guessed, guessed)
-    guessed = sum(entry_tokens(entry, tokens) for entry in conversation)
+    use_local_media = include_media and prepared is None
+    guessed = sum(
+        entry_tokens(
+            entry, tokens, include_media=use_local_media,
+            capabilities=capabilities, media_cap=media_cap,
+        )
+        for entry in conversation
+    )
+    if prepared is not None:
+        guessed += prepared.media_tokens
     guessed += _schema_tokens(schemas, tokens)
     return Size(guessed, guessed)
 
@@ -169,33 +392,52 @@ def entry_bytes(entry):
     return len(entry_text(entry).encode("utf-8"))
 
 
+def _media_signature(entry):
+    count = entry.get("native_media_count") or 0
+    if not count and entry.get("has_native_media"):
+        count = 1
+    return (count, _non_text_modality_tokens(entry))
+
+
 def bytes_a_token(records):
     """The bytes a token of this session's text, as its model server counts
     it: what came between two counted calls in bytes, over the growth of the
     server's count, the least of it over the newest PACE_STEPS steps of
     LEAST_STEP_BYTES or more (the densest text a step held, so the estimate
     is high rather than low), never under one; each pair of calls on one
-    context, since the latest model switch. None before a step has
-    counted."""
+    context, since the latest model switch. Excludes step pairs contaminated
+    by native media so media tokens never corrupt text calibration. None before
+    a clean step has counted."""
     found, later, between = [], None, 0
+    contaminated, later_media = False, None
     for record in reversed(records):
         entry = record.entry
         if entries.has(entry, "header") or changes_model(entry):
             break
         if replay.starts_context(entry):
             later, between = None, 0
+            contaminated, later_media = False, None
             continue
         projected = replay.model_entry(record)
-        between += entry_bytes(projected) if projected is not None else 0
+        if projected is not None:
+            if entry_has_inline_media(projected):
+                contaminated = True
+            between += entry_bytes(projected)
         prompt = entry.get("prompt_tokens")
         if not entries.has(entry, "assistant_reply") or not prompt:
             continue
+        cur_media = _media_signature(entry)
+        pair_dirty = contaminated or (
+            later_media is not None and later_media != cur_media
+        )
         grown = (later or 0) - prompt
-        if later is not None and grown > 0 and between >= LEAST_STEP_BYTES:
+        if (not pair_dirty and later is not None
+                and grown > 0 and between >= LEAST_STEP_BYTES):
             found.append(between / grown)
             if len(found) == PACE_STEPS:
                 break
         later, between = prompt, 0
+        contaminated, later_media = False, cur_media
     return max(min(found), 1) if found else None
 
 

@@ -72,7 +72,22 @@ def bytes_a_token(session, *, records=None):
         return room.BYTES_PER_TOKEN
     if records is None:
         records = session.log.branch()
-    return room.bytes_a_token(records) or room.BYTES_PER_TOKEN
+    fn = room.bytes_a_token
+    key = (
+        len(records),
+        records[-1].seq if records else 0,
+        getattr(session.model, "name", None),
+        id(fn),
+    )
+    cached = getattr(session, "_bytes_a_token_cache", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    ratio = fn(records) or room.BYTES_PER_TOKEN
+    try:
+        session._bytes_a_token_cache = (key, ratio)
+    except AttributeError:
+        pass
+    return ratio
 
 
 def counter(session, *, records=None):
@@ -175,17 +190,47 @@ class Context(Hook):
         window = getattr(server, "context_window", None) or self.window
         return room.line(self.limits, window)
 
+    def _request_budget(self, session):
+        """Input token budget for one request, or None if window is unknown."""
+        server = getattr(session.model, "server", None)
+        window = getattr(server, "context_window", None) or self.window
+        caps = room.model_limits(session.model)
+        hard_caps = []
+        if window is not None:
+            at = room.line(self.limits, window)
+            hard_caps.append(
+                room.input_room(at, INSTRUCTION_TOKENS, self.limits, **caps)
+            )
+        if room.has_input_bound(session.model):
+            req_window = getattr(server, "request_context_window", None)
+            max_in = getattr(server, "max_input_tokens", None)
+            min_out = getattr(getattr(session.model, "api", None),
+                              "MIN_OUTPUT_TOKENS", 1)
+            if req_window is not None:
+                hard_caps.append(req_window - min_out)
+            if max_in is not None:
+                hard_caps.append(max_in)
+        return min(hard_caps) if hard_caps else None
+
     def _size(self, session, records=None):
         if records is None:
             records = session.log.branch()
-        return room.measure(records, session.safe_entries(), session.tool_schemas,
-                            counter(session, records=records))
+        has_att = room.has_attachments(session.entries)
+        capabilities = (
+            getattr(session.model, "capabilities", None) if has_att else None
+        )
+        media_cap = self._request_budget(session) if has_att else None
+        return room.measure(
+            records, session.entries, session.tool_schemas,
+            counter(session, records=records),
+            capabilities=capabilities, media_cap=media_cap,
+        )
 
     def _fixed(self, session):
         """The tokens every context holds: the system message and the tools
         (room.fixed_tokens)."""
         records = session.log.branch()
-        return room.fixed_tokens(records, session.safe_entries(),
+        return room.fixed_tokens(records, session.entries,
                                  session.tool_schemas(),
                                  counter(session, records=records))
 
@@ -197,7 +242,7 @@ class Context(Hook):
         body = replay.in_context(session.log.branch())
         points = compaction.cut_points(body)
         newest = body[points[-1]:] if points else body
-        by_id = {entry.id: entry for entry in session.safe_entries()}
+        by_id = {entry.id: entry for entry in session.entries}
         step = sum(room.entry_tokens(by_id[entry.id], count) for record in newest
                    if (entry := replay.model_entry(record)) is not None
                    and entry.id in by_id)
@@ -246,13 +291,55 @@ class Context(Hook):
         """Check the prepared input and reserve only as much output as fits."""
         session = step.turn.session
         server = getattr(session.model, "server", None)
-        if not room.has_input_bound(session.model):
+        has_bound = room.has_input_bound(session.model)
+        if not room.has_attachments(conversation):
+            if not has_bound:
+                step.max_output_tokens = getattr(server, "max_output_tokens", None)
+                return None
+            # Use the provider's last count for the conversation it already saw.
+            records = session.log.branch()
+            size = room.measure(records, conversation, schemas,
+                                counter(session, records=records))
+            try:
+                step.max_output_tokens = room.bound_output(
+                    session.model, size.tokens, operation="The prepared reply input",
+                )
+            except room.ModelLimitExceeded as error:
+                return Stop("failed", str(error))
+            return None
+        records = session.log.branch()
+        count = counter(session, records=records)
+        text_size = room.measure(
+            records, conversation, schemas, count, include_media=False,
+        )
+        total_budget = self._request_budget(session)
+        media_budget = (
+            max(total_budget - text_size.tokens, 0)
+            if total_budget is not None else None
+        )
+        prepare = getattr(session.model, "prepare_request", None)
+        if prepare is not None:
+            prepared = prepare(
+                conversation, schemas,
+                media_budget=media_budget, total_budget=total_budget,
+            )
+            step.prepared_request = prepared
+            step.native_media_count = prepared.native_media_count
+            if prepared.media_tokens:
+                step.native_media_tokens = prepared.media_tokens
+            elif (prepared.native_media_count
+                  and prepared.native_token_estimate is not None):
+                step.native_media_tokens = max(
+                    prepared.native_token_estimate.tokens - text_size.tokens, 0,
+                )
+        else:
+            prepared = None
+        if not has_bound:
             step.max_output_tokens = getattr(server, "max_output_tokens", None)
             return None
-        # Use the provider's last count for the conversation it already saw.
-        records = session.log.branch()
-        size = room.measure(records, conversation, schemas,
-                            counter(session, records=records))
+        size = room.measure(
+            records, conversation, schemas, count, prepared=prepared,
+        )
         try:
             step.max_output_tokens = room.bound_output(
                 session.model, size.tokens, operation="The prepared reply input",

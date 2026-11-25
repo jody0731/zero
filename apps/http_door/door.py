@@ -25,16 +25,18 @@ The door leaves after its idle seconds with no request in flight, no page's
 stream open and no MCP call running; systemd starts it again at the next.
 """
 
+import base64
 import json
 import os
 import queue
+import re
 import socket
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlencode, parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
 from apps.http_door.guard import Guard, Refused
 from apps.mcp.server import McpServer, ZeroTools, answer_text
@@ -59,6 +61,15 @@ IDLE_SECONDS = 300
 IDLE_LOOK_SECONDS = 1.0
 # The largest request body taken (the server's own cap)
 MAX_BODY = 1 << 20
+# Streaming attachment relay chunk size (fits MAX_BODY after base64 encoding)
+ATTACHMENT_CHUNK_BYTES = 512 * 1024
+# Strict allowlist of media types safe to display inline in a browser.
+SAFE_INLINE_EXACT = frozenset({
+    "image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf",
+})
+SAFE_INLINE_PREFIXES = ("audio/", "video/")
+ATTACHMENT_CSP = "sandbox; default-src 'none'"
+RANGE_RE = re.compile(r"^(\d*)-(\d*)$")
 # A stream's keepalive, under every client's idle read timeout
 PING_SECONDS = 15
 # While the server is asleep, how often an open page's stream looks for one
@@ -79,6 +90,81 @@ LISTEN_FDS_START = 3
 # Names in the session list a source takes
 WEB_SOURCE = "web"
 MCP_SOURCE = "mcp"
+
+_MIME_TOKEN_RE = re.compile(
+    r"^[a-z0-9!#$%&'*+\-.^_`|~]{1,127}/[a-z0-9!#$%&'*+\-.^_`|~]{1,127}$"
+)
+
+
+def sanitize_media_type(value, *, default="application/octet-stream"):
+    """Validate strict RFC MIME type/subtype syntax; reject CR/LF and controls."""
+    if not isinstance(value, str) or not value:
+        return default
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        return default
+    essence = value.split(";", 1)[0].strip().lower()
+    if not essence or _MIME_TOKEN_RE.fullmatch(essence) is None:
+        return default
+    return essence
+
+
+def is_safe_inline_media(media_type):
+    """True only for explicitly allowlisted browser-safe inline media types."""
+    clean = (media_type or "").split(";")[0].strip().lower()
+    if clean in SAFE_INLINE_EXACT:
+        return True
+    return any(clean.startswith(prefix) for prefix in SAFE_INLINE_PREFIXES)
+
+
+def content_disposition(name, *, inline):
+    """Build a safe Content-Disposition header with ASCII + RFC 5987 filename."""
+    raw = (name or "file").replace("\\", "/").rsplit("/", 1)[-1]
+    clean = "".join(ch for ch in raw if ord(ch) >= 32 and ord(ch) != 127) or "file"
+    ascii_name = "".join(
+        ch if 32 <= ord(ch) < 127 and ch not in ('"', "\\", ";") else "_"
+        for ch in clean
+    ) or "file"
+    kind = "inline" if inline else "attachment"
+    encoded = quote(clean, safe="")
+    return f'{kind}; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
+
+
+def parse_byte_range(header_value, total_size):
+    """Parse one HTTP byte Range header into `(start, end)` inclusive, or None.
+
+    Returns `None` for non-bytes units or comma-separated multi-range headers
+    (serving 200 OK full representation per RFC 9110), and `"invalid"` for
+    malformed or unsatisfiable single byte ranges (serving 416).
+    """
+    if not header_value:
+        return None
+    spec = header_value.strip()
+    unit, sep, rest = spec.partition("=")
+    if not sep:
+        return "invalid"
+    if unit.strip().lower() != "bytes":
+        return None
+    if "," in rest:
+        return None
+    match = RANGE_RE.fullmatch(rest.strip())
+    if not match:
+        return "invalid"
+    start_s, end_s = match.groups()
+    if total_size <= 0 or (not start_s and not end_s):
+        return "invalid"
+    if not start_s:
+        suffix = int(end_s)
+        if suffix <= 0:
+            return "invalid"
+        start = max(0, total_size - suffix)
+        end = total_size - 1
+        return start, end
+    start = int(start_s)
+    end = int(end_s) if end_s else total_size - 1
+    if start >= total_size or start > end:
+        return "invalid"
+    return start, min(end, total_size - 1)
+
 
 def handed_socket(environ=os.environ):
     """The listening socket systemd handed over (LISTEN_FDS), or None."""
@@ -186,15 +272,19 @@ class Door(ThreadingHTTPServer):
         """The ZeroTools one MCP request is answered with: its client's
         process named to ZERO's server, a workflow's session read from it."""
         pid = getattr(headers, "client_pid", None)
-        connection = Connection(self.paths, ensure=self.ensure,
-                                source=MCP_SOURCE, relayed_for_pid=pid)
+        connection = Connection(
+            self.paths, ensure=self.ensure, source=MCP_SOURCE,
+            relayed_for_pid=pid, relayed=True,
+        )
         return ZeroTools(connection, working_for=(
             (lambda: environ_session(pid)) if pid is not None
             else (lambda: None)))
 
     def connection(self, pid, source=WEB_SOURCE):
-        return Connection(self.paths, ensure=self.ensure, source=source,
-                          relayed_for_pid=pid)
+        return Connection(
+            self.paths, ensure=self.ensure, source=source,
+            relayed_for_pid=pid, relayed=True,
+        )
 
     def hold(self):
         with self.busy_lock:
@@ -256,6 +346,9 @@ class Handler(BaseHTTPRequestHandler):
     # Every method goes through one place
     def do_GET(self):
         self.route("GET")
+
+    def do_HEAD(self):
+        self.route("HEAD")
 
     def do_POST(self):
         self.route("POST")
@@ -320,12 +413,33 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/request" and method == "POST":
             return self.api_request(self.prove())
+        if path == "/api/attachments" and method == "POST":
+            return self.upload_attachment(self.prove(), parse_qs(url.query))
+        if path.startswith("/api/attachments/") and method in ("GET", "HEAD"):
+            aid = unquote(path[len("/api/attachments/"):])
+            return self.get_attachment(
+                self.prove(), aid, parse_qs(url.query), head_only=method == "HEAD",
+            )
+        if path == "/api/dictation" and method == "POST":
+            return self.dictation_start(self.prove())
+        if path.startswith("/api/dictation/"):
+            tail = path[len("/api/dictation/"):]
+            return self.dictation_route(
+                self.prove(), method, tail, parse_qs(url.query),
+            )
+        if path == "/api/speech" and method == "POST":
+            return self.speech_synthesize(self.prove())
         if path == "/api/events" and method == "GET":
             return self.events(self.prove(), parse_qs(url.query))
         guard.place(self.headers)
-        if path in ("/api/request", "/api/events"):
-            return self.refuse(405, f"{path} takes "
-                               f"{'POST' if path.endswith('request') else 'GET'}")
+        if path in (
+            "/api/request", "/api/events", "/api/attachments",
+            "/api/dictation", "/api/speech",
+        ):
+            want = "GET" if path.endswith("events") else "POST"
+            return self.refuse(405, f"{path} takes {want}", allow=want)
+        if path.startswith("/api/attachments/"):
+            return self.refuse(405, f"{path} takes GET", allow="GET, HEAD")
         return self.refuse(404, "nothing here")
 
     def prove(self):
@@ -416,12 +530,28 @@ class Handler(BaseHTTPRequestHandler):
         if name == "session/watch" or (name == "session/list"
                                        and payload.get("watch")):
             raise Refused(400, "a watch goes through /api/events")
+        if name == "dictation/watch":
+            raise Refused(
+                400, "dictation streams go through /api/dictation/<id>/events",
+            )
+        if name == "attachment/add":
+            raise Refused(
+                403,
+                "attachment/add reads a local host path and is not permitted "
+                "over HTTP; upload bytes through POST /api/attachments",
+            )
+        if name == "media/transcribe" and payload.get("path"):
+            raise Refused(
+                403,
+                "media/transcribe with a local host path is not permitted over HTTP",
+            )
         # The token proves the door's client to the door; ZERO's server
         # takes the door's own word (its socket) and its client's process
         payload.pop("token", None)
         payload.pop("relayed_for_pid", None)
+        payload.pop("relayed", None)
         connection = self.server.connection(proof.pid)
-        if "source" in payload:
+        if "source" in MESSAGES[name]["fields"]:
             payload["source"] = WEB_SOURCE
         try:
             reply = connection.reply_to(
@@ -431,6 +561,318 @@ class Handler(BaseHTTPRequestHandler):
         except ProtocolError as error:
             reply = {"ok": False, "error": str(error)}
         self.send_json(200, reply)
+
+    # Streaming attachment relay
+
+    def _stream_request_chunks(self):
+        """Yield raw HTTP request body slices (<= 512 KiB) without buffering."""
+        transfer = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in transfer:
+            while True:
+                line = self.rfile.readline(65536)
+                if not line:
+                    raise Refused(400, "unexpected end of chunked upload")
+                size_text = line.split(b";", 1)[0].strip()
+                try:
+                    chunk_size = int(size_text, 16)
+                except ValueError:
+                    raise Refused(400, "invalid chunked encoding") from None
+                if chunk_size == 0:
+                    while True:
+                        trailer = self.rfile.readline(65536)
+                        if not trailer or trailer in (b"\r\n", b"\n"):
+                            break
+                    return
+                remaining = chunk_size
+                while remaining > 0:
+                    piece = self.rfile.read(min(ATTACHMENT_CHUNK_BYTES, remaining))
+                    if not piece:
+                        raise Refused(400, "unexpected end of chunked upload")
+                    remaining -= len(piece)
+                    yield piece
+                crlf = self.rfile.read(2)
+                if crlf != b"\r\n":
+                    raise Refused(400, "invalid chunk terminator")
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None:
+            raise Refused(411, "Content-Length is required for attachment upload")
+        try:
+            remaining = int(raw_len)
+        except ValueError:
+            raise Refused(400, "Content-Length is a number") from None
+        if remaining < 0:
+            raise Refused(400, "Content-Length must be nonnegative")
+        while remaining > 0:
+            piece = self.rfile.read(min(ATTACHMENT_CHUNK_BYTES, remaining))
+            if not piece:
+                raise Refused(400, "upload body ended before Content-Length")
+            remaining -= len(piece)
+            yield piece
+
+    def upload_attachment(self, proof, query):
+        """POST /api/attachments: stream file bytes in <= 512 KiB chunks."""
+        name = (
+            (query.get("name") or [None])[0]
+            or unquote(self.headers.get("X-Attachment-Name") or "")
+            or "file"
+        )
+        media_hint = (
+            (query.get("media_type") or [None])[0]
+            or (self.headers.get("Content-Type") or "").split(";")[0].strip()
+            or None
+        )
+        raw_override = (
+            (query.get("allow_over_limit") or [None])[0]
+            or self.headers.get("X-Allow-Over-Limit")
+            or ""
+        ).strip().lower()
+        allow_over_limit = raw_override in ("1", "true", "yes")
+        expected_size = None
+        if "Content-Length" in self.headers:
+            try:
+                expected_size = int(self.headers["Content-Length"])
+            except ValueError:
+                raise Refused(400, "Content-Length is a number") from None
+            if expected_size < 0:
+                raise Refused(400, "Content-Length must be nonnegative")
+        connection = self.server.connection(proof.pid)
+        try:
+            attachment = connection.upload_attachment_chunks(
+                name,
+                self._stream_request_chunks(),
+                expected_size=expected_size,
+                media_type=media_hint,
+                allow_over_limit=allow_over_limit,
+                chunk_bytes=ATTACHMENT_CHUNK_BYTES,
+            )
+        except ProtocolError as error:
+            self.close_connection = True
+            status = 413 if error.over_limit else 400
+            payload = {"ok": False, "error": str(error)}
+            if error.over_limit:
+                payload["over_limit"] = True
+            body = json.dumps(payload, ensure_ascii=False).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.security_headers()
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        except NotRunning as error:
+            self.close_connection = True
+            return self.refuse(503, str(error))
+        self.send_json(200, {"ok": True, "attachment": attachment})
+
+    def get_attachment(self, proof, attachment_id, query, *, head_only=False):
+        """GET/HEAD /api/attachments/<id>: stream with Range 206 & XSS hygiene."""
+        if not attachment_id or "/" in attachment_id:
+            return self.refuse(404, "nothing here")
+        session = (query.get("session") or [None])[0] or None
+        force_download = (
+            (query.get("download") or [""])[0].strip().lower()
+            in ("1", "true", "yes")
+        )
+        connection = self.server.connection(proof.pid)
+        try:
+            meta = connection.get_attachment(attachment_id, session=session)
+        except ProtocolError as error:
+            return self.refuse(404, str(error))
+        except NotRunning as error:
+            return self.refuse(503, str(error))
+        total = int(meta.get("size_bytes") or 0)
+        media_type = sanitize_media_type(meta.get("media_type"))
+        inline = is_safe_inline_media(media_type) and not force_download
+        range_header = self.headers.get("Range")
+        byte_range = parse_byte_range(range_header, total)
+        if byte_range == "invalid":
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{total}")
+            self.send_header("Content-Length", "0")
+            self.send_header("Accept-Ranges", "bytes")
+            self.security_headers()
+            self.end_headers()
+            return
+        if byte_range is not None:
+            start, end = byte_range
+            status = 206
+            length = end - start + 1
+        else:
+            start = 0
+            end = total - 1 if total > 0 else -1
+            status = 200
+            length = total
+        self.send_response(status)
+        self.send_header("Content-Type", media_type)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "private, no-store")
+        self.send_header(
+            "Content-Disposition",
+            content_disposition(meta.get("name"), inline=inline),
+        )
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+        if inline:
+            self.security_headers()
+        else:
+            self.send_header("Content-Security-Policy", ATTACHMENT_CSP)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.end_headers()
+        if head_only or length <= 0:
+            return
+        try:
+            for chunk in connection.iter_attachment(
+                attachment_id,
+                session=session,
+                start=start,
+                end=end,
+                chunk_bytes=ATTACHMENT_CHUNK_BYTES,
+            ):
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (NotRunning, ProtocolError):
+            self.close_connection = True
+
+    # Dictation and speech relays
+
+    def _relay_media(self, proof, message_name, fields):
+        connection = self.server.connection(proof.pid)
+        payload = build(message_name, **fields)
+        if "source" in MESSAGES[message_name]["fields"]:
+            payload["source"] = WEB_SOURCE
+        try:
+            reply = connection.reply_to(
+                payload, MESSAGES[message_name].get("timeout_seconds", 60),
+            )
+        except (NotRunning, ProtocolError) as error:
+            reply = {"ok": False, "error": str(error)}
+        status = 200 if reply.get("ok") else 400
+        self.send_json(status, reply)
+
+    def dictation_start(self, proof):
+        payload = self.json_body() if int(
+            self.headers.get("Content-Length", "0") or "0"
+        ) > 0 else {}
+        if not isinstance(payload, dict):
+            raise Refused(400, "dictation start expects a JSON object")
+        allowed = ("session", "model", "stt_service", "language", "mode")
+        fields = {
+            k: payload[k]
+            for k in allowed
+            if k in payload and payload[k] is not None
+        }
+        self._relay_media(proof, "dictation/start", fields)
+
+    def dictation_route(self, proof, method, tail, query):
+        parts = tail.split("/")
+        if len(parts) != 2 or not parts[0]:
+            return self.refuse(404, "nothing here")
+        did = unquote(parts[0])
+        action = parts[1]
+        if action == "chunk":
+            if method != "POST":
+                return self.refuse(405, "chunk takes POST", allow="POST")
+            raw_ctype = self.headers.get("Content-Type") or ""
+            ctype = raw_ctype.split(";")[0].strip().lower()
+            if ctype == "application/json":
+                payload = self.json_body()
+                if not isinstance(payload, dict):
+                    raise Refused(400, "dictation chunk expects a JSON object")
+                fields = {
+                    "dictation_id": did,
+                    "seq": payload.get("seq"),
+                    "data": payload.get("data"),
+                }
+                if payload.get("sample_rate") is not None:
+                    fields["sample_rate"] = payload["sample_rate"]
+            else:
+                raw_bytes = self.body()
+                try:
+                    seq = int((query.get("seq") or [""])[0])
+                except ValueError:
+                    raise Refused(400, "seq must be an integer") from None
+                fields = {
+                    "dictation_id": did,
+                    "seq": seq,
+                    "data": base64.b64encode(raw_bytes).decode("ascii"),
+                }
+                if raw_rate := (query.get("sample_rate") or [None])[0]:
+                    try:
+                        fields["sample_rate"] = int(raw_rate)
+                    except ValueError:
+                        raise Refused(400, "sample_rate must be an integer") from None
+            return self._relay_media(proof, "dictation/chunk", fields)
+        if action == "stop":
+            if method != "POST":
+                return self.refuse(405, "stop takes POST", allow="POST")
+            return self._relay_media(proof, "dictation/stop", {"dictation_id": did})
+        if action == "cancel":
+            if method != "POST":
+                return self.refuse(405, "cancel takes POST", allow="POST")
+            return self._relay_media(proof, "dictation/cancel", {"dictation_id": did})
+        if action == "events":
+            if method != "GET":
+                return self.refuse(405, "events takes GET", allow="GET")
+            return self.dictation_events(proof, did)
+        return self.refuse(404, "nothing here")
+
+    def dictation_events(self, proof, dictation_id):
+        connection = self.server.connection(proof.pid)
+        try:
+            watch = connection.watch_dictation(dictation_id, keeps_server_up=False)
+        except (NotRunning, ProtocolError) as error:
+            return self.refuse(400, str(error))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.security_headers()
+        self.end_headers()
+        self.close_connection = True
+        events_box = queue.Queue()
+
+        def reader():
+            try:
+                for ev in watch:
+                    events_box.put(ev)
+                events_box.put({"event": "done", "bye": watch.bye or "done"})
+            except ProtocolError as error:
+                events_box.put({"event": "error", "error": str(error), "bye": "error"})
+            except (OSError, ValueError):
+                events_box.put({"event": "done", "bye": "lost"})
+
+        threading.Thread(target=reader, daemon=True).start()
+        try:
+            while True:
+                try:
+                    ev = events_box.get(timeout=PING_SECONDS)
+                except queue.Empty:
+                    self.write_ping()
+                    continue
+                kind = ev.get("event") or "message"
+                self.write_event(kind, ev)
+                if "bye" in ev or kind == "done":
+                    return
+        except OSError:
+            return
+        finally:
+            watch.close()
+
+    def speech_synthesize(self, proof):
+        payload = self.json_body()
+        if not isinstance(payload, dict):
+            raise Refused(400, "speech request expects a JSON object")
+        allowed = ("session", "reply_entry_id", "text", "voice", "service", "model")
+        fields = {
+            k: payload[k]
+            for k in allowed
+            if k in payload and payload[k] is not None
+        }
+        self._relay_media(proof, "speech/synthesize", fields)
 
     # The page's stream
 

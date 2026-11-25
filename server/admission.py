@@ -8,7 +8,11 @@ from pathlib import Path
 from core import attribution, entries, timeline
 from core.asking import NO, YES
 from server import replies
-from server.idempotency import request_hash
+from server.idempotency import (
+    legacy_request_hash,
+    matches_request_hash,
+    request_hash,
+)
 from server.services import Refused
 from server.session_actions import ID_TRIES, check_switchable, new_id, title
 from server.store import ReplyUnavailable, UnknownSession
@@ -43,7 +47,9 @@ class Message:
     title: str | None = None
 
 
-def sent_before(row, message, digest):
+def sent_before(
+    row, message, digest, *, legacy_digest=None, allow_legacy=False,
+):
     """What a message sent again gets, its id already in the inbox: the
     first's ack, nothing run again; refused when the id came with another
     message (its text, or the session it named)."""
@@ -52,7 +58,12 @@ def sent_before(row, message, digest):
             and row["source"] == message.source
             and payload.get("reply_to") == message.reply_to
             and payload.get("choice") == message.choice
-            and payload.get("request_hash", digest) == digest
+            and matches_request_hash(
+                payload.get("request_hash", digest),
+                digest,
+                legacy_digest=legacy_digest,
+                allow_legacy=allow_legacy,
+            )
             and (message.session is None or message.session == row["session"]))
     if not same:
         raise Refused(f"message id {message.id!r} was used for another "
@@ -78,21 +89,37 @@ class Admission:
     def __init__(self, runtime):
         self.runtime = runtime
 
-    def admit(self, message, extra=None, *, legacy_send=False):
+    def admit(self, message, extra=None, *, legacy_send=False, principal=None):
         """Commit a message to the inbox, then return the ack: its session and
         its handled_as, what became of it. `extra`: payload fields."""
         runtime = self.runtime
         if not runtime.accepting:
             raise Refused("the server is shutting down; send it again once it's back")
-        message.text = runtime.redact(message.text)
-        if not message.text.strip():
-            raise Refused("empty message")
         if message.when_busy not in WHEN_BUSY:
             raise Refused(f"when_busy is one of {WHEN_BUSY}")
-        digest = request_hash({**vars(message), "fields": extra or {}})
+        req_payload = {**vars(message), "fields": extra or {}}
+        digest = request_hash(req_payload, principal=principal)
         seen = runtime.store.query("SELECT * FROM inbox WHERE id = ?", message.id)
         if seen:
-            return sent_before(seen[0], message, digest)
+            return self._sent_before(
+                seen[0], message, digest, req_payload, principal,
+            )
+        prepared = runtime.prepare_message(message, extra, principal=principal)
+        has_content = any(item.has_content for item in prepared)
+        if not message.text.strip() and not has_content:
+            raise Refused("empty message")
+        fallback_title = next(
+            (item.fallback_title for item in prepared if item.fallback_title),
+            None,
+        )
+        merged_extra = dict(extra or {})
+        for item in prepared:
+            if item.payload:
+                merged_extra.update(item.payload)
+        claims = tuple(item.claim for item in prepared if item.claim is not None)
+        after_commits = tuple(
+            item.after_commit for item in prepared if item.after_commit is not None
+        )
         new = None
         sid = message.session
         if message.title is not None and (sid is not None or not message.title.strip()):
@@ -111,23 +138,31 @@ class Admission:
                     "(Connect a model; later /settings, Models and keys), or "
                     "--model names one"
                 )
-            initial_title = message.text
-            if message.title:
-                initial_title = runtime.redact(message.title)
+            initial_title = message.title or message.text
+            if not initial_title.strip() and fallback_title:
+                initial_title = fallback_title
             new = {
-                "title": title(initial_title),
+                "title": title(initial_title) or "Attachment",
                 "source": message.source,
                 "model": model,
                 "mode": mode,
                 "workspace": str(Path(workspace).resolve()),
             }
+            initial_switch = {}
             if message.thinking_effort is not None:
                 # Its first turn builds it with the effort, as a switch would
-                effort = check_switchable(
-                    "thinking_effort", message.thinking_effort
+                initial_switch["thinking_effort"] = check_switchable(
+                    "thinking_effort", message.thinking_effort,
                 )
-                new["switch"] = json.dumps({"thinking_effort": effort})
-        payload = {"text": message.text, "request_hash": digest, **(extra or {})}
+            for sw_name, sw_value in (
+                merged_extra.pop("initial_switches", None) or {}
+            ).items():
+                initial_switch[sw_name] = check_switchable(sw_name, sw_value)
+            if initial_switch:
+                new["switch"] = json.dumps(initial_switch)
+        else:
+            merged_extra.pop("initial_switches", None)
+        payload = {"text": message.text, "request_hash": digest, **merged_extra}
         if message.choice is not None and message.reply_to is None:
             raise Refused("a choice answers the question named in reply_to")
         if message.reply_to is not None and sid is None:
@@ -144,9 +179,14 @@ class Admission:
             runtime.admissions += 1
         try:
             admitted, sid, handled_as = runtime.admit_to_session(
-                message, sid, new, payload, legacy_send)
-            if admitted and runtime.started:
-                runtime.dispatch(sid)
+                message, sid, new, payload, legacy_send, claims=claims,
+                legacy_payload=req_payload, principal=principal,
+            )
+            if admitted:
+                for after_commit in after_commits:
+                    after_commit(sid)
+                if runtime.started:
+                    runtime.dispatch(sid)
         finally:
             with runtime.activity:
                 runtime.admitting -= 1
@@ -171,7 +211,33 @@ class Admission:
                 raise Refused(f"the question's choices are {', '.join(offered)}, "
                               f"not {message.choice!r}")
 
-    def admit_to_session(self, message, sid, new, payload, legacy_send):
+    def _legacy_inbox_allowed(self, message, principal):
+        if principal is None:
+            return True
+        if principal.is_command or principal.command_session is not None:
+            return False
+        if principal.scope is not None:
+            return (
+                message.session is not None
+                and self.runtime.in_workflow_scope(message.session, principal.scope)
+            )
+        return True
+
+    def _sent_before(self, row, message, digest, req_payload, principal):
+        legacy_digest = (
+            legacy_request_hash(req_payload)
+            if principal is not None and req_payload is not None else None
+        )
+        return sent_before(
+            row,
+            message,
+            digest,
+            legacy_digest=legacy_digest,
+            allow_legacy=self._legacy_inbox_allowed(message, principal),
+        )
+
+    def admit_to_session(self, message, sid, new, payload, legacy_send,
+                         claims=(), *, legacy_payload=None, principal=None):
         """(admitted, session id, handled_as): what becomes of the message
         decided and its row committed under the session's own lock. A new
         session takes a new id, and another when one is taken."""
@@ -185,7 +251,13 @@ class Admission:
                     seen = runtime.store.query("SELECT * FROM inbox WHERE id = ?",
                                             message.id)
                     if seen:
-                        ack = sent_before(seen[0], message, payload["request_hash"])
+                        ack = self._sent_before(
+                            seen[0],
+                            message,
+                            payload["request_hash"],
+                            legacy_payload,
+                            principal,
+                        )
                         return False, ack["session"], ack["handled_as"]
                     runtime.check_reply(sid, message, payload.get("reply_kind"))
                     handled_as = "reply"
@@ -200,7 +272,7 @@ class Admission:
                 try:
                     admitted, sid = runtime.store.admit(
                         message.id, sid, "user", message.source, said,
-                        new_session=new,
+                        new_session=new, claims=claims,
                     )
                 except ReplyUnavailable as error:
                     raise Refused(str(error)) from None
@@ -213,7 +285,13 @@ class Admission:
                 if not admitted:
                     row, = runtime.store.query("SELECT * FROM inbox WHERE id = ?",
                                             message.id)
-                    ack = sent_before(row, message, payload["request_hash"])
+                    ack = self._sent_before(
+                        row,
+                        message,
+                        payload["request_hash"],
+                        legacy_payload,
+                        principal,
+                    )
                     handled_as = ack["handled_as"]
                 return admitted, sid, handled_as
 

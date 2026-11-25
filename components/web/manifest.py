@@ -2,6 +2,7 @@
 
 import settings
 from core.components import ComponentManifest, SessionBuild
+from components.model import SERVICE_CURRENT_SERVER, SERVICE_OFF
 from components.model import servers as model_servers
 from components.model.servers import ModelServerError
 from components.web import SETTINGS
@@ -11,13 +12,23 @@ from components.web.search import available_services, select as select_search_se
 
 def prepare_session(build: SessionBuild):
     web = build.options.get("web")
-    build.tool_context["web"] = (
-        web if web is not None else web_tool.Web(model_server=build.server.name)
-    )
+    build.tool_context["web"] = web if web is not None else web_tool.Web()
+    if "search_service" in build.options:
+        chosen = build.options["search_service"]
+    elif "search_service" in build.settings:
+        chosen = build.settings["search_service"]
+    else:
+        chosen = build.limits["search_service"]
+    if chosen is None:
+        chosen = SERVICE_CURRENT_SERVER
+    build.settings["search_service"] = chosen
 
 
-def session_hooks(build: SessionBuild):
-    return [web_tool.SearchApproval(build.ask)]
+def after_session(session, build: SessionBuild):
+    build.tool_context["web_session"] = session
+    web = session.tool_context.get("web")
+    if web is not None:
+        web.bind_session(session)
 
 
 def search_service_status():
@@ -31,12 +42,13 @@ def search_service_status():
             else None
         )
         available = available_services()
-        service, reason = select_search_service(
-            available, server, config["web_search_service"],
-        )
+        chosen_setting = config["search_service"]
+        service, reason = select_search_service(available, server, chosen_setting)
     except (settings.SettingsError, ModelServerError):
         return False, "Web search service could not read its configuration."
     choices = ", ".join(available)
+    if chosen_setting == SERVICE_OFF:
+        return True, f"Web search is off. Available services are {choices}."
     if service is None:
         return False, f"Web search. {reason} Available services are {choices}."
     return True, (
@@ -55,6 +67,6 @@ MANIFEST = ComponentManifest(
     order=75,
     settings=SETTINGS,
     prepare_session=prepare_session,
-    session_hooks=session_hooks,
+    after_session=after_session,
     doctor=doctor,
 )

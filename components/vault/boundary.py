@@ -13,19 +13,14 @@ from core.tools import Result
 REFERENCE = re.compile(r"⟦vault:([a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)?)⟧")
 
 
-def walk(value, transform, numbers=False, keys=False):
+def walk(value, transform, keys=False):
     if isinstance(value, str):
         return transform(value)
     if isinstance(value, Mapping):
-        return {(transform(str(key)) if keys else key):
-                walk(item, transform, numbers, keys)
+        return {(transform(str(key)) if keys else key): walk(item, transform, keys)
                 for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return [walk(item, transform, numbers, keys) for item in value]
-    if numbers and type(value) in (int, float):
-        text = str(value)
-        safe = transform(text)
-        return value if safe == text else safe
+        return [walk(item, transform, keys) for item in value]
     return value
 
 
@@ -51,21 +46,18 @@ class Boundary:
                 found[variant] = stand_in
         return found
 
-    def redact(self, value, partial=False, include_numbers=False,
-               include_keys=False):
-        text = self.redactor(partial)
-        return value if text is None else walk(
-            value, text, numbers=include_numbers, keys=include_keys)
-
-    def redact_entry(self, entry, *, include_data=False):
-        """Redact text at every depth without changing links or authority."""
+    def redact(self, value):
+        """Best-effort: replace known values in its strings with stand-ins."""
         text = self.redactor()
-        if text is None:
-            return entry
-        return transform_text(entry, text, include_numbers=include_data,
-                              include_keys=include_data)
+        return value if text is None else walk(value, text)
 
-    def redactor(self, partial=False):
+    def redact_entry(self, entry):
+        """Redact an entry's strings at every depth without changing links,
+        authority or an entry its spec keeps whole (`redact=False`)."""
+        text = self.redactor()
+        return entry if text is None else transform_text(entry, text)
+
+    def redactor(self):
         replacements = self.replacements()
         if not replacements:
             return None
@@ -78,17 +70,8 @@ class Boundary:
             # to occur in their names.
             pieces = re.split(r"(⟦vault:[^⟧]+⟧)", raw)
             for index in range(0, len(pieces), 2):
-                original = pieces[index]
-                if partial and index == len(pieces) - 1:
-                    keep = 0
-                    for secret in replacements:
-                        for length in range(1, min(len(secret), len(original)) + 1):
-                            if original.endswith(secret[:length]):
-                                keep = max(keep, length)
-                    if keep:
-                        original = original[:-keep]
                 pieces[index] = pattern.sub(
-                    lambda match: replacements[match[0]], original)
+                    lambda match: replacements[match[0]], pieces[index])
             return "".join(pieces)
 
         return text
@@ -109,11 +92,9 @@ class Boundary:
 
     def result(self, answer):
         return Result(self.redact(answer.output), head=self.redact(answer.head),
-                      fields=self.redact(answer.fields, include_numbers=True,
-                                         include_keys=True), failed=answer.failed,
+                      fields=self.redact(answer.fields), failed=answer.failed,
                       retry_arguments=self.redact(answer.retry_arguments),
-                      entries=tuple(self.redact_entry(entry, include_data=True)
-                                    for entry in answer.entries))
+                      entries=tuple(map(self.redact_entry, answer.entries)))
 
     def stream(self):
         return RedactedStream(self)

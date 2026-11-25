@@ -12,8 +12,19 @@ from threading import Lock
 from time import monotonic
 
 from server.services import Service
-from components.model import connect, features, servers
+from components.model import SERVICE_CURRENT_SERVER, connect, features, servers
+from components.model.apis import (
+    UTILITY_CAPABILITIES, discover_utility_services, select_utility_service,
+)
 from components.model.limits import endpoint
+
+UTILITY_SETTINGS = (
+    ("search_service", "search"),
+    ("stt_service", "stt"),
+    ("tts_service", "tts"),
+    ("image_service", "image"),
+    ("video_service", "video"),
+)
 
 # Seconds a model may stay silent while its features are measured: a local
 # server may first load it (a backstop, as model_silence_seconds)
@@ -31,7 +42,9 @@ class ModelDirectory:
 
 class ModelService(Service):
     name = "models"
-    looking_messages = ("model/list", "model/server/list", "model/window")
+    looking_messages = (
+        "model/list", "model/server/list", "model/window", "model/utilities",
+    )
 
     def __init__(self, config=None):
         # config.toml (settings.Config), where the default goes; the server's
@@ -54,6 +67,7 @@ class ModelService(Service):
                 "model/window": self.window_message,
                 "model/window/set": self.set_window_message,
                 "model/features": self.features_message,
+                "model/utilities": self.utilities_message,
                 "model/server/list": self.servers_message,
                 "model/server/probe": self.probe_message,
                 "model/server/key/set": self.set_key_message,
@@ -114,6 +128,58 @@ class ModelService(Service):
         return {"ok": True, "servers": listed, "default": model,
                 "default_server": connect.server_of(model),
                 "not_ready_reason": connect.not_ready_reason(model)}
+
+    def utilities_message(self, request):
+        model = request.get("model")
+        if model is not None and not isinstance(model, str):
+            return {"ok": False, "error": "model/utilities model must be a string"}
+        if not model:
+            model = self.default()
+        active_server = connect.server_of(model) if model else None
+        try:
+            table = servers.table()
+        except servers.ModelServerError as error:
+            return {"ok": False, "error": str(error)}
+        try:
+            keys = servers.read_keys()
+        except servers.ModelServerError:
+            keys = {}
+
+        capabilities = {}
+        for setting_name, cap in UTILITY_SETTINGS:
+            _, _, registry, keyless_apis = UTILITY_CAPABILITIES[cap]
+            implemented = bool(registry or keyless_apis)
+            discovered = discover_utility_services(
+                cap,
+                table,
+                lambda name, entry: servers.entry_api_key(name, entry, keys),
+            )
+            chosen, _ = select_utility_service(
+                discovered, active_server, SERVICE_CURRENT_SERVER,
+            )
+            services = [
+                {
+                    "name": item.name,
+                    "title": item.title,
+                    "label": item.label,
+                    "keyless": item.keyless,
+                    "available": True,
+                    "model": item.model,
+                }
+                for item in discovered.values()
+            ]
+            capabilities[setting_name] = {
+                "capability": cap,
+                "implemented": implemented,
+                "available": bool(services),
+                "current_server_service": chosen.name if chosen is not None else None,
+                "services": services,
+            }
+        return {
+            "ok": True,
+            "active_server": active_server,
+            "capabilities": capabilities,
+        }
 
     def probe_message(self, request):
         try:

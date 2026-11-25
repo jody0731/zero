@@ -3,8 +3,8 @@
 import { look } from "./api.js";
 import { registry } from "./components.js";
 import {
-  $, GAP_SECONDS, PAGE_RECORDS, RESULT_CHARS, clock, el, modelFailureView,
-  seconds, sourceWho, state,
+  $, GAP_SECONDS, PAGE_RECORDS, RESULT_CHARS, clock, el, formatBytes,
+  modelFailureView, seconds, sourceWho, state,
 } from "./dom.js";
 import * as entries from "./entries.js";
 import { patchMarkdown } from "./markdown.js";
@@ -13,6 +13,81 @@ let hooks = {
   rewindMessage: () => {},
   drawAsk: () => {},
 };
+
+let activeAudio = null;
+let activeListenButton = null;
+
+function stopActiveAudio() {
+  if (activeAudio) {
+    try { activeAudio.pause(); } catch { /* ignore */ }
+    activeAudio.src = "";
+    activeAudio = null;
+  }
+  if (activeListenButton) {
+    activeListenButton.textContent = "Listen";
+    activeListenButton.setAttribute("aria-pressed", "false");
+    activeListenButton = null;
+  }
+}
+
+function playAttachmentAudio(attachmentId, session, button = null) {
+  stopActiveAudio();
+  const params = new URLSearchParams();
+  if (session) params.set("session", session);
+  const url = `/api/attachments/${encodeURIComponent(attachmentId)}`
+    + (params.toString() ? `?${params}` : "");
+  const audio = new Audio(url);
+  activeAudio = audio;
+  activeListenButton = button;
+  if (button) {
+    button.textContent = "Stop";
+    button.setAttribute("aria-pressed", "true");
+  }
+  const clear = () => {
+    if (activeAudio === audio) stopActiveAudio();
+  };
+  audio.addEventListener("ended", clear);
+  audio.addEventListener("error", clear);
+  const promise = audio.play();
+  if (promise && typeof promise.catch === "function") {
+    promise.catch(() => {
+      clear();
+    });
+  }
+}
+
+async function toggleListen(turn, button) {
+  if (activeListenButton === button && activeAudio) {
+    stopActiveAudio();
+    return;
+  }
+  const session = state.open;
+  if (!session) return;
+  const replyEntryId = turn.lastReplyId || null;
+  button.disabled = true;
+  button.textContent = "…";
+  try {
+    const response = await fetch("/api/speech", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session,
+        ...(replyEntryId ? { reply_entry_id: replyEntryId } : {}),
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.ok || !body.attachment_id) {
+      throw new Error(body.error || `HTTP ${response.status}`);
+    }
+    button.disabled = false;
+    playAttachmentAudio(body.attachment_id, session, button);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Listen";
+    alert(error.message);
+  }
+}
 
 export function initTimeline(callbacks) {
   hooks = { ...hooks, ...callbacks };
@@ -93,6 +168,12 @@ export function addRecord(record, live = true) {
   state.lastSeq = record.seq;
   state.records.push(record);
   const kind = entries.entryType(record);
+  if (kind === "media/speech_cache") {
+    if (live && entries.field(record, "auto_speak") && entries.field(record, "attachment_id")) {
+      playAttachmentAudio(entries.field(record, "attachment_id"), state.open);
+    }
+    return;
+  }
   if (entries.UNDRAWN_TYPES.has(kind) || record.audience === "model") return;
   if (entries.isTurnStart(record)) {
     if (state.turn) finishProgress(state.turn, "Progress");
@@ -171,9 +252,72 @@ function switchText(record) {
   return parts.length ? parts.join(" · ") : "Switched";
 }
 
+function renderAttachmentFallback(item) {
+  const id = item?.attachment_id || "";
+  const path = item?.path || "";
+  if (!id && !path) return null;
+  const card = el("div", "attachment-card");
+  if (id) card.dataset.attachmentId = id;
+  else card.dataset.attachmentPath = path;
+  const info = el("div", "attachment-card-info");
+  info.append(el("span", "attachment-card-name", item.name || "file"));
+  if (!id) {
+    const mediaType = String(item.media_type || "").split(";")[0].trim().toLowerCase();
+    const sizeText = item.size_bytes ? formatBytes(item.size_bytes) : "";
+    const meta = [mediaType, sizeText, path].filter(Boolean).join(" · ");
+    if (meta) info.append(el("span", "attachment-card-meta", meta));
+    card.append(info);
+    return card;
+  }
+  card.append(info);
+  const params = new URLSearchParams({ download: "1" });
+  if (state.open) params.set("session", state.open);
+  const link = el("a", "attachment-download", "Download");
+  link.href = `/api/attachments/${encodeURIComponent(id)}?${params}`;
+  link.download = item.name || "file";
+  card.append(link);
+  return card;
+}
+
+function renderAttachments(record) {
+  const items = entries.attachmentsOf(record);
+  if (!items.length) return null;
+  const wrap = el("div", "entry-attachments");
+  const renderer = registry.getEntry(entries.ATTACHMENT_TYPE);
+  for (const item of items) {
+    const node = renderer
+      ? renderer(item, { el, state, entries, session: state.open })
+      : renderAttachmentFallback(item);
+    if (node) wrap.append(node);
+  }
+  return wrap.children.length ? wrap : null;
+}
+
+function renderSearchSuggestions(record) {
+  const suggestions = entries.searchSuggestions(record);
+  if (!suggestions) return null;
+  const wrap = el("div", "search-suggestions-wrap");
+  if (suggestions.html) {
+    const iframe = el("iframe", "search-suggestions");
+    iframe.setAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+    iframe.setAttribute("title", "Search suggestions");
+    iframe.setAttribute("referrerpolicy", "no-referrer");
+    iframe.srcdoc = suggestions.html;
+    wrap.append(iframe);
+  } else if (suggestions.queries.length) {
+    const list = el("div", "search-queries");
+    for (const query of suggestions.queries) {
+      list.append(el("span", "search-query", query));
+    }
+    wrap.append(list);
+  }
+  return wrap.children.length ? wrap : null;
+}
+
 export function userEntry(record) {
   const fields = entries.fieldsOf(record);
   const text = entries.messageText(record);
+  const attachmentsNode = renderAttachments(record);
   const event = entries.interaction(record);
   const node = el("div", "entry you");
   node.dataset.seq = record.seq;
@@ -181,7 +325,8 @@ export function userEntry(record) {
     node.className = "entry notice";
     const name = record.notice_source || "Background notice";
     node.append(who(event?.sender_session ? record.sender_name : name, record));
-    node.append(el("div", "bubble", text));
+    if (text) node.append(el("div", "bubble", text));
+    if (attachmentsNode) node.append(attachmentsNode);
     for (const action of registry.toolActions()) {
       const control = action(record, node);
       if (control) node.append(control);
@@ -192,8 +337,9 @@ export function userEntry(record) {
   const more = event?.action === "queue" ? "queued"
     : fields.steer ? "steer" : (isCont ? "go on" : "");
   node.append(who(record.sender_name || sourceWho(fields.source), record, more));
-  if (isCont && !text) return node;
-  node.append(el("div", "bubble", text));
+  if (isCont && !text && !attachmentsNode) return node;
+  if (text || !attachmentsNode) node.append(el("div", "bubble", text));
+  if (attachmentsNode) node.append(attachmentsNode);
   if (state.rewindPoints.has(record.seq)) {
     const session = state.open;
     const button = el("button", "message-action", "Rewind and edit");
@@ -217,6 +363,7 @@ function turnFor(record) {
   const progress = el("div", "turn-progress active");
   progress.append(process);
   const replies = el("div", "turn-replies");
+  const actions = el("div", "turn-actions");
   const copy = el("button", "message-action", "Copy response");
   copy.type = "button";
   copy.hidden = true;
@@ -228,13 +375,21 @@ function turnFor(record) {
       setTimeout(() => { copy.textContent = "Copy response"; }, 1800);
     } catch (error) { alert(`Could not copy: ${error.message}`); }
   });
-  node.append(replies, progress, copy);
+  const listen = el("button", "message-action listen-button", "Listen");
+  listen.type = "button";
+  listen.hidden = true;
+  listen.setAttribute("aria-pressed", "false");
+  actions.append(copy, listen);
+  node.append(replies, progress, actions);
   $("timeline").append(node);
-  state.turn = {
-    node, progress, process, summary, replies, copy, texts, liveStep,
+  const turn = {
+    node, progress, process, summary, replies, copy, listen, texts, liveStep,
+    lastReplyId: null,
     phase: "Thinking", hasProcess: false,
   };
-  return state.turn;
+  state.turn = turn;
+  listen.addEventListener("click", () => toggleListen(turn, listen));
+  return turn;
 }
 
 function assistantEntry(record) {
@@ -283,10 +438,18 @@ function assistantEntry(record) {
     }
     drawPublicReply(replyNode, replyFields, text, record.seq);
     turn.texts.push(text);
+    const replyId = entries.entryOf(record).id || null;
+    if (replyId) {
+      turn.lastReplyId = replyId;
+      turn.listen.dataset.replyId = replyId;
+    }
     turn.copy.hidden = false;
+    turn.listen.hidden = false;
   } else {
     clearDraft();
   }
+  const attachmentsNode = renderAttachments(record);
+  if (attachmentsNode) turn.replies.append(attachmentsNode);
   showProgress(turn, calls.length ? "Working" : "Thinking");
   return null;
 }
@@ -327,6 +490,23 @@ function toolEntry(record) {
     fold.append(el("pre", null, output));
   }
   if (fields.saved_path) fold.append(el("div", "saved", fields.saved_path));
+  const attachmentsNode = renderAttachments(record);
+  if (attachmentsNode) {
+    const items = entries.attachmentsOf(record);
+    const isDeliverable = fields.tool === "present_file"
+      || items.some((item) => item.delivery === "reference");
+    if (isDeliverable) {
+      attachmentsNode.dataset.tool = fields.tool || "deliverable";
+      turnFor(record).replies.append(attachmentsNode);
+    } else {
+      fold.append(attachmentsNode);
+    }
+  }
+  const suggestionsNode = renderSearchSuggestions(record);
+  if (suggestionsNode) {
+    suggestionsNode.dataset.tool = fields.tool || "web_search";
+    turnFor(record).replies.append(suggestionsNode);
+  }
   for (const action of registry.toolActions()) {
     const node = action(record, fold);
     if (node) fold.append(node);
@@ -377,6 +557,7 @@ function turnEnd(record) {
     turn.replies.append(reply);
     turn.texts.push(fields.answer);
     turn.copy.hidden = false;
+    turn.listen.hidden = false;
   }
   finishProgress(
     turn,

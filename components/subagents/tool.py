@@ -246,6 +246,8 @@ def start_problem(task, start_from, title, minutes, weighted_tokens):
     describe_start,
     summary=start_summary,
     ready=can_start,
+    # The subagent's own tool boundary resolves stand-ins in its task
+    traits=("keeps_vault_stand_ins",),
     metadata={
         "permissions": {
             "hands_off": lambda args: start_problem(**args) is None,
@@ -296,6 +298,8 @@ def start_subagent(task, start_from, title, minutes, weighted_tokens,
     reply_to=("string", "The helper question id to answer, when answering one"),
     summary=lambda args: f"message to session {args.get('session')}",
     ready=on_a_server,
+    # The receiving session's own tool boundary resolves stand-ins in it
+    traits=("keeps_vault_stand_ins",),
     # It changes nothing on the machine
     metadata={"permissions": {"needs_permission": lambda args: False}},
     session=("string", "The session's id"),

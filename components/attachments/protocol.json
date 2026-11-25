@@ -1,0 +1,357 @@
+{
+  "defs": {
+    "attachment_meta": {
+      "type": "object",
+      "description": "metadata for a stored attachment",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "staged",
+            "claimed",
+            "expired"
+          ]
+        },
+        "created_at": {
+          "type": "number"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "link_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "attachment_id",
+        "sha256",
+        "name",
+        "media_type",
+        "size_bytes",
+        "state"
+      ]
+    }
+  },
+  "messages": {
+    "attachment/upload": {
+      "about": "Stage an attachment in chunks of at most 512 KiB raw bytes.",
+      "fields": {
+        "upload_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "expected_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "data": {
+          "type": "string",
+          "description": "base64-encoded chunk of at most 512 KiB raw bytes"
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "abort": {
+          "type": "boolean"
+        },
+        "allow_over_limit": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "reply": {
+        "upload_id": {
+          "type": "string"
+        },
+        "received_bytes": {
+          "type": "integer"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "aborted": {
+          "type": "boolean"
+        },
+        "attachment": {
+          "$ref": "#/$defs/attachment_meta"
+        }
+      },
+      "changes": true,
+      "stamp_source": true
+    },
+    "attachment/add": {
+      "about": "Stage an attachment by snapshotting a local host file (local user clients only).",
+      "fields": {
+        "path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "allow_over_limit": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "reply": {
+        "attachment": {
+          "$ref": "#/$defs/attachment_meta"
+        }
+      },
+      "changes": true,
+      "stamp_source": true
+    },
+    "attachment/read": {
+      "about": "Read up to 512 KiB of unmodified bytes from an authorized attachment.",
+      "fields": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 524288
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "attachment_id"
+      ],
+      "reply": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "data": {
+          "type": "string"
+        },
+        "bytes_read": {
+          "type": "integer"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "eof": {
+          "type": "boolean"
+        }
+      },
+      "stamp_source": true
+    },
+    "attachment/get": {
+      "about": "Read metadata for one authorized attachment.",
+      "fields": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "required": [
+        "attachment_id"
+      ],
+      "reply": {
+        "attachment": {
+          "$ref": "#/$defs/attachment_meta"
+        }
+      },
+      "stamp_source": true
+    },
+    "attachment/list": {
+      "about": "List attachments for a session or staged attachments owned by the caller.",
+      "fields": {
+        "session": {
+          "type": "string",
+          "description": "a session's id"
+        },
+        "include_staged": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "reply": {
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/attachment_meta"
+          }
+        }
+      },
+      "stamp_source": true
+    },
+    "attachment/prune": {
+      "about": "Expire stale staged uploads and remove unreferenced attachment blobs.",
+      "fields": {
+        "include_trashed": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "description": "who sends it: a client's own name"
+        }
+      },
+      "reply": {
+        "expired_staged": {
+          "type": "integer"
+        },
+        "removed_blobs": {
+          "type": "integer"
+        },
+        "freed_bytes": {
+          "type": "integer"
+        },
+        "trashed_pruned": {
+          "type": "integer"
+        }
+      },
+      "changes": true,
+      "stamp_source": true
+    },
+    "session/send_with_attachments": {
+      "extends": "session/send",
+      "about": "Start a session or send a message with staged attachments (fail-closed on older servers).",
+      "fields": {
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "attachment ids to claim and attach to this message"
+        }
+      },
+      "required": [
+        "attachments"
+      ],
+      "changes": true
+    },
+    "session/submit_with_attachments": {
+      "extends": "session/submit",
+      "about": "Submit a message with staged attachments (fail-closed on older servers).",
+      "fields": {
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "attachment ids to claim and attach to this message"
+        }
+      },
+      "required": [
+        "attachments"
+      ],
+      "changes": true
+    }
+  },
+  "message_extensions": {
+    "session/rewind": {
+      "reply": {
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "attachment ids from the rewound user message"
+        }
+      }
+    },
+    "session/fork": {
+      "reply": {
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "attachment ids from the forked user message"
+        }
+      }
+    }
+  },
+  "commands": {
+    "/attach": "attach a file to your next message: /attach PATH [--force]"
+  }
+}

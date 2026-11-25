@@ -3,9 +3,12 @@
 import { change, look, modelCapabilities, newId } from "./api.js";
 import { registry } from "./components.js";
 import {
-  $, actionDialog, effortProblem, el, rowOf, showPanel, state,
+  $, UTILITY_CAPABILITIES, actionDialog, draftKey, effortProblem, el,
+  formatBytes, rowOf, showPanel, state,
 } from "./dom.js";
 import { lastAssistantText } from "./timeline.js";
+
+const composerWarnings = new Map();
 
 let hooks = {
   openSession: () => {},
@@ -15,6 +18,125 @@ let hooks = {
   drawHead: () => {},
   ensureModelWindow: () => {},
 };
+
+export function getComposerAttachments(session = state.open) {
+  return state.composerAttachments.get(draftKey(session)) || [];
+}
+
+export function setComposerAttachments(session, items) {
+  const key = draftKey(session);
+  const clean = Array.isArray(items) ? items.filter((item) => item?.attachment_id) : [];
+  if (clean.length) state.composerAttachments.set(key, clean);
+  else state.composerAttachments.delete(key);
+  if (key === draftKey(state.open)) renderComposerAttachments();
+}
+
+export function addComposerAttachment(key, item) {
+  if (!item?.attachment_id) return;
+  const current = state.composerAttachments.get(key) || [];
+  if (current.some((each) => each.attachment_id === item.attachment_id)) return;
+  state.composerAttachments.set(key, [...current, item]);
+  if (key === draftKey(state.open)) renderComposerAttachments();
+}
+
+export function removeComposerAttachment(key, id) {
+  const current = state.composerAttachments.get(key) || [];
+  const next = current.filter((each) => each.attachment_id !== id);
+  if (next.length) state.composerAttachments.set(key, next);
+  else state.composerAttachments.delete(key);
+  if (key === draftKey(state.open)) renderComposerAttachments();
+}
+
+function addComposerWarning(key, node) {
+  const list = composerWarnings.get(key) || [];
+  list.push(node);
+  composerWarnings.set(key, list);
+  if (key === draftKey(state.open)) renderComposerAttachments();
+}
+
+function removeComposerWarning(key, node) {
+  const list = (composerWarnings.get(key) || []).filter((each) => each !== node);
+  if (list.length) composerWarnings.set(key, list);
+  else composerWarnings.delete(key);
+  if (key === draftKey(state.open)) renderComposerAttachments();
+}
+
+export function renderComposerAttachments() {
+  const tray = $("composer-attachments");
+  if (!tray) return;
+  const key = draftKey(state.open);
+  const items = state.composerAttachments.get(key) || [];
+  const warnings = composerWarnings.get(key) || [];
+  tray.replaceChildren();
+  for (const item of items) {
+    const chip = el("span", "attachment-chip");
+    chip.dataset.attachmentId = item.attachment_id;
+    chip.append(el("span", "attachment-chip-name", item.name || item.attachment_id));
+    if (typeof item.size_bytes === "number" && item.size_bytes > 0) {
+      chip.append(el("span", "attachment-chip-size", formatBytes(item.size_bytes)));
+    }
+    const remove = el("button", "attachment-chip-remove", "×");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Remove ${item.name || "attachment"}`);
+    remove.addEventListener("click", () => {
+      removeComposerAttachment(key, item.attachment_id);
+    });
+    chip.append(remove);
+    tray.append(chip);
+  }
+  for (const warn of warnings) tray.append(warn);
+  tray.hidden = !items.length && !warnings.length;
+}
+
+export async function hydrateComposerAttachments(session, ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const loaded = await Promise.all(ids.map(async (id) => {
+    if (typeof id === "object" && id?.attachment_id) return id;
+    try {
+      const reply = await look("attachment/get", {
+        attachment_id: id, ...(session ? { session } : {}),
+      });
+      return reply.attachment || { attachment_id: id, name: id, size_bytes: 0 };
+    } catch {
+      return { attachment_id: id, name: id, size_bytes: 0 };
+    }
+  }));
+  const existing = getComposerAttachments(session);
+  const seen = new Set(existing.map((item) => item.attachment_id));
+  const merged = [...existing];
+  for (const item of loaded) {
+    if (!seen.has(item.attachment_id)) {
+      seen.add(item.attachment_id);
+      merged.push(item);
+    }
+  }
+  setComposerAttachments(session, merged);
+}
+
+export function mountComposerPlugins() {
+  const form = $("composer");
+  const textarea = $("text");
+  const controls = $("composer-controls");
+  const tray = $("composer-attachments");
+  if (!form || !textarea || !controls) return;
+  const ctx = {
+    form,
+    textarea,
+    controls,
+    tray,
+    currentDraftKey: () => draftKey(state.open),
+    readDraft: readComposerDraft,
+    writeDraft: writeComposerDraft,
+    getAttachments: (session = state.open) => getComposerAttachments(session),
+    addAttachment: addComposerAttachment,
+    removeAttachment: removeComposerAttachment,
+    addWarning: addComposerWarning,
+    removeWarning: removeComposerWarning,
+    renderAttachments: renderComposerAttachments,
+  };
+  for (const mount of registry.composers()) mount(ctx);
+  renderComposerAttachments();
+}
 
 export function initComposer(callbacks) {
   hooks = { ...hooks, ...callbacks };
@@ -74,15 +196,22 @@ export function saveSubmissions() {
 
 export function restoreWithdrawn(session, ids) {
   const texts = [];
+  const attachments = [];
   for (const id of ids) {
     const message = state.submissions.get(id);
     if (message?.session !== session) continue;
-    texts.push(message.text);
+    if (message.text) texts.push(message.text);
+    if (Array.isArray(message.attachments)) attachments.push(...message.attachments);
     state.submissions.delete(id);
   }
-  if (!texts.length) return;
-  const draft = state.open === session ? $("text").value : readComposerDraft(session);
-  writeComposerDraft(session, [...texts, draft].filter(Boolean).join("\n\n"));
+  if (!texts.length && !attachments.length) return;
+  if (texts.length) {
+    const draft = state.open === session ? $("text").value : readComposerDraft(session);
+    writeComposerDraft(session, [...texts, draft].filter(Boolean).join("\n\n"));
+  }
+  if (attachments.length) {
+    hydrateComposerAttachments(session, attachments);
+  }
   if (state.open === session) restoreComposerDraft();
   saveSubmissions();
 }
@@ -139,6 +268,7 @@ export function saveComposerDraft() {
 export function restoreComposerDraft() {
   $("text").value = readComposerDraft(state.open);
   saveComposerDraft();
+  renderComposerAttachments();
   $("commands").hidden = true;
   sizeComposer();
 }
@@ -146,13 +276,18 @@ export function restoreComposerDraft() {
 export async function rewindMessage(session, seq) {
   const viewing = state.open;
   const draft = readComposerDraft(session);
+  const staged = getComposerAttachments(session);
   const warning = "Return to before this message? Later conversation is left "
     + "behind. Files and memory stay unchanged."
-    + (draft ? " This replaces your unsent draft." : "");
+    + (draft || staged.length ? " This replaces your unsent draft." : "");
   if (!confirm(warning)) return false;
   try {
     const result = await change("session/rewind", { session, seq });
     writeComposerDraft(session, result.text || "");
+    setComposerAttachments(session, []);
+    if (Array.isArray(result.attachments) && result.attachments.length) {
+      await hydrateComposerAttachments(session, result.attachments);
+    }
     if (state.open === viewing) {
       // Restore before reopening so the previous composer cannot overwrite it.
       if (state.open === session) restoreComposerDraft();
@@ -270,6 +405,9 @@ export async function runCommand(text) {
         break;
       case "/fork": {
         const reply = await change("session/fork", { session, source: "web" });
+        if (Array.isArray(reply.attachments) && reply.attachments.length) {
+          await hydrateComposerAttachments(reply.session.id, reply.attachments);
+        }
         await hooks.openSession(reply.session.id);
         break;
       }
@@ -327,15 +465,18 @@ export async function send(event) {
   const original = $("text").value;
   const button = $("send");
   let text = original.trim();
-  if (!text || button.disabled) return;
   const draft = state.newSession;
   const session = state.open;
+  const staged = getComposerAttachments(session);
+  if ((!text && !staged.length) || button.disabled) return;
   const view = state.openVersion;
   if (!session && !draft) return;
   button.disabled = true;
   try {
-    if (draft && text === "/init") text = state.hello.init_request;
-    else if (await runCommand(text)) return;
+    if (text) {
+      if (draft && text === "/init") text = state.hello.init_request;
+      else if (await runCommand(text)) return;
+    }
     await state.sessionRead;
     while (state.openVersion === view && state.settingUpdates.size) {
       await Promise.all(state.settingUpdates);
@@ -359,15 +500,25 @@ export async function send(event) {
         return;
       }
     }
+    const attachmentIds = staged.map((item) => item.attachment_id);
     if (draft) {
       const fields = { ...draft, text, source: "web" };
+      for (const [cap] of UTILITY_CAPABILITIES) {
+        if (!fields[cap]) delete fields[cap];
+      }
+      if (attachmentIds.length) fields.attachments = attachmentIds;
       const content = JSON.stringify(fields);
       if (state.firstSend?.content !== content) {
         state.firstSend = { content, id: newId() };
       }
-      const reply = await change("session/send", {
-        ...fields, id: state.firstSend.id,
-      });
+      const reply = attachmentIds.length
+        ? await change("session/send_with_attachments", {
+          ...fields, id: state.firstSend.id,
+        })
+        : await change("session/send", {
+          ...fields, id: state.firstSend.id,
+        });
+      if (attachmentIds.length) setComposerAttachments(null, []);
       if (state.newSession === draft) {
         const remaining = $("text").value;
         if (remaining !== original) writeComposerDraft(reply.session, remaining);
@@ -377,12 +528,17 @@ export async function send(event) {
     }
     const id = newId();
     const queued = Boolean(rowOf(session)?.ask) || $("queue").checked;
-    const receipt = await change("session/submit", {
+    const payload = {
       id, session, text, source: "web", when_busy: queued ? "queue" : "steer",
-    });
+    };
+    if (attachmentIds.length) payload.attachments = attachmentIds;
+    const receipt = attachmentIds.length
+      ? await change("session/submit_with_attachments", payload)
+      : await change("session/submit", payload);
     if (readComposerDraft(session) === original) {
       writeComposerDraft(session, "");
     }
+    if (attachmentIds.length) setComposerAttachments(session, []);
     if (state.open === session && $("text").value === original) {
       $("text").value = "";
       saveComposerDraft();
@@ -390,7 +546,9 @@ export async function send(event) {
       $("queue").checked = false;
     }
     if (["steered", "queued"].includes(receipt.handled_as)) {
-      state.submissions.set(id, { session, text: original });
+      state.submissions.set(id, {
+        session, text: original, attachments: staged,
+      });
       saveSubmissions();
       // A stop or delivery may have preceded the acknowledgement.
       checkDeliveries(session);

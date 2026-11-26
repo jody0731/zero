@@ -1631,6 +1631,6 @@ class GoogleSearch:
             if service.key and service.key != NO_KEY else {}
         )
         answer = post_json(
-            service.url, body, headers, seconds, transport, check,
+            service.url, body, headers, seconds, transport, check, key=service.key,
         )
         return _parse_google_search_response(answer, count)

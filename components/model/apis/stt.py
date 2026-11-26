@@ -7,7 +7,6 @@ upload, and raises `STTError` without leaking keys or raw auth headers.
 
 import base64
 from dataclasses import dataclass
-from http import HTTPStatus
 import os
 from pathlib import Path
 import re
@@ -20,6 +19,7 @@ import time
 import httpx2
 
 import paths as home_paths
+from components.model.apis.http_errors import error_detail, response_error_text
 
 
 class STTError(Exception):
@@ -37,14 +37,10 @@ class TranscriptionResponse:
     billed: bool | None = None
 
 
-def _http_error(status):
-    if 300 <= status < 400:
-        return STTError(f"HTTP {status}. The service redirected the request.")
-    try:
-        reason = HTTPStatus(status).phrase
-    except ValueError:
-        reason = "unexpected status"
-    return STTError(f"HTTP {status} ({reason}).")
+def _http_error(reply, key):
+    return STTError(response_error_text(
+        reply, "The service redirected the request.", key=key,
+    ))
 
 
 def _read_audio_bytes(audio_path, *, max_bytes, label):
@@ -180,7 +176,7 @@ class OpenAIAudio:
                     headers=headers,
                 )
                 if not reply.is_success:
-                    raise _http_error(reply.status_code)
+                    raise _http_error(reply, service.key)
                 ctype = reply.headers.get("content-type", "").lower()
                 if "json" in ctype or reply.text.lstrip().startswith("{"):
                     payload = reply.json()
@@ -285,7 +281,7 @@ class GoogleAudio:
                     check()
                 reply = client.post(service.url, json=body, headers=headers)
                 if not reply.is_success:
-                    raise _http_error(reply.status_code)
+                    raise _http_error(reply, service.key)
                 payload = reply.json()
         except STTError:
             raise
@@ -305,14 +301,10 @@ class GoogleAudio:
             "failed", "cancelled",
         ):
             status = payload.get("status")
-            err = payload.get("error")
-            detail = ""
-            if isinstance(err, dict) and isinstance(err.get("message"), str):
-                detail = f": {err['message'].strip()}"
-            elif isinstance(err, str) and err.strip():
-                detail = f": {err.strip()}"
+            detail = error_detail({"error": payload.get("error")}, key=service.key)
             raise STTError(
-                f"The transcription interaction did not complete ({status}){detail}."
+                f"The transcription interaction did not complete ({status})."
+                + (f" {detail}" if detail else "")
             )
         text = _extract_interactions_text(payload)
         return TranscriptionResponse(
@@ -388,7 +380,7 @@ class DeepSeekAudio:
                     headers=headers,
                 )
                 if not reply.is_success:
-                    raise _http_error(reply.status_code)
+                    raise _http_error(reply, service.key)
                 payload = reply.json()
         except STTError:
             raise

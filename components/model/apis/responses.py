@@ -38,6 +38,7 @@ from components.model.apis.chat_completions import list_models, make_client
 from components.model.apis.conversation import (
     project_entries, provider_items, reasoning,
 )
+from components.model.apis.http_errors import json_body
 from components.model.apis.multimodal import (
     TokenEstimate,
     normalize_media_type,
@@ -936,7 +937,10 @@ class ResponsesSearch:
                     lookup, sdk, service.model, [], silence=seconds, check=check,
                 )
         except openai.APIStatusError as error:
-            raise http_error(error.status_code) from None
+            body = error.body
+            if not isinstance(body, (dict, list)):
+                body = json_body(error.response)
+            raise http_error(error.status_code, body=body, key=service.key) from None
         except (NoReply, openai.APITimeoutError):
             raise SearchError(
                 f"The search response gave no data for {seconds:g} s."

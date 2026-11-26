@@ -69,6 +69,8 @@ SAFE_INLINE_EXACT = frozenset({
 })
 SAFE_INLINE_PREFIXES = ("audio/", "video/")
 ATTACHMENT_CSP = "sandbox; default-src 'none'"
+SVG_MEDIA_TYPE = "image/svg+xml"
+SVG_HEADER_BYTES = 65_536
 RANGE_RE = re.compile(r"^(\d*)-(\d*)$")
 # A stream's keepalive, under every client's idle read timeout
 PING_SECONDS = 15
@@ -114,6 +116,88 @@ def is_safe_inline_media(media_type):
     if clean in SAFE_INLINE_EXACT:
         return True
     return any(clean.startswith(prefix) for prefix in SAFE_INLINE_PREFIXES)
+
+
+# Keep the prolog check aligned with attachment metadata at ingest.
+def _doctype_end(text, start):
+    brackets = 0
+    while start < len(text):
+        char = text[start]
+        if char in "\"'":
+            marker, start = char, start + 1
+        elif text.startswith("<!--", start):
+            marker, start = "-->", start + 4
+        elif text.startswith("<?", start):
+            marker, start = "?>", start + 2
+        else:
+            if char == "[":
+                brackets += 1
+            elif char == "]" and brackets:
+                brackets -= 1
+            elif char == ">" and brackets == 0:
+                return start + 1
+            start += 1
+            continue
+        end = text.find(marker, start)
+        if end == -1:
+            break
+        start = end + len(marker)
+    return len(text)
+
+
+def _has_svg_header(head):
+    at_limit = len(head) >= SVG_HEADER_BYTES
+    head = head[:SVG_HEADER_BYTES]
+    encoding = "utf-16" if head.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+    text = head.decode(encoding, "replace")
+    index = 0
+    while index < len(text):
+        if text[index].isspace():
+            index += 1
+            continue
+        if text.startswith("<?", index):
+            marker, start = "?>", index + 2
+        elif text.startswith("<!--", index):
+            marker, start = "-->", index + 4
+        elif text[index:index + 9].upper() == "<!DOCTYPE":
+            index = _doctype_end(text, index + 9)
+            continue
+        else:
+            if text[index] != "<":
+                return False
+            end = index + 1
+            while end < len(text) and not (
+                text[end].isspace() or text[end] in "/>"
+            ):
+                end += 1
+            if end == len(text):
+                break
+            prefix, colon, name = text[index + 1:end].rpartition(":")
+            return name.lower() == "svg" and (
+                not colon or (bool(prefix) and ":" not in prefix)
+            )
+        end = text.find(marker, start)
+        if end == -1:
+            break
+        index = end + len(marker)
+    # An unresolved prefix may hide an SVG root beyond the scan limit.
+    return at_limit
+
+
+def _attachment_media_type(meta, connection, attachment_id, session):
+    """Check the authorized file prefix before serving a stored inline type."""
+    name = meta.get("name") or ""
+    if name.lower().endswith(".svg"):
+        return SVG_MEDIA_TYPE
+    media_type = sanitize_media_type(meta.get("media_type"))
+    if media_type == SVG_MEDIA_TYPE or not meta.get("size_bytes"):
+        return media_type
+    head, _, _ = connection.read_attachment_chunk(
+        attachment_id, session=session, length=SVG_HEADER_BYTES,
+    )
+    if _has_svg_header(head):
+        return SVG_MEDIA_TYPE
+    return media_type
 
 
 def content_disposition(name, *, inline):
@@ -677,12 +761,14 @@ class Handler(BaseHTTPRequestHandler):
         connection = self.server.connection(proof.pid)
         try:
             meta = connection.get_attachment(attachment_id, session=session)
+            media_type = _attachment_media_type(
+                meta, connection, attachment_id, session,
+            )
         except ProtocolError as error:
             return self.refuse(404, str(error))
         except NotRunning as error:
             return self.refuse(503, str(error))
         total = int(meta.get("size_bytes") or 0)
-        media_type = sanitize_media_type(meta.get("media_type"))
         inline = is_safe_inline_media(media_type) and not force_download
         range_header = self.headers.get("Range")
         byte_range = parse_byte_range(range_header, total)

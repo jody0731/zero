@@ -26,7 +26,6 @@ MAX_CHUNK_BYTES = 512 * 1024
 MAX_LINK_NAME_BYTES = 180
 MAX_SUFFIX_BYTES = 24
 HASH_CHUNK_BYTES = 64 * 1024
-HEAD_SNIFF_BYTES = 4096
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 UNSAFE_CHAR_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -455,8 +454,8 @@ class AttachmentStore:
                             f"attachment size exceeds soft limit ({limit_mb:g} MiB); "
                             "set allow_over_limit to override"
                         )
-                    if len(head) < HEAD_SNIFF_BYTES:
-                        need = HEAD_SNIFF_BYTES - len(head)
+                    if len(head) < probe_metadata.SVG_HEADER_BYTES:
+                        need = probe_metadata.SVG_HEADER_BYTES - len(head)
                         head.extend(chunk[:need])
                     hasher.update(chunk)
                     dst.write(chunk)
@@ -627,8 +626,8 @@ class AttachmentStore:
             if data_bytes:
                 with open(upload.temp_path, "ab") as stream:
                     stream.write(data_bytes)
-                if len(upload.head) < HEAD_SNIFF_BYTES:
-                    need = HEAD_SNIFF_BYTES - len(upload.head)
+                if len(upload.head) < probe_metadata.SVG_HEADER_BYTES:
+                    need = probe_metadata.SVG_HEADER_BYTES - len(upload.head)
                     upload.head.extend(data_bytes[:need])
                 upload.hasher.update(data_bytes)
                 upload.received_bytes = new_total

@@ -12,7 +12,9 @@ media service), disables transport retries on submit, and distinguishes local
 stop-wait cancellation from upstream billing.
 """
 
+from contextlib import nullcontext
 import hashlib
+import json
 import os
 from pathlib import Path
 import queue
@@ -24,21 +26,24 @@ import time
 
 from components.attachments import metadata as attachment_metadata
 from components.attachments.entries import make_attachment_entry
-from components.attachments.store import AttachmentError, LimitExceeded
+from components.attachments.store import AttachmentError, LimitExceeded, short_id_of
 from components.media import transcribe
 from components.model import SERVICE_CURRENT_SERVER, SERVICE_OFF, servers
 from components.model.apis import discover_utility_services, select_utility_service
 from components.model.apis.images import ImageError
+from components.model.apis.multimodal import IMAGE_MIME_TYPES, normalize_media_type
 from components.model.apis.tts import TTSError
 from components.model.apis.videos import VideoError, normalize_video_duration
 from components.model.servers import ModelServerError
 from core.asking import PARK
 from core.control import Stopped
+from core.llm import safe_error_text
 from core.tools import Result, tool
 
 DEFAULT_IMAGE_TIMEOUT_SECONDS = 180
 DEFAULT_TTS_TIMEOUT_SECONDS = 60
 DEFAULT_VIDEO_TIMEOUT_SECONDS = 600
+PRE_EXECUTION_REJECT_STATUSES = frozenset({400, 401, 403, 404, 422})
 
 
 def available_media_services(capability):
@@ -227,6 +232,21 @@ def _persist_generated_bytes(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _source_image_on_disk(attachment_id, folder):
+    prefix = f"{short_id_of(attachment_id)}-"
+    paths = sorted(Path(folder).glob(f"{prefix}*"))
+    if not paths or not paths[0].is_file():
+        return None
+    path = paths[0]
+    if attachment_metadata.is_svg(path.name):
+        mime = attachment_metadata.SVG_MEDIA_TYPE
+    else:
+        with path.open("rb") as stream:
+            head = stream.read(attachment_metadata.SVG_HEADER_BYTES)
+            mime = attachment_metadata.media_type(path.name, head)
+    return {"path": path, "name": path.name.removeprefix(prefix), "media_type": mime}
+
+
 def _load_source_images(
     attachment_ids, session_attachments=None, attachments_dir=None,
 ):
@@ -235,19 +255,28 @@ def _load_source_images(
         return [], None
     loaded = []
     for aid in attachment_ids:
-        att = transcribe._resolve_audio_attachment(
-            aid, session_attachments, attachments_dir,
-        )
+        att = None
+        if session_attachments is not None:
+            att = session_attachments.resolve(aid)
+        if att is None and attachments_dir is not None:
+            att = _source_image_on_disk(aid, attachments_dir)
         if att is None:
             return None, f"unknown source attachment {aid!r} in this session"
+        fname = att.get("name") or "image.png"
+        mime = (
+            attachment_metadata.SVG_MEDIA_TYPE if attachment_metadata.is_svg(fname)
+            else normalize_media_type(att.get("media_type"))
+        )
+        if mime not in IMAGE_MIME_TYPES:
+            return None, f"source attachment {aid!r} has unsupported image type {mime}"
         src_path = att.get("path")
         if not src_path or not Path(src_path).is_file():
             return None, f"source attachment {aid!r} has no readable file"
-        mime = (att.get("media_type") or "image/png").split(";", 1)[0].strip().lower()
-        if not mime.startswith("image/"):
-            return None, f"source attachment {aid!r} is {mime}, not an image"
-        fname = att.get("name") or "image.png"
-        loaded.append((fname, Path(src_path).read_bytes(), mime))
+        with Path(src_path).open("rb") as stream:
+            head = stream.read(attachment_metadata.SVG_HEADER_BYTES)
+            if attachment_metadata.is_svg(fname, head):
+                return None, f"source attachment {aid!r} has unsupported SVG image type"
+            loaded.append((fname, head + stream.read(), mime))
     return loaded, None
 
 
@@ -543,8 +572,12 @@ def generate_speech(
         check()
         answer = _run_cancellable(invoke, stop, DEFAULT_TTS_TIMEOUT_SECONDS)
     except (TTSError, TimeoutError) as exc:
+        detail = (
+            safe_error_text(str(exc), key=chosen.key) if isinstance(exc, TTSError)
+            else "The speech service did not respond in time."
+        )
         return Result(
-            f"Speech synthesis with {chosen.name} failed. {exc}",
+            f"Speech synthesis with {chosen.name} failed. {detail}",
             fields={"service": chosen.name},
             failed=True,
         )
@@ -603,11 +636,10 @@ def _video_request_fingerprint(
     duration,
     aspect_ratio,
     reference_images=(),
+    *,
+    legacy=False,
 ):
-    """Canonical SHA-256 fingerprint including ordered reference-image digests."""
-    image_digests = [
-        hashlib.sha256(raw).hexdigest() for _, raw, _ in (reference_images or ())
-    ]
+    """Hash the request's fields and ordered reference images."""
     parts = [
         service_name or "",
         model_name or "",
@@ -615,9 +647,19 @@ def _video_request_fingerprint(
         str(resolution or ""),
         str(duration if duration is not None else ""),
         str(aspect_ratio or ""),
-        ",".join(image_digests),
     ]
-    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+    images = [
+        (mime or "image/png", hashlib.sha256(raw).hexdigest())
+        for _, raw, mime in (reference_images or ())
+    ]
+    if legacy:
+        parts.append(",".join(digest for _, digest in images))
+        serialized = "\x1f".join(parts)
+    else:
+        serialized = json.dumps(
+            [*parts, images], separators=(",", ":"), ensure_ascii=False,
+        )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _video_op_key(
@@ -630,6 +672,8 @@ def _video_op_key(
     aspect_ratio,
     idempotency_key=None,
     reference_images=(),
+    *,
+    legacy=False,
 ):
     if isinstance(idempotency_key, str) and idempotency_key.strip():
         parts = [session_id or "standalone", "explicit", idempotency_key.strip()]
@@ -642,6 +686,7 @@ def _video_op_key(
         duration,
         aspect_ratio,
         reference_images,
+        legacy=legacy,
     )
     parts = [session_id or "standalone", "auto", fingerprint]
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
@@ -710,6 +755,7 @@ def generate_video(
     media_ask=None,
     video_op_claim=None,
     video_op_update=None,
+    video_op_lock=None,
     stop=None,
     notes=None,
 ):
@@ -781,14 +827,80 @@ def generate_video(
         reference_images=ref_images,
     )
 
-    # Claim the durable operation BEFORE any HTTP POST so restarts never re-bill.
-    prior = video_op_claim(
-        op_key,
-        service=chosen.name,
-        model=chosen.model or "",
-        prompt_sha256=request_fingerprint,
+    claim_fields = {
+        "service": chosen.name,
+        "model": chosen.model or "",
+        "prompt_sha256": request_fingerprint,
+    }
+    if explicit_key is None:
+        # The old automatic key is checked only for an existing claim.
+        claim_fields["legacy_key"] = _video_op_key(
+            sid, chosen.name, chosen.model, prompt, resolution, encoded_duration,
+            aspect_ratio, reference_images=ref_images, legacy=True,
+        )
+    guard = (
+        video_op_lock(op_key, stop=stop) if callable(video_op_lock) else nullcontext()
     )
-    answer = None
+    with guard:
+        return _run_video_op(
+            op_key, chosen, claim_fields, explicit_key, video_op_claim, video_op_update,
+            prompt=prompt, resolution=resolution, duration=encoded_duration,
+            aspect_ratio=aspect_ratio, reference_images=ref_images,
+            live_media=live_media, session_attachments=session_attachments,
+            limits=limits, allow_over_limit=allow_over_limit, media_ask=media_ask,
+            stop=stop, notes=notes,
+        )
+
+
+def _completed_video(chosen, session_attachments, attachment_id, interaction_id=None):
+    attachment = (
+        session_attachments.resolve(attachment_id)
+        if attachment_id and session_attachments is not None else None
+    )
+    if attachment is None:
+        return Result(
+            "Prior video operation already completed and may have been "
+            "charged, but its stored attachment could not be resolved; "
+            "refusing automatic resubmit to avoid double billing.",
+            fields={
+                "service": chosen.name,
+                "interaction_id": interaction_id or "",
+                "outcome": "completed_attachment_missing",
+            },
+            failed=True,
+        )
+    entry = make_attachment_entry(
+        attachment_id,
+        name=attachment["name"],
+        media_type=attachment["media_type"],
+        size_bytes=attachment["size_bytes"],
+        sha256=attachment["sha256"],
+        path=attachment["path"],
+        delivery="reference",
+        metadata=attachment.get("metadata"),
+    )
+    return Result(
+        f"Returned prior generated video {attachment['name']} "
+        f"(attachment {attachment_id}; no duplicate request sent).",
+        fields={
+            "service": chosen.name,
+            "model": chosen.model or "",
+            "attachment_id": attachment_id,
+            "media_type": attachment["media_type"],
+            "size_bytes": attachment["size_bytes"],
+            "outcome": "reused_completed",
+        },
+        entries=(entry,),
+    )
+
+
+def _run_video_op(
+    op_key, chosen, claim_fields, explicit_key, claim, update, *,
+    prompt, resolution, duration, aspect_ratio, reference_images, live_media,
+    session_attachments, limits, allow_over_limit, media_ask, stop, notes,
+):
+    # Claim the operation before submission so restarts never re-bill.
+    prior = claim(op_key, **claim_fields)
     if prior is not None:
         if not isinstance(prior, dict):
             return Result(
@@ -801,189 +913,102 @@ def generate_video(
                 },
                 failed=True,
             )
-        if explicit_key is not None:
-            prior_fp = prior.get("prompt_sha256")
-            prior_svc = prior.get("service")
-            prior_model = prior.get("model")
-            if (
-                (prior_fp is not None and prior_fp != request_fingerprint)
-                or (prior_svc is not None and prior_svc != chosen.name)
-                or (prior_model is not None and prior_model != (chosen.model or ""))
-            ):
-                return Result(
-                    f"Video idempotency_key {explicit_key!r} was already used "
-                    "for a different request; refusing to reuse it or submit "
-                    "a duplicate paid request.",
-                    fields={
-                        "service": chosen.name,
-                        "outcome": "key_mismatch",
-                    },
-                    failed=True,
-                )
-        prior_status = prior.get("status")
-        if prior_status == "completed":
-            aid = prior.get("attachment_id")
-            att = (
-                session_attachments.resolve(aid)
-                if aid and session_attachments is not None else None
+        if any(
+            prior.get(name) is not None and prior[name] != claim_fields[name]
+            for name in ("service", "model", "prompt_sha256")
+        ):
+            label = (
+                f"Video idempotency_key {explicit_key!r}"
+                if explicit_key is not None else "This video operation"
             )
-            if att is not None:
-                entry = make_attachment_entry(
-                    aid,
-                    name=att["name"],
-                    media_type=att["media_type"],
-                    size_bytes=att["size_bytes"],
-                    sha256=att["sha256"],
-                    path=att["path"],
-                    delivery="reference",
-                    metadata=att.get("metadata"),
-                )
-                return Result(
-                    f"Returned prior generated video {att['name']} "
-                    f"(attachment {aid}; no duplicate request sent).",
-                    fields={
-                        "service": chosen.name,
-                        "model": chosen.model or "",
-                        "attachment_id": aid,
-                        "media_type": att["media_type"],
-                        "size_bytes": att["size_bytes"],
-                        "outcome": "reused_completed",
-                    },
-                    entries=(entry,),
-                )
             return Result(
-                "Prior video operation already completed and may have been "
-                "charged, but its stored attachment could not be resolved; "
-                "refusing automatic resubmit to avoid double billing.",
-                fields={
-                    "service": chosen.name,
-                    "interaction_id": prior.get("interaction_id") or "",
-                    "uri": prior.get("uri") or "",
-                    "outcome": "completed_attachment_missing",
-                },
+                f"{label} was already used for a different request; refusing "
+                "to reuse it or submit a duplicate paid request.",
+                fields={"service": chosen.name, "outcome": "key_mismatch"},
                 failed=True,
             )
-        if prior_status == "submitted":
-            prior_id = prior.get("interaction_id")
-            prior_uri = prior.get("uri")
-            if not (prior_id or prior_uri):
-                return Result(
-                    "Prior video operation was already submitted without a "
-                    "resumable handle; outcome unknown, possibly charged. "
-                    "Refusing automatic resubmit to avoid double billing.",
-                    fields={
-                        "service": chosen.name,
-                        "outcome": "unknown_possibly_charged",
-                    },
-                    failed=True,
-                )
-            try:
-                answer = chosen.api.resume(
-                    chosen,
-                    interaction_id=prior_id,
-                    uri=prior_uri,
-                    poll_interval=getattr(live_media, "video_poll_interval", 2.0),
-                    seconds=DEFAULT_VIDEO_TIMEOUT_SECONDS,
-                    transport=live_media.transport,
-                    stop=stop,
-                    on_submitted=lambda *, interaction_id=None, uri=None: (
-                        video_op_update(
-                            op_key,
-                            status="submitted",
-                            interaction_id=interaction_id,
-                            uri=uri,
-                        )
-                        if callable(video_op_update) else None
-                    ),
-                )
-            except Stopped as exc:
-                detail = (
-                    "Stopped waiting locally for video generation; the upstream "
-                    "request was already submitted and may still incur charges."
-                )
-                exc.output_detail = f"\n{detail}"
-                if notes is not None:
-                    notes["video_stop_note"] = detail
-                raise
-            except VideoError as exc:
-                handle_bits = [
-                    b for b in (
-                        f"interaction_id={prior_id}" if prior_id else "",
-                        f"uri={prior_uri}" if prior_uri else "",
-                    ) if b
-                ]
-                return Result(
-                    f"Prior video operation ({', '.join(handle_bits)}) could not "
-                    f"be retrieved without resubmitting: {exc}",
-                    fields={
-                        "service": chosen.name,
-                        "interaction_id": prior_id or "",
-                        "uri": prior_uri or "",
-                        "outcome": "prior_handle_failed",
-                    },
-                    failed=True,
-                )
-        else:
-            return Result(
-                "Video generation operation was already claimed before submit; "
-                "outcome unknown, possibly charged. Refusing automatic resubmit "
-                "to avoid double billing.",
-                fields={
-                    "service": chosen.name,
-                    "outcome": "unknown_possibly_charged",
-                },
-                failed=True,
+        if prior.get("status") == "completed":
+            return _completed_video(
+                chosen, session_attachments, prior.get("attachment_id"),
+                prior.get("interaction_id"),
             )
 
-    submitted_upstream = False
+    interaction_id = prior.get("interaction_id") if prior else None
+    uri = prior.get("uri") if prior else None
+    resuming = prior is not None and prior.get("status") == "submitted"
+    if prior is not None and not (resuming and (interaction_id or uri)):
+        return Result(
+            "Video generation operation was already claimed before submit; "
+            "outcome unknown, possibly charged. Refusing automatic resubmit "
+            "to avoid double billing.",
+            fields={"service": chosen.name, "outcome": "unknown_possibly_charged"},
+            failed=True,
+        )
+
+    submitted_upstream = resuming
 
     def on_submitted(*, interaction_id=None, uri=None):
         nonlocal submitted_upstream
         submitted_upstream = True
-        if callable(video_op_update):
-            video_op_update(
-                op_key,
-                status="submitted",
-                interaction_id=interaction_id,
-                uri=uri,
-            )
+        if callable(update):
+            update(op_key, status="submitted", interaction_id=interaction_id, uri=uri)
 
-    if prior is None:
-        try:
-            answer = chosen.api.generate(
-                chosen,
-                prompt,
-                resolution=resolution,
-                duration=encoded_duration,
-                aspect_ratio=aspect_ratio,
-                reference_images=ref_images,
-                poll_interval=getattr(live_media, "video_poll_interval", 2.0),
-                seconds=DEFAULT_VIDEO_TIMEOUT_SECONDS,
-                transport=live_media.transport,
-                stop=stop,
-                on_submitted=on_submitted,
+    call_options = {
+        "poll_interval": getattr(live_media, "video_poll_interval", 2.0),
+        "seconds": DEFAULT_VIDEO_TIMEOUT_SECONDS,
+        "transport": live_media.transport,
+        "stop": stop,
+        "on_submitted": on_submitted,
+    }
+    try:
+        if resuming:
+            answer = chosen.api.resume(
+                chosen, interaction_id=interaction_id, uri=uri, **call_options,
             )
-        except Stopped as exc:
-            if submitted_upstream:
-                detail = (
-                    "Stopped waiting locally for video generation; the upstream "
-                    "request was already submitted and may still incur charges."
-                )
-            else:
-                detail = (
-                    "Stopped waiting locally during video submission; upstream "
-                    "outcome is unknown and may incur charges."
-                )
-            exc.output_detail = f"\n{detail}"
-            if notes is not None:
-                notes["video_stop_note"] = detail
-            raise
-        except VideoError as exc:
+        else:
+            answer = chosen.api.generate(
+                chosen, prompt, resolution=resolution, duration=duration,
+                aspect_ratio=aspect_ratio, reference_images=reference_images,
+                **call_options,
+            )
+    except Stopped as exc:
+        if submitted_upstream:
+            detail = (
+                "Stopped waiting locally for video generation; the upstream "
+                "request was already submitted and may still incur charges."
+            )
+        else:
+            detail = (
+                "Stopped waiting locally during video submission; upstream "
+                "outcome is unknown and may incur charges."
+            )
+        exc.output_detail = f"\n{detail}"
+        if notes is not None:
+            notes["video_stop_note"] = detail
+        raise
+    except VideoError as exc:
+        if resuming:
             return Result(
-                f"Video generation with {chosen.name} failed. {exc}",
-                fields={"service": chosen.name, "outcome": "failed"},
+                f"Prior video operation could not be retrieved without resubmitting: "
+                f"{exc}",
+                fields={
+                    "service": chosen.name,
+                    "interaction_id": interaction_id or "",
+                    "outcome": "prior_handle_failed",
+                },
                 failed=True,
             )
+        if (
+            not submitted_upstream
+            and exc.status_code in PRE_EXECUTION_REJECT_STATUSES
+            and callable(update)
+        ):
+            update(op_key, status="failed")
+        return Result(
+            f"Video generation with {chosen.name} failed. {exc}",
+            fields={"service": chosen.name, "outcome": "failed"},
+            failed=True,
+        )
 
     try:
         meta, entry = _persist_generated_bytes(
@@ -999,21 +1024,21 @@ def generate_video(
         return Result(
             f"Generated video could not be stored in session attachments: {exc}.",
             fields={
-                "service": chosen.name,
-                "interaction_id": answer.interaction_id or "",
-                "uri": answer.uri or "",
+                "service": chosen.name, "interaction_id": answer.interaction_id or "",
             },
             failed=True,
         )
 
-    if callable(video_op_update):
-        video_op_update(
+    if callable(update):
+        attachment_id = update(
             op_key,
             status="completed",
             interaction_id=answer.interaction_id,
             uri=answer.uri,
             attachment_id=meta["attachment_id"],
         )
+        if attachment_id and attachment_id != meta["attachment_id"]:
+            return _completed_video(chosen, session_attachments, attachment_id)
 
     if notes is not None:
         notes["media"] = {

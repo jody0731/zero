@@ -1,6 +1,6 @@
 """Media component timeline entry declarations (non-model-visible caches)."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from uuid import uuid4
 
 from core.entries import Entry, EntrySpec
@@ -59,7 +59,7 @@ def make_speech_cache_entry(
         SPEECH_CACHE_TYPE,
         id=uuid4().hex,
         origin="system",
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now().astimezone().isoformat(timespec="seconds"),
         fields=fields,
         entries=children,
     )

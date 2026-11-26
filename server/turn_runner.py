@@ -684,50 +684,78 @@ class TurnRunner:
             finally:
                 lock.release()
 
-    def append_side_record(self, sid, entry, *, timeout=10.0):
-        """Append a non-turn side entry through the session's single writer.
+    def prepare_side_writer(self, sid, *, timeout=10.0):
+        """Check for a writable log and finish any idle upgrade before billing."""
+        self._side_record(sid, None, timeout)
 
-        Safe whether the session is idle, waiting on an ask, queued, or
-        actively running a turn: when a turn runner already holds the session
-        lock and live harness log, appends through that same log under
-        `state.lock`; otherwise acquires the session lock directly.
-        """
+    def append_side_record(self, sid, entry, *, timeout=10.0):
+        """Append a non-turn entry through the session's single writer."""
+        return self._side_record(sid, entry, timeout)
+
+    def _side_record(self, sid, entry, timeout):
         runtime = self.runtime
         if runtime.store.session(sid) is None:
             raise Refused(f"no session {sid!r}")
         state = runtime.state(sid)
         deadline = time.monotonic() + timeout
         while True:
-            with state.lock:
-                if runtime.store.session(sid) is None:
-                    raise Refused(f"no session {sid!r}")
-                if state.runner is not None:
-                    harness = state.harness
-                    if (
-                        harness is not None
-                        and harness.log.lock is not None
-                        and harness.log.lock.held
-                    ):
-                        return harness.log.append(entry)
-                else:
-                    lock = runtime.session_lock(sid)
-                    try:
+            try:
+                with state.lock:
+                    if runtime.store.session(sid) is None:
+                        raise Refused(f"no session {sid!r}")
+                    if state.runner is None:
+                        lock = runtime.session_lock(sid)
                         lock.acquire()
-                    except Busy as error:
-                        raise Refused(str(error)) from None
-                    try:
-                        log = runtime.read_log(sid)
-                        previous_lock = log.lock
-                        log.lock = lock
                         try:
-                            return log.append(entry)
+                            log = self._prepare_idle_side_log(sid, state, lock)
+                            return self._use_side_log(log, entry)
                         finally:
-                            log.lock = previous_lock
-                    finally:
-                        lock.release()
+                            lock.release()
+                    harness = state.harness
+                    if harness is not None:
+                        log = harness.log
+                        if (
+                            log.lock is not None and log.lock.held
+                            and upgrade.file_format(log.path) == timeline.LOG_FORMAT
+                        ):
+                            return self._use_side_log(log, entry)
+            except (Busy, timeline.NewerLog) as error:
+                raise Refused(str(error)) from None
             if time.monotonic() >= deadline:
                 raise Refused("wait limit exceeded for session writer")
             time.sleep(0.02)
+
+    @staticmethod
+    def _use_side_log(log, entry):
+        if entry is not None:
+            return log.append(entry)
+        try:
+            with log.path.open("ab"):
+                return None
+        except OSError:
+            raise Refused("The session log could not be opened for append.") from None
+
+    def _prepare_idle_side_log(self, sid, state, lock):
+        runtime = self.runtime
+        log = runtime.log(sid, lock)
+        found = upgrade.file_format(log.path)
+        if found < timeline.LOG_FORMAT:
+            if found == 1 and not log.path.exists():
+                raise Refused("this session has no log to write")
+            try:
+                if found == 1:
+                    runtime.upgrade_session(sid, log)
+                else:
+                    upgrade.upgrade_file(log, None)
+            except timeline.NewerLog:
+                raise
+            except Exception as error:
+                raise Refused(
+                    f"Could not upgrade this session's log: {error}"
+                ) from None
+            finally:
+                state.harness = None
+        return log
 
     def run_on_session(self, sid, name, fn, *, if_busy=None, precheck=None):
         """Run `fn(session)` on a background thread held as `sid`'s runner.
@@ -771,7 +799,8 @@ class TurnRunner:
             try:
                 fn(runtime.harness(sid, runtime.log(sid, lock)))
             finally:
-                lock.release()
+                with state.lock:
+                    lock.release()
         except Exception:
             traceback.print_exc()
         finally:

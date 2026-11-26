@@ -18,12 +18,15 @@ next reply (`reply_room_tokens`), and a compaction's instructions and handoff
 (`handoff_room_tokens`). A result ZERO didn't size gets a share
 (`result_share_percent`) of the room left below the line minus the
 headroom, or, near the line, of the room a compaction leaves, whichever is
-more; past it, the whole goes to a file (hooks.py). Each is read from a
-session's limits as they stand (settings.LiveSettings).
+more, up to `max_result_tokens` when it is positive; past it, the whole
+goes to a file (hooks.py). Each is read from a session's limits as they
+stand (settings.LiveSettings).
 """
 
 import json
 import math
+import os
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -36,15 +39,101 @@ PACE_STEPS = 20
 # A step with less between its two calls tells too little of the bytes a
 # token: a message's own wrapping counts for more there
 LEAST_STEP_BYTES = 1_000
-_INLINE_MEDIA_PREFIXES = ("image/", "audio/", "video/")
-_INLINE_MEDIA_EXACT = frozenset({"application/pdf"})
+_INLINE_IMAGES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
+SVG_HEADER_BYTES = 65_536
+
+
+# Keep the prolog check aligned with attachment metadata at ingest.
+def _doctype_end(text, start):
+    brackets = 0
+    while start < len(text):
+        char = text[start]
+        if char in "\"'":
+            marker, start = char, start + 1
+        elif text.startswith("<!--", start):
+            marker, start = "-->", start + 4
+        elif text.startswith("<?", start):
+            marker, start = "?>", start + 2
+        else:
+            if char == "[":
+                brackets += 1
+            elif char == "]" and brackets:
+                brackets -= 1
+            elif char == ">" and brackets == 0:
+                return start + 1
+            start += 1
+            continue
+        end = text.find(marker, start)
+        if end == -1:
+            break
+        start = end + len(marker)
+    return len(text)
+
+
+def _has_svg_header(head):
+    at_limit = len(head) >= SVG_HEADER_BYTES
+    head = head[:SVG_HEADER_BYTES]
+    encoding = "utf-16" if head.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+    text = head.decode(encoding, "replace")
+    index = 0
+    while index < len(text):
+        if text[index].isspace():
+            index += 1
+            continue
+        if text.startswith("<?", index):
+            marker, start = "?>", index + 2
+        elif text.startswith("<!--", index):
+            marker, start = "-->", index + 4
+        elif text[index:index + 9].upper() == "<!DOCTYPE":
+            index = _doctype_end(text, index + 9)
+            continue
+        else:
+            if text[index] != "<":
+                return False
+            end = index + 1
+            while end < len(text) and not (
+                text[end].isspace() or text[end] in "/>"
+            ):
+                end += 1
+            if end == len(text):
+                break
+            prefix, colon, name = text[index + 1:end].rpartition(":")
+            return name.lower() == "svg" and (
+                not colon or (bool(prefix) and ":" not in prefix)
+            )
+        end = text.find(marker, start)
+        if end == -1:
+            break
+        index = end + len(marker)
+    # An unresolved prefix may hide an SVG root beyond the scan limit.
+    return at_limit
 
 
 def _is_media_mime(media_type):
     if not isinstance(media_type, str):
         return False
     norm = media_type.split(";", 1)[0].strip().lower()
-    return norm in _INLINE_MEDIA_EXACT or norm.startswith(_INLINE_MEDIA_PREFIXES)
+    return _modality_for_mime(norm) is not None
+
+
+def _is_svg_attachment(node):
+    name = node.get("name")
+    if isinstance(name, str) and name.lower().endswith(".svg"):
+        return True
+    path = node.get("path")
+    if not isinstance(path, str) or not path:
+        return False
+    # Old entries can carry a raster hint for XML. Inspect only a regular file.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return False
+            head = stream.read(SVG_HEADER_BYTES)
+    except (OSError, ValueError):
+        return False
+    return _has_svg_header(head)
 
 
 def has_attachments(conversation):
@@ -65,7 +154,8 @@ def entry_has_inline_media(entry):
     for node, _, _, depth in entries.walk(entry, include_private=False):
         if (depth and entries.has(node, "attachment")
                 and node.get("delivery") != "reference"
-                and _is_media_mime(node.get("media_type"))):
+                and _is_media_mime(node.get("media_type"))
+                and not _is_svg_attachment(node)):
             return True
     return False
 
@@ -93,7 +183,7 @@ def _prior_media_tokens(entry):
 
 
 def _modality_for_mime(mime):
-    if mime.startswith("image/"):
+    if mime in _INLINE_IMAGES:
         return "image"
     if mime.startswith("audio/"):
         return "audio"
@@ -130,7 +220,7 @@ def attachment_tokens(node, count=None, *, capabilities=None, media_cap=None):
         if isinstance(raw_mime, str) else ""
     )
     modality = _modality_for_mime(mime)
-    if modality is None:
+    if modality is None or _is_svg_attachment(node):
         return ref()
     if capabilities is not None:
         inp = getattr(capabilities, "input", None)
@@ -481,10 +571,27 @@ def room_left(at, size, instructions, limits, **model_limits):
     return input_room(at, instructions, limits, **model_limits) - size.tokens
 
 
-def share(room, limits):
-    """What a result ZERO didn't size may take of the room left:
-    result_share_percent of it."""
+def percent_share(room, limits):
+    """The percentage of remaining room available to a source."""
     return max(room, 0) * limits["result_share_percent"] // 100
+
+
+RESULT_SHARE_SETTINGS = ("result_share_percent", "max_result_tokens")
+HEADROOM_SETTINGS = ("reply_room_tokens", "handoff_room_tokens")
+
+
+def result_limits(limits, keys=RESULT_SHARE_SETTINGS):
+    """Read related limits together when settings are live."""
+    snapshot = getattr(limits, "snapshot", None)
+    return snapshot(keys) if snapshot is not None else limits
+
+
+def share(room, limits):
+    """The share of remaining room for one unsized result, with its fixed cap."""
+    limits = result_limits(limits)
+    percent = percent_share(room, limits)
+    maximum = limits["max_result_tokens"]
+    return min(percent, maximum) if maximum > 0 else percent
 
 
 def fresh_room(at, fixed, instructions, limits, **model_limits):

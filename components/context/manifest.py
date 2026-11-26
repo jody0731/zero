@@ -32,10 +32,9 @@ def prepare_session(build: SessionBuild):
         build.state.setdefault("sandbox_shown", []).extend(shown)
 
     def most_chars():
-        # ZERO's own files share what a result ZERO didn't size may take of a
-        # fresh context, under the limits as they stand.
+        # ZERO's own files share a percentage of a fresh context.
         at = room.line(build.limits, build.server.context_window)
-        return room.share(at, build.limits) * room.BYTES_PER_TOKEN
+        return room.percent_share(at, build.limits) * room.BYTES_PER_TOKEN
 
     def line_chars():
         return (

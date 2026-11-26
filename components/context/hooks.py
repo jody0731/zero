@@ -37,7 +37,7 @@ TOO_LONG = re.compile(
 SAVED = (
     "[This result is about {cost:,} tokens, more than its share of this "
     "session's context ({share}). The whole of it is in {path} ({lines:,} "
-    "lines){reading}.{preview}]"
+    "lines){reading}.{compaction}{preview}]"
 )
 # How to read a saved result, by the tool that reads a file in parts and its
 # two arguments (tools carrying "reads_in_parts" in their "context" metadata)
@@ -47,10 +47,13 @@ SHARE = "{share:,} tokens: {percent}% of the {left:,} left before it is compacte
 # Near the line: a share of the room a compaction leaves, never less (it
 # comes before the next step there, and keeps that step whole)
 SHARE_AFTER = "{share:,} tokens: {percent}% of the {room:,} left after a compaction"
+SHARE_LIMIT = "{share:,} tokens: the limit for one result"
 COMES_NEXT = ", which comes before the next step"
+COMPACTION_NEXT = f" The context needs a compaction{COMES_NEXT}."
 NO_ROOM = "none: the context is compacted before the next step"
 PREVIEW = " Its start and end follow."
 BETWEEN = "\n[… {count:,} lines not shown …]\n"
+BETWEEN_TEXT = "\n[… text not shown …]\n"
 # A sized result bigger than a fresh context can hold: the one wall left
 TOO_BIG = (
     "Not given whole: this result is about {cost:,} tokens, more than a fresh "
@@ -59,6 +62,7 @@ TOO_BIG = (
 PARTS = " It can be read in parts with {start} and {count}."
 # Shorter than this, a preview isn't worth its room
 LEAST_PREVIEW_TOKENS = 40
+MAX_PREVIEW_TOKENS = 1_000
 
 
 def bytes_a_token(session, *, records=None):
@@ -130,19 +134,33 @@ def too_long(error):
 def preview(text, tokens, bytes_a_token=room.BYTES_PER_TOKEN):
     """`text`'s start and end in about `tokens` tokens at `bytes_a_token`,
     cut at lines where it can be; "" when there is no room for one."""
-    if tokens < LEAST_PREVIEW_TOKENS:
+    if tokens < LEAST_PREVIEW_TOKENS or not text:
         return ""
     data = text.encode("utf-8")
-    side = int(tokens * bytes_a_token) // 2
+    budget = int(tokens * bytes_a_token)
+    if len(data) + 2 <= budget:
+        return f"\n\n{text}"
+    side = min(budget // 2, len(data) // 2)
+    line_count = results.lines_of(text)
+    # Reserve the separator as well as the space between the notice and preview.
+    separator_bytes = len(BETWEEN.format(count=line_count).encode("utf-8"))
+    side = min(side, (budget - separator_bytes - 2) // 2)
+    if side <= 0:
+        return ""
     head = data[:side].decode("utf-8", errors="ignore")
     tail = data[-side:].decode("utf-8", errors="ignore")
-    if "\n" in head:
-        head = head[:head.rindex("\n")]
-    if "\n" in tail:
-        tail = tail[tail.index("\n") + 1:]
+    head_end = head.rfind("\n")
+    tail_start = tail.find("\n")
+    if head_end > 0:
+        head = head[:head_end]
+    if 0 <= tail_start < len(tail) - 1:
+        tail = tail[tail_start + 1:]
+    if not head and not tail:
+        return ""
     shown = results.lines_of(head) + results.lines_of(tail)
-    hidden = max(results.lines_of(text) - shown, 0)
-    return f"\n\n{head}{BETWEEN.format(count=hidden)}{tail}"
+    hidden = line_count - shown
+    separator = BETWEEN.format(count=hidden) if hidden > 0 else BETWEEN_TEXT
+    return f"\n\n{head}{separator}{tail}"
 
 
 def _part_reader(context):
@@ -234,7 +252,7 @@ class Context(Hook):
                                  session.tool_schemas(),
                                  counter(session, records=records))
 
-    def _room_after(self, session, at):
+    def _room_after(self, session, at, limits):
         """The room a handoff leaves below the line `at`: a fresh context's,
         less the steps it keeps (a share of the line, never less than the
         newest step, which holds the result being fitted)."""
@@ -248,7 +266,7 @@ class Context(Hook):
                    and entry.id in by_id)
         kept = max(int(at * compaction.TAIL_SHARE), step)
         return room.fresh_room(at, self._fixed(session), INSTRUCTION_TOKENS,
-                               self.limits, **room.model_limits(session.model)) - kept
+                               limits, **room.model_limits(session.model)) - kept
 
     def turn_start(self, turn):
         self._failed = False
@@ -496,8 +514,8 @@ class Context(Hook):
         session = call.turn.session
         at = self._line(session)
         count = counter(session)
-        cost = count(result)
         if call.notes.get("sized"):
+            cost = count(result)
             most = room.fresh_room(at, self._fixed(session), INSTRUCTION_TOKENS,
                                    self.limits, **room.model_limits(session.model))
             if cost > most:
@@ -507,38 +525,45 @@ class Context(Hook):
                 return TOO_BIG.format(cost=cost, most=most, parts=parts)
             return None
         name = f"{call.name}-{call.id}.txt"
-        return self._fit(session, at, result, cost, name, call.notes.get("whole_at"),
+        return self._fit(session, at, result, count, name, call.notes.get("whole_at"),
                          call)
 
     def notice(self, text, session):
         """A notice (a job's end, with its output) fitted as a result is."""
         name = f"notice-{time.strftime('%Y%m%d-%H%M%S')}-{time.monotonic_ns()}.txt"
-        return self._fit(session, self._line(session), text,
-                         counter(session)(text), name)
+        return self._fit(session, self._line(session), text, counter(session), name)
 
-    def _fit(self, session, at, text, cost, name, whole_at=None, call=None):
+    def _fit(self, session, at, text, count, name, whole_at=None, call=None):
         """`text` as the context takes it: None when it fits its share, the
         share of the room left or, near the line, of the room a compaction
         leaves, whichever is more (the share shrank to none before: 6.3);
         past it, saved whole and ZERO told so, the file's path set on
         `call` (the tool call's record) where one is given."""
+        cost = count(text)
+        limits = room.result_limits(
+            self.limits, (*room.RESULT_SHARE_SETTINGS, *room.HEADROOM_SETTINGS),
+        )
         left = room.room_left(at, self._size(session), INSTRUCTION_TOKENS,
-                              self.limits, **room.model_limits(session.model))
-        after = self._room_after(session, at)
-        allowed = room.share(max(left, after), self.limits)
+                              limits, **room.model_limits(session.model))
+        after = self._room_after(session, at, limits)
+        available = max(left, after)
+        allowed = room.share(available, limits)
         if cost <= allowed:
             return None
         path = whole_at or results.save(self.folder(), name, text)
         if call is not None:
             # As data beside the text, for an app that links it
             call.saved_path = path
-        shown = preview(text, allowed, bytes_a_token(session))
-        percent = self.limits["result_share_percent"]
-        if after > left and allowed > 0:
+        shown = (
+            preview(text, min(allowed, MAX_PREVIEW_TOKENS), bytes_a_token(session))
+            if allowed else ""
+        )
+        percent = limits["result_share_percent"]
+        fixed_cap = allowed < room.percent_share(available, limits)
+        if fixed_cap:
+            told = SHARE_LIMIT.format(share=allowed)
+        elif after > left and after > 0:
             told = SHARE_AFTER.format(share=allowed, percent=percent, room=after)
-            # What it shows of the result fills the room left, so the
-            # context passes its line
-            told += COMES_NEXT if left < allowed else ""
         elif left > 0:
             told = SHARE.format(share=allowed, percent=percent, left=left)
         else:
@@ -546,7 +571,17 @@ class Context(Hook):
         reader = _part_reader(session.tool_context)
         reading = READING.format(tool=reader[0], start=reader[1],
                                  count=reader[2]) if reader else ""
-        return SAVED.format(
-            cost=cost, share=told, path=path, lines=results.lines_of(text),
-            reading=reading, preview=PREVIEW if shown else "",
-        ) + shown
+        lines = results.lines_of(text)
+
+        def saved(share, compaction=""):
+            return SAVED.format(
+                cost=cost, share=share, path=path, lines=lines, reading=reading,
+                compaction=compaction, preview=PREVIEW if shown else "",
+            ) + shown
+
+        notice = saved(told)
+        if told == NO_ROOM or count(notice) <= left:
+            return notice
+        if fixed_cap:
+            return saved(told, COMPACTION_NEXT)
+        return saved(told + COMES_NEXT)

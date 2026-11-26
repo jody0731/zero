@@ -2,9 +2,10 @@
 
 import base64
 from dataclasses import dataclass
-from http import HTTPStatus
 
 import httpx2
+
+from components.model.apis.http_errors import response_error_text
 
 
 class ImageError(Exception):
@@ -30,14 +31,10 @@ class ImageResponse:
     billed: bool | None = None
 
 
-def _http_error(status):
-    if 300 <= status < 400:
-        return ImageError(f"HTTP {status}. The image service redirected the request.")
-    try:
-        reason = HTTPStatus(status).phrase
-    except ValueError:
-        reason = "unexpected status"
-    return ImageError(f"HTTP {status} ({reason}).")
+def _http_error(reply, key):
+    return ImageError(response_error_text(
+        reply, "The image service redirected the request.", key=key,
+    ))
 
 
 def _ext_for_mime(media_type):
@@ -117,7 +114,7 @@ class OpenAIImages:
                         body["quality"] = str(quality)
                     reply = client.post(url, json=body, headers=headers)
                 if not reply.is_success:
-                    raise _http_error(reply.status_code)
+                    raise _http_error(reply, service.key)
                 payload = reply.json()
         except ImageError:
             raise
@@ -213,7 +210,7 @@ class GoogleImages:
                     check()
                 reply = client.post(url, json=body, headers=headers)
                 if not reply.is_success:
-                    raise _http_error(reply.status_code)
+                    raise _http_error(reply, service.key)
                 payload = reply.json()
         except ImageError:
             raise

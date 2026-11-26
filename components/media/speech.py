@@ -173,6 +173,7 @@ class SpeechManager:
         tts_service,
         session_attachments,
         read_records,
+        prepare_cache_writer,
         append_cache_entry,
         service=None,
         voice=None,
@@ -270,6 +271,7 @@ class SpeechManager:
                 future.set_result(result)
                 return result
 
+            prepare_cache_writer()
             try:
                 answer = chosen.api.synthesize(
                     chosen,

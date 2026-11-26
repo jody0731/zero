@@ -1,6 +1,7 @@
 """Server service for live dictation, deduplicated speech, and durable video ops."""
 
 import base64
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import queue
@@ -20,6 +21,9 @@ from components.model.apis.stt import LocalWhisper, STTError
 from components.model.apis.stt_live import MAX_SAMPLE_RATE, MIN_SAMPLE_RATE
 from components.model.servers import ModelServerError
 from components.sandbox.sandbox import harness_free_env
+from core import timeline
+from core.control import Stopped
+from core.llm import redact_key
 from server.services import Principal, Refused, Service
 
 MEDIA_SCHEMA = """
@@ -79,6 +83,8 @@ class MediaService(Service):
         )
         self.transport = transport
         self._sessions = weakref.WeakValueDictionary()
+        self._video_operations_lock = threading.Lock()
+        self._video_operations = {}
 
     def begin(self):
         self.dictation.begin()
@@ -142,17 +148,55 @@ class MediaService(Service):
         )
         return model, setting_val
 
-    def _claim_video_op(self, sid, op_key, *, service, model, prompt_sha256):
-        now = time.time()
-        prior = {}
+    @contextmanager
+    def _hold_video_op(self, op_key, *, stop=None):
+        """Serialize video retrieval and publication for one operation."""
+        while True:
+            if stop is not None and stop.is_set():
+                raise Stopped()
+            with self._video_operations_lock:
+                finished = self._video_operations.get(op_key)
+                if finished is None:
+                    self._video_operations[op_key] = threading.Event()
+                    break
+            finished.wait(None if stop is None else 0.05)
+        try:
+            yield
+        finally:
+            with self._video_operations_lock:
+                self._video_operations.pop(op_key).set()
 
+    def _claim_video_op(
+        self, sid, op_key, *, service, model, prompt_sha256, legacy_key=None,
+    ):
         def txn(db):
+            now = time.time()
             row = db.execute(
                 "SELECT * FROM media_video_ops WHERE op_key = ?", (op_key,),
             ).fetchone()
             if row is not None:
-                prior["row"] = dict(row)
+                if (
+                    row["status"] != "failed"
+                    or (row["service"], row["model"], row["prompt_sha256"])
+                    != (service, model, prompt_sha256)
+                    or any(row[name] is not None for name in (
+                        "interaction_id", "uri", "attachment_id",
+                    ))
+                ):
+                    return dict(row)
+                db.execute(
+                    "UPDATE media_video_ops SET status = 'claimed', "
+                    "interaction_id = NULL, uri = NULL, attachment_id = NULL, "
+                    "updated_at = ? WHERE op_key = ?",
+                    (now, op_key),
+                )
                 return
+            if legacy_key is not None:
+                legacy = db.execute(
+                    "SELECT * FROM media_video_ops WHERE op_key = ?", (legacy_key,),
+                ).fetchone()
+                if legacy is not None:
+                    return dict(legacy)
             db.execute(
                 "INSERT INTO media_video_ops "
                 "(op_key, session, service, model, prompt_sha256, status, "
@@ -161,8 +205,7 @@ class MediaService(Service):
                 (op_key, sid, service, model, prompt_sha256, now, now),
             )
 
-        self.runtime.store.write(txn)
-        return prior.get("row")
+        return self.runtime.store.write(txn)
 
     def _update_video_op(
         self,
@@ -176,16 +219,32 @@ class MediaService(Service):
         now = time.time()
 
         def txn(db):
-            db.execute(
+            if status == "failed":
+                db.execute(
+                    "UPDATE media_video_ops SET status = 'failed', updated_at = ? "
+                    "WHERE op_key = ? AND status = 'claimed' "
+                    "AND interaction_id IS NULL AND uri IS NULL",
+                    (now, op_key),
+                )
+                return
+            updated = db.execute(
                 "UPDATE media_video_ops SET status = ?, "
                 "interaction_id = COALESCE(?, interaction_id), "
                 "uri = COALESCE(?, uri), "
                 "attachment_id = COALESCE(?, attachment_id), "
-                "updated_at = ? WHERE op_key = ?",
+                "updated_at = ? WHERE op_key = ? "
+                "AND status != 'completed' RETURNING attachment_id",
                 (status, interaction_id, uri, attachment_id, now, op_key),
-            )
+            ).fetchone()
+            if status == "completed":
+                if updated is None:
+                    updated = db.execute(
+                        "SELECT attachment_id FROM media_video_ops "
+                        "WHERE op_key = ? AND status = 'completed'", (op_key,),
+                    ).fetchone()
+                return updated["attachment_id"] if updated is not None else None
 
-        self.runtime.store.write(txn)
+        return self.runtime.store.write(txn)
 
     def session_built(self, sid, session):
         """Inject durable video op claim/update callbacks without importing server."""
@@ -194,6 +253,24 @@ class MediaService(Service):
             lambda op_key, **kw: self._claim_video_op(sid, op_key, **kw)
         )
         session.tool_context["video_op_update"] = self._update_video_op
+        session.tool_context["video_op_lock"] = self._hold_video_op
+
+    def _speak_reply(self, sid, reply_id, text, model, tts_setting, **options):
+        return self.speech.synthesize_reply(
+            sid=sid,
+            reply_entry_id=reply_id,
+            text=text,
+            model=model,
+            tts_service=tts_setting,
+            session_attachments=self._session_attachments(sid),
+            read_records=lambda: self.runtime.read_branch(sid),
+            prepare_cache_writer=lambda: self.runtime.prepare_side_writer(sid),
+            append_cache_entry=lambda entry: self.runtime.append_side_record(
+                sid, entry,
+            ),
+            limits=self.runtime.config(),
+            **options,
+        )
 
     def turn_ended(self, sid, outcome):
         """Trigger deduplicated Auto-speak when an answered turn has auto_speak on."""
@@ -225,21 +302,8 @@ class MediaService(Service):
 
         def worker():
             try:
-                sess_att = self._session_attachments(sid)
-                self.speech.synthesize_reply(
-                    sid=sid,
-                    reply_entry_id=reply_id,
-                    text=text,
-                    model=model,
-                    tts_service=tts_setting,
-                    session_attachments=sess_att,
-                    read_records=lambda: self.runtime.read_branch(sid),
-                    append_cache_entry=lambda entry: self.runtime.append_side_record(
-                        sid, entry,
-                    ),
-                    auto_speak=True,
-                    limits=self.runtime.config(),
-                    allow_over_limit=False,
+                self._speak_reply(
+                    sid, reply_id, text, model, tts_setting, auto_speak=True,
                 )
             except Exception:
                 pass
@@ -398,41 +462,27 @@ class MediaService(Service):
 
         if sid is not None and model is not None:
             raise Refused("draft model is only accepted when session is omitted")
-        eff_model, eff_tts = self._session_model_and_setting(
-            sid, "tts_service", override_model=model,
-        )
-        if sid is not None:
-            records = self.runtime.read_branch(sid)
-            found_id, found_text = extract_reply_text(records, reply_entry_id)
-            use_text = text if (text and text.strip()) else found_text
-            use_id = reply_entry_id or found_id
-            if not use_id or not use_text:
-                raise Refused("no assistant reply text found to speak")
-            sess_att = self._session_attachments(sid)
-            try:
-                result = self.speech.synthesize_reply(
-                    sid=sid,
-                    reply_entry_id=use_id,
-                    text=use_text,
-                    model=eff_model,
-                    tts_service=eff_tts,
-                    session_attachments=sess_att,
-                    read_records=lambda: self.runtime.read_branch(sid),
-                    append_cache_entry=lambda entry: self.runtime.append_side_record(
-                        sid, entry,
-                    ),
+        try:
+            eff_model, eff_tts = self._session_model_and_setting(
+                sid, "tts_service", override_model=model,
+            )
+            if sid is not None:
+                records = self.runtime.read_branch(sid)
+                found_id, found_text = extract_reply_text(records, reply_entry_id)
+                use_text = text if text and text.strip() else found_text
+                use_id = reply_entry_id or found_id
+                if not use_id or not use_text:
+                    raise Refused("no assistant reply text found to speak")
+                result = self._speak_reply(
+                    sid, use_id, use_text, eff_model, eff_tts,
                     service=service,
                     voice=voice,
-                    limits=self.runtime.config(),
                     allow_over_limit=allow_over_limit,
                 )
-            except SpeechError as exc:
-                raise Refused(str(exc)) from None
-            return {"ok": True, **result}
+                return {"ok": True, **result}
 
-        if not text or not text.strip():
-            raise Refused("speech/synthesize needs a session or text")
-        try:
+            if not text or not text.strip():
+                raise Refused("speech/synthesize needs a session or text")
             spoken = self.speech.synthesize_text(
                 text,
                 model=eff_model,
@@ -440,7 +490,7 @@ class MediaService(Service):
                 service=service,
                 voice=voice,
             )
-        except SpeechError as exc:
+        except (SpeechError, timeline.NewerLog) as exc:
             raise Refused(str(exc)) from None
         return {
             "ok": True,
@@ -549,8 +599,8 @@ class MediaService(Service):
         except STTError as exc:
             raise Refused(str(exc)) from None
         text = answer.text
-        if chosen.key:
-            text = text.replace(chosen.key, "[redacted]")
+        if key := redact_key(chosen.key):
+            text = text.replace(key, "[redacted]")
         reply = {
             "ok": True,
             "text": text,

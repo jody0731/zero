@@ -588,6 +588,9 @@ class Runtime(SessionActions):
     def append_between_turns(self, sid, refused, type, **fields):
         return self.turn_runner.append_between_turns(sid, refused, type, **fields)
 
+    def prepare_side_writer(self, sid, *, timeout=10.0):
+        self.turn_runner.prepare_side_writer(sid, timeout=timeout)
+
     def append_side_record(self, sid, entry, *, timeout=10.0):
         return self.turn_runner.append_side_record(sid, entry, timeout=timeout)
 

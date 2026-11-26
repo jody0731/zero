@@ -3,6 +3,32 @@
 What each release of ZERO brought, newest first. A release is one checkpoint of ZERO's development, or a fix
 between two (a fourth number); versions below 1.0 may change anything.
 
+## 0.7.10.6
+
+- Added `max_result_tokens` (default `12,000`, `0` for percentage-only share) to cap
+  individual unsized tool results independently of `result_share_percent` while keeping
+  startup instruction files (`SOUL.md` and `ZERO.md`) on their percentage budget,
+  capped spilled-result previews at `1,000` tokens with factual cap notices and
+  compaction hints, and preserved zero extra config stats on fitting results.
+- Replaced status-only error formatting across all five utility API adapters (video,
+  speech, transcription, images, web search) and live dictation with shared,
+  redacted JSON error parsing that handles raw, JSON-escaped, mixed-slash, and
+  percent-encoded API keys without echoing raw HTML, scalar JSON, headers, or SDK
+  exception text.
+- Fixed Google Gemini Omni (`gemini-omni-1.2-flash`) video generation to send
+  `store=true` for URI delivery, poll Google Files API `PROCESSING -> ACTIVE`
+  readiness on a single shared deadline, cancel streaming downloads immediately on
+  stop or expiry, enforce credential-free HTTPS Google-media cross-origin redirects
+  with proxy-safe zero-retry HTTP clients, prevent concurrent retries from publishing
+  duplicate attachments, and reclaim definitively rejected pre-execution `4xx` video
+  claims while preserving `idempotency_key` mismatch checks.
+- Fixed session snags: `media/speech_cache` entries now record local-offset
+  second-precision timestamps, Listen and Auto-speak preflight writer access and
+  upgrade older `format-7` idle session logs before invoking paid TTS, and `.svg`
+  files resolve to `image/svg+xml` with linear-time 64 KiB header scanning that keeps
+  SVGs (including legacy raster-hinted attachments) download-only in HTTP/browser UI,
+  reference-only in chat/calibration, and blocked from paid image/video tools.
+
 ## 0.7.10.5
 
 - Added content-addressed session attachments (`components/attachments/`) without

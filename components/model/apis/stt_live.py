@@ -13,8 +13,10 @@ import struct
 import sys
 from urllib.parse import urlsplit, urlunsplit
 
+from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect as ws_connect_default
 
+from components.model.apis.http_errors import error_detail, status_error_text
 from components.model.apis.stt import STTError
 
 
@@ -111,6 +113,29 @@ def _http_to_ws_base(base_url):
     parts = urlsplit(base_url.rstrip("/"))
     scheme = "wss" if parts.scheme == "https" else "ws"
     return scheme, parts.netloc, parts.path.rstrip("/")
+
+
+def _connection_error(error, key):
+    if isinstance(error, InvalidStatus):
+        response = getattr(error, "response", None)
+        status = getattr(response, "status_code", None)
+        body = getattr(response, "body", None)
+        if isinstance(body, (str, bytes, bytearray)):
+            try:
+                body = json.loads(body)
+            except (ValueError, RecursionError):
+                body = None
+        if type(status) is int:
+            detail = status_error_text(
+                status, "The service redirected the request.", body=body, key=key,
+            )
+        else:
+            detail = error_detail(body, key=key)
+        if detail:
+            return STTError(f"Could not start live transcription. {detail}")
+    return STTError(
+        f"Could not start live transcription ({type(error).__name__})."
+    )
 
 
 class OpenAIItemOrderTracker:
@@ -250,9 +275,7 @@ class OpenAILiveSTT:
             }))
         except Exception as exc:
             self.close()
-            raise STTError(
-                f"Could not start live transcription ({type(exc).__name__})."
-            ) from None
+            raise _connection_error(exc, self.service.key) from None
 
     def send_pcm(self, pcm_bytes):
         if self._sock is None or not pcm_bytes:
@@ -282,7 +305,9 @@ class OpenAILiveSTT:
                     for item_id, text in self._tracker.flush_remaining()
                 ]
                 return [*flushed, TranscriptEvent("done")]
-            return [TranscriptEvent("error", error=str(exc))]
+            return [TranscriptEvent(
+                "error", error=f"Live transcription failed ({type(exc).__name__}).",
+            )]
         if raw is None:
             flushed = [
                 TranscriptEvent("final", text=text, item_id=item_id)
@@ -327,21 +352,15 @@ class OpenAILiveSTT:
                 events.append(TranscriptEvent("interim", text=interim))
             return events
         if kind == "conversation.item.input_audio_transcription.failed":
-            err = msg.get("error")
-            detail = (
-                err.get("message")
-                if isinstance(err, dict) and isinstance(err.get("message"), str)
-                else "transcription item failed"
-            )
-            return [TranscriptEvent("error", error=detail)]
+            detail = error_detail(msg, key=self.service.key)
+            return [TranscriptEvent(
+                "error", error=detail or "transcription item failed",
+            )]
         if kind == "error":
-            err = msg.get("error")
-            detail = (
-                err.get("message")
-                if isinstance(err, dict) and isinstance(err.get("message"), str)
-                else "realtime transcription error"
-            )
-            return [TranscriptEvent("error", error=detail)]
+            detail = error_detail(msg, key=self.service.key)
+            return [TranscriptEvent(
+                "error", error=detail or "realtime transcription error",
+            )]
         return []
 
     def flush(self):
@@ -416,9 +435,7 @@ class GoogleLiveSTT:
             self._sock.send(json.dumps({"setup": setup}))
         except Exception as exc:
             self.close()
-            raise STTError(
-                f"Could not start live transcription ({type(exc).__name__})."
-            ) from None
+            raise _connection_error(exc, self.service.key) from None
 
     def send_pcm(self, pcm_bytes):
         if self._sock is None or not pcm_bytes:
@@ -448,7 +465,9 @@ class GoogleLiveSTT:
         except Exception as exc:
             if "ConnectionClosed" in type(exc).__name__:
                 return [TranscriptEvent("done")]
-            return [TranscriptEvent("error", error=str(exc))]
+            return [TranscriptEvent(
+                "error", error=f"Live transcription failed ({type(exc).__name__}).",
+            )]
         if raw is None:
             return [TranscriptEvent("done")]
         if isinstance(raw, bytes):
@@ -459,9 +478,11 @@ class GoogleLiveSTT:
             return []
         if not isinstance(msg, dict):
             return []
-        if isinstance(msg.get("error"), dict):
-            detail = msg["error"].get("message") or "live transcription error"
-            return [TranscriptEvent("error", error=str(detail))]
+        if isinstance(msg.get("error"), (dict, str)):
+            detail = error_detail(msg, key=self.service.key)
+            return [TranscriptEvent(
+                "error", error=detail or "live transcription error",
+            )]
         sc = msg.get("serverContent")
         if not isinstance(sc, dict):
             return []

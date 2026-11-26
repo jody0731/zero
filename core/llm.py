@@ -21,6 +21,9 @@ from core import entries
 from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError
 
 
+NO_KEY = "none"
+
+
 class InvalidHistory(ValueError):
     """A model request would split a call from its result."""
 
@@ -165,27 +168,56 @@ def error_body_fields(body):
         body = next((item for item in body if isinstance(item, dict)), None)
     if not isinstance(body, dict):
         return None, None
-    inner = body.get("error") if isinstance(body.get("error"), dict) else body
+    error = body.get("error")
+    inner = error if isinstance(error, dict) else body
     raw_code = inner.get("code")
     status = inner.get("status")
     if isinstance(status, str) and status and (
         raw_code is None or type(raw_code) is int
     ):
         code = status
-    else:
+    elif isinstance(raw_code, str):
         code = raw_code
-    return code, inner.get("message")
+    elif type(raw_code) is int:
+        code = str(raw_code)
+    else:
+        code = None
+    message = error if isinstance(error, str) else inner.get("message")
+    return code, message
+
+
+def redact_key(key):
+    """Return the credential to redact, if the server uses one."""
+    return key if isinstance(key, str) and key and key != NO_KEY else None
+
+
+def _key_pattern(key):
+    escaped = json.dumps(key, ensure_ascii=False)[1:-1]
+    patterns = {
+        r"\\?/".join(re.escape(part) for part in form.split("/"))
+        for form in (key, escaped)
+    }
+    for encoded in (quote(key, safe=""), quote_plus(key)):
+        parts = re.split(r"(%[0-9A-F]{2})", encoded)
+        patterns.add("".join(
+            f"(?i:{part})" if index % 2 else re.escape(part)
+            for index, part in enumerate(parts)
+        ))
+    return re.compile("|".join(sorted(patterns, key=len, reverse=True)))
+
+
+def contains_key(text, key):
+    """Whether text contains the credential or an equivalent spelling."""
+    key = redact_key(key)
+    return key is not None and _key_pattern(key).search(text) is not None
 
 
 def safe_error_text(text, key=None, redact=None):
     """Remove credentials and control characters before clipping a detail."""
     if not isinstance(text, str):
         return ""
-    if isinstance(key, str) and key:
-        forms = {key, quote(key, safe=""), quote_plus(key),
-                 json.dumps(key, ensure_ascii=False)[1:-1]}
-        pattern = "|".join(map(re.escape, sorted(forms, key=len, reverse=True)))
-        text = re.sub(pattern, "[redacted]", text)
+    if key := redact_key(key):
+        text = _key_pattern(key).sub("[redacted]", text)
     if redact is not None:
         text = redact(text)
     text = "".join(" " if unicodedata.category(char).startswith("C") else char
@@ -233,7 +265,7 @@ def request_error_details(error, *, key=None, redact=None):
                 # An explicit JSON error string can be used. A raw body cannot.
                 try:
                     payload = error.response.json()
-                except ValueError:
+                except (ValueError, RecursionError):
                     payload = None
                 if isinstance(payload, dict):
                     message = payload.get("error")

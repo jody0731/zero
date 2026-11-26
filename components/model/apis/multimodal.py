@@ -8,7 +8,7 @@ token estimate.
 """
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
 import math
@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 
 import paths as home_paths
+from components.attachments import metadata as attachment_metadata
 
 IMAGE_MIME_TYPES = frozenset({
     "image/png",
@@ -397,6 +398,8 @@ def estimate_attachment_tokens(descriptor, api_name, *, detail=DEFAULT_IMAGE_DET
 
 def _check_static_eligibility(descriptor, *, api_name, wire_role, capabilities):
     """Validate delivery flag, modality, capability, format, and disk blob."""
+    if attachment_metadata.is_svg(descriptor.name):
+        return _svg_reference(descriptor, wire_role)
     if descriptor.delivery == "reference":
         return AttachmentDecision(
             (), descriptor, wire_role, modality_of(descriptor.media_type),
@@ -440,15 +443,36 @@ def _check_static_eligibility(descriptor, *, api_name, wire_role, capabilities):
                    "accepted inline format on this API",
         )
     blob_path = resolve_blob_path(descriptor)
+    head = b""
+    if blob_path is not None:
+        try:
+            with blob_path.open("rb") as stream:
+                head = stream.read(attachment_metadata.SVG_HEADER_BYTES)
+        except OSError:
+            blob_path = None
     if blob_path is None:
         return AttachmentDecision(
             (), descriptor, wire_role, modality, outcome="withheld",
             reason="not sent natively: attachment file is unavailable on disk",
         )
+    if attachment_metadata.is_svg(descriptor.name, head):
+        return _svg_reference(descriptor, wire_role)
     estimate = estimate_attachment_tokens(descriptor, api_name)
     return AttachmentDecision(
         (), descriptor, wire_role, modality, outcome="candidate",
         blob_path=blob_path, estimate=estimate,
+    )
+
+
+def _svg_reference(descriptor, wire_role):
+    descriptor = replace(
+        descriptor, media_type=attachment_metadata.SVG_MEDIA_TYPE,
+        width=None, height=None,
+    )
+    return AttachmentDecision(
+        (), descriptor, wire_role, "image", outcome="withheld",
+        reason="not sent natively: image/svg+xml is not an accepted inline format "
+               "on this API",
     )
 
 

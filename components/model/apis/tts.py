@@ -10,7 +10,6 @@ OpenAI-compatible servers. Google Gemini TTS uses `generateContent` with
 
 import base64
 from dataclasses import dataclass
-from http import HTTPStatus
 import json
 import re
 import struct
@@ -19,6 +18,9 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx2
 from websockets.sync.client import connect as ws_connect_default
+
+from components.model.apis.http_errors import error_detail, response_error_text
+from core.llm import safe_error_text
 
 
 class TTSError(Exception):
@@ -63,14 +65,10 @@ def pcm16_to_wav(pcm_bytes, *, sample_rate=24000, channels=1, sample_width=2):
     return header + pcm_bytes
 
 
-def _http_error(status):
-    if 300 <= status < 400:
-        return TTSError(f"HTTP {status}. The speech service redirected the request.")
-    try:
-        reason = HTTPStatus(status).phrase
-    except ValueError:
-        reason = "unexpected status"
-    return TTSError(f"HTTP {status} ({reason}).")
+def _http_error(reply, key):
+    return TTSError(response_error_text(
+        reply, "The speech service redirected the request.", key=key,
+    ))
 
 
 def _ws_endpoint(base_url, path_suffix):
@@ -229,37 +227,28 @@ class OpenAISpeech:
                                 resp.get("status_details")
                                 if isinstance(resp, dict) else None
                             )
-                            err = (
-                                details.get("error")
-                                if isinstance(details, dict) else None
+                            status = safe_error_text(status, service.key) or "unknown"
+                            details = details if isinstance(details, dict) else {}
+                            reason = safe_error_text(details.get("reason"), service.key)
+                            error = error_detail(details, key=service.key)
+                            detail = " · ".join(
+                                part for part in (reason, error) if part
                             )
-                            reason = (
-                                details.get("reason")
-                                if isinstance(details, dict) else None
-                            )
-                            detail = (
-                                err.get("message")
-                                if isinstance(err, dict)
-                                and isinstance(err.get("message"), str)
-                                else reason
-                                if isinstance(reason, str) and reason
-                                else status or "unknown status"
-                            )
-                            raise TTSError(
+                            text = (
                                 f"OpenAI Realtime speech did not complete "
-                                f"({status or 'unknown'}): {detail}."
+                                f"({status})."
                             )
+                            raise TTSError(safe_error_text(
+                                f"{text} {detail}" if detail else text,
+                            ))
                         completed = True
                         break
                     elif kind == "error":
-                        err = event.get("error")
-                        detail = (
-                            err.get("message")
-                            if isinstance(err, dict)
-                            and isinstance(err.get("message"), str)
-                            else "realtime error"
-                        )
-                        raise TTSError(f"OpenAI Realtime speech error: {detail}.")
+                        detail = error_detail(event, key=service.key)
+                        text = "OpenAI Realtime speech error."
+                        raise TTSError(safe_error_text(
+                            f"{text} {detail}" if detail else text,
+                        ))
                 if not completed:
                     raise TTSError(
                         "OpenAI Realtime speech closed before sending a "
@@ -271,8 +260,12 @@ class OpenAISpeech:
             raise TTSError(
                 f"The speech service gave no response within {seconds:g} s."
             ) from None
-        except (OSError, ValueError) as exc:
-            raise TTSError(f"OpenAI Realtime speech failed: {exc}.") from None
+        except OSError:
+            raise TTSError("The connection to the speech service failed.") from None
+        except (ValueError, RecursionError):
+            raise TTSError(
+                "The speech service returned invalid realtime data."
+            ) from None
         except Exception as exc:
             if exc.__class__.__name__ == "Stopped":
                 raise
@@ -339,7 +332,7 @@ class OpenAISpeechCompat:
                     check()
                 reply = client.post(service.url, json=body, headers=headers)
                 if not reply.is_success:
-                    raise _http_error(reply.status_code)
+                    raise _http_error(reply, service.key)
                 audio = reply.content
                 ctype = (
                     reply.headers.get("content-type", "audio/wav")
@@ -416,7 +409,7 @@ class GoogleSpeech:
                     check()
                 reply = client.post(url, json=body, headers=headers)
                 if not reply.is_success:
-                    raise _http_error(reply.status_code)
+                    raise _http_error(reply, service.key)
                 payload = reply.json()
         except TTSError:
             raise
@@ -507,7 +500,7 @@ class DeepSeekSpeech:
                     check()
                 reply = client.post(service.url, json=body, headers=headers)
                 if not reply.is_success:
-                    raise _http_error(reply.status_code)
+                    raise _http_error(reply, service.key)
                 ctype = (
                     reply.headers.get("content-type", "")
                     .split(";", 1)[0].strip().lower()

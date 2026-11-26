@@ -13,6 +13,7 @@ from pathlib import Path
 import queue
 import secrets
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -31,6 +32,7 @@ from components.model.apis.stt_live import (
 )
 from components.model.servers import ModelServerError
 from components.sandbox.sandbox import harness_free_env
+from core.llm import redact_key, safe_error_text
 
 DEFAULT_INACTIVITY_SECONDS = 60.0
 # Bound in-memory buffered PCM for batch fallback (8 MiB raw PCM ~ 256s @ 16kHz).
@@ -186,11 +188,16 @@ class DictationManager:
             )
             try:
                 adapter.connect()
-            except STTError:
+            except STTError as error:
                 # Automatic bounded same-route batch fallback on the frozen service.
                 sess.mode = "batch"
                 sess.target_rate = 16000
                 sess.live_adapter = None
+                warning = safe_error_text(
+                    f"Dictation warning for {frozen.name}: using batch mode. {error}",
+                    key=frozen.key,
+                )
+                print(warning, file=sys.stderr)
             else:
                 sess.live_adapter = adapter
                 sess.reader_thread = threading.Thread(
@@ -372,9 +379,10 @@ class DictationManager:
             if mode == "live" and adapter is not None and pcm:
                 try:
                     adapter.send_pcm(pcm)
-                except Exception as exc:
+                except Exception:
                     raise DictationError(
-                        f"failed to send audio chunk: {exc}"
+                        "failed to send audio chunk on the live "
+                        "transcription connection"
                     ) from None
             with sess.lock:
                 if sess.closed:
@@ -416,8 +424,8 @@ class DictationManager:
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         text = answer.text
-        if sess.service.key:
-            text = text.replace(sess.service.key, "[redacted]")
+        if key := redact_key(sess.service.key):
+            text = text.replace(key, "[redacted]")
         return text
 
     def stop(self, dictation_id, owner_key, *, drain_seconds=3.0):

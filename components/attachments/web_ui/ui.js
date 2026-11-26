@@ -26,8 +26,9 @@ export function register(host) {
     if (!id && !path) return null;
     const session = ctx.session || host.dom.state?.open || null;
     const name = item.name || "file";
-    const mediaType = String(item.media_type || "application/octet-stream")
-      .split(";")[0].trim().toLowerCase();
+    const mediaType = name.toLowerCase().endsWith(".svg") ? "image/svg+xml"
+      : String(item.media_type || "application/octet-stream")
+        .split(";")[0].trim().toLowerCase();
     const sizeText = formatBytes && item.size_bytes ? formatBytes(item.size_bytes) : "";
 
     if (!id) {
@@ -51,60 +52,63 @@ export function register(host) {
       return link;
     };
 
-    if (SAFE_IMAGES.has(mediaType)) {
-      const wrap = el("div", "attachment-media");
-      wrap.dataset.attachmentId = id;
-      const img = el("img", "attachment-image");
-      img.src = inlineUrl;
-      img.alt = name;
-      img.loading = "lazy";
-      const caption = el("div", "attachment-caption");
-      caption.append(el("span", null, [name, sizeText].filter(Boolean).join(" · ")), downloadLink());
-      wrap.append(img, caption);
-      return wrap;
-    }
-
-    if (mediaType.startsWith("audio/")) {
-      const wrap = el("div", "attachment-media");
-      wrap.dataset.attachmentId = id;
-      const audio = el("audio", "attachment-audio");
-      audio.controls = true;
-      audio.preload = "metadata";
-      audio.src = inlineUrl;
-      const caption = el("div", "attachment-caption");
-      caption.append(el("span", null, [name, sizeText].filter(Boolean).join(" · ")), downloadLink());
-      wrap.append(audio, caption);
-      return wrap;
-    }
-
-    if (mediaType.startsWith("video/")) {
-      const wrap = el("div", "attachment-media");
-      wrap.dataset.attachmentId = id;
-      const video = el("video", "attachment-video");
-      video.controls = true;
-      video.preload = "metadata";
-      video.src = inlineUrl;
-      const caption = el("div", "attachment-caption");
-      caption.append(el("span", null, [name, sizeText].filter(Boolean).join(" · ")), downloadLink());
-      wrap.append(video, caption);
-      return wrap;
-    }
-
     const card = el("div", "attachment-card");
     card.dataset.attachmentId = id;
     const info = el("div", "attachment-card-info");
-    info.append(el("span", "attachment-card-name", name));
-    const meta = [mediaType, sizeText].filter(Boolean).join(" · ");
-    if (meta) info.append(el("span", "attachment-card-meta", meta));
-    card.append(info);
-    if (mediaType === "application/pdf") {
-      const openLink = el("a", "attachment-download", "Open");
-      openLink.href = inlineUrl;
-      openLink.target = "_blank";
-      openLink.rel = "noopener noreferrer";
-      card.append(openLink);
+    const description = (type) => [type, sizeText].filter(Boolean).join(" · ");
+    const meta = el("span", "attachment-card-meta", description(mediaType));
+    info.append(el("span", "attachment-card-name", name), meta);
+    const download = downloadLink();
+    card.append(info, download);
+
+    const hasPreview = SAFE_IMAGES.has(mediaType) || mediaType === "application/pdf"
+      || mediaType.startsWith("audio/") || mediaType.startsWith("video/");
+    if (hasPreview) {
+      // A saved entry may carry a raster hint for SVG. Ask the download door
+      // for its vetted type before creating an inline element.
+      fetch(inlineUrl, { method: "HEAD" }).then((response) => {
+        if (!response.ok) return;
+        const type = (response.headers.get("Content-Type") || "")
+          .split(";")[0].trim().toLowerCase();
+        if (type) meta.textContent = description(type);
+        if (!response.headers.get("Content-Disposition")?.startsWith("inline;")) return;
+
+        if (type === "application/pdf") {
+          const openLink = el("a", "attachment-download", "Open");
+          openLink.href = inlineUrl;
+          openLink.target = "_blank";
+          openLink.rel = "noopener noreferrer";
+          download.before(openLink);
+          return;
+        }
+
+        let preview;
+        if (SAFE_IMAGES.has(type)) {
+          preview = el("img", "attachment-image");
+          preview.alt = name;
+          preview.loading = "lazy";
+        } else if (type.startsWith("audio/") || type.startsWith("video/")) {
+          const tag = type.split("/")[0];
+          preview = el(tag, `attachment-${tag}`);
+          preview.controls = true;
+          preview.preload = "metadata";
+        } else {
+          return;
+        }
+        preview.src = inlineUrl;
+        const wrap = el("div", "attachment-media");
+        wrap.dataset.attachmentId = id;
+        const caption = el("div", "attachment-caption");
+        caption.append(
+          el("span", null, [name, sizeText].filter(Boolean).join(" · ")),
+          downloadLink(),
+        );
+        wrap.append(preview, caption);
+        card.replaceWith(wrap);
+      }).catch(() => {
+        // The download card remains when the preview metadata is unavailable.
+      });
     }
-    card.append(downloadLink());
     return card;
   });
 

@@ -15,12 +15,16 @@ import re
 import stat
 import struct
 
+SVG_MEDIA_TYPE = "image/svg+xml"
+SVG_HEADER_BYTES = 65_536
+
 MEDIA_TYPES: dict[str, str] = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
     ".gif": "image/gif",
+    ".svg": SVG_MEDIA_TYPE,
     ".wav": "audio/wav",
     ".mp3": "audio/mpeg",
     ".ogg": "audio/ogg",
@@ -97,9 +101,83 @@ PDF_XREF_ENTRY_RE = re.compile(rb"^(\d{10})\s+(\d{5})\s+([nf])$")
 PDF_STARTXREF_RE = re.compile(rb"startxref[\r\n\s]+(\d+)[\r\n\s]+%%EOF")
 
 
+def _doctype_end(text, start):
+    brackets = 0
+    while start < len(text):
+        char = text[start]
+        if char in "\"'":
+            marker, start = char, start + 1
+        elif text.startswith("<!--", start):
+            marker, start = "-->", start + 4
+        elif text.startswith("<?", start):
+            marker, start = "?>", start + 2
+        else:
+            if char == "[":
+                brackets += 1
+            elif char == "]" and brackets:
+                brackets -= 1
+            elif char == ">" and brackets == 0:
+                return start + 1
+            start += 1
+            continue
+        end = text.find(marker, start)
+        if end == -1:
+            break
+        start = end + len(marker)
+    return len(text)
+
+
+def _has_svg_header(head):
+    at_limit = len(head) >= SVG_HEADER_BYTES
+    head = head[:SVG_HEADER_BYTES]
+    encoding = "utf-16" if head.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+    text = head.decode(encoding, "replace")
+    index = 0
+    while index < len(text):
+        if text[index].isspace():
+            index += 1
+            continue
+        if text.startswith("<?", index):
+            marker, start = "?>", index + 2
+        elif text.startswith("<!--", index):
+            marker, start = "-->", index + 4
+        elif text[index:index + 9].upper() == "<!DOCTYPE":
+            index = _doctype_end(text, index + 9)
+            continue
+        else:
+            if text[index] != "<":
+                return False
+            end = index + 1
+            while end < len(text) and not (
+                text[end].isspace() or text[end] in "/>"
+            ):
+                end += 1
+            if end == len(text):
+                break
+            prefix, colon, name = text[index + 1:end].rpartition(":")
+            return name.lower() == "svg" and (
+                not colon or (bool(prefix) and ":" not in prefix)
+            )
+        end = text.find(marker, start)
+        if end == -1:
+            break
+        index = end + len(marker)
+    # An unresolved prefix may hide an SVG root beyond the scan limit.
+    return at_limit
+
+
+def is_svg(name, head=b""):
+    """Treat SVG names, SVG roots, and unresolved full prefixes as SVG."""
+    if isinstance(name, str) and name.lower().endswith(".svg"):
+        return True
+    return _has_svg_header(head)
+
+
 def media_type(name: str, head: bytes) -> str:
-    """Return the file's media type, sniffing magic bytes before its suffix."""
+    """Return the file's media type, including the SVG download boundary."""
     raw_head = bytes(head) if head else b""
+    if is_svg(name, raw_head):
+        return SVG_MEDIA_TYPE
     sniffed = _sniff_magic(raw_head)
     if sniffed is not None:
         return sniffed

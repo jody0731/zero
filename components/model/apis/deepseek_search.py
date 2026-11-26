@@ -34,6 +34,7 @@ def search(service, query, count, seconds, transport, check):
     body = {"query": query, "count": count}
     answer = post_json(
         service.url, body, bearer(service.key), seconds, transport, check,
+        key=service.key,
     )
     sources = [
         Source(

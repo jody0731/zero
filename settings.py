@@ -22,6 +22,7 @@ from pathlib import Path
 
 import paths
 
+
 @dataclass(frozen=True)
 class Setting:
     """One setting: its group and label in the settings view (/settings), what
@@ -218,10 +219,20 @@ class LiveSettings(Mapping):
         return DEFAULTS[name]
 
     def __iter__(self):
-        return iter({**DEFAULTS, **self.current(), **self.fixed})
+        return iter(self.snapshot())
 
     def __len__(self):
-        return len({**DEFAULTS, **self.current(), **self.fixed})
+        return len(self.snapshot())
+
+    def snapshot(self, keys=None):
+        """Read requested settings together, refreshing only for live values."""
+        if keys is None:
+            return {**DEFAULTS, **self.current(), **self.fixed}
+        names = {key: ALIASES.get(key, key) for key in keys}
+        if all(name in self.fixed for name in names.values()):
+            return {key: self.fixed[name] for key, name in names.items()}
+        values = {**DEFAULTS, **self.current(), **self.fixed}
+        return {key: values[name] for key, name in names.items()}
 
     def __repr__(self):
         return f"LiveSettings(fixed={self.fixed!r})"

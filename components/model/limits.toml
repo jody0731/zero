@@ -730,6 +730,15 @@ tool_calling = true
 input_modalities = ["text", "image", "pdf"]
 output_modalities = ["text"]
 
+[openai."gpt-6-astra-healthcare"]
+context_window = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+reasoning = true
+tool_calling = true
+input_modalities = ["text", "image", "pdf"]
+output_modalities = ["text"]
+
 [openai."gpt-6-luna"]
 context_window = 1050000
 max_input_tokens = 922000
@@ -757,6 +766,15 @@ tool_calling = true
 input_modalities = ["text", "image", "pdf"]
 output_modalities = ["text"]
 
+[openai."gpt-6.1-sol-healthcare"]
+context_window = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+reasoning = true
+tool_calling = true
+input_modalities = ["text", "image", "pdf"]
+output_modalities = ["text"]
+
 [openai."gpt-6.1-terra"]
 context_window = 1050000
 max_input_tokens = 922000
@@ -775,7 +793,25 @@ tool_calling = true
 input_modalities = ["text", "image", "pdf"]
 output_modalities = ["text"]
 
+[openai."gpt-6.2-astra-healthcare"]
+context_window = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+reasoning = true
+tool_calling = true
+input_modalities = ["text", "image", "pdf"]
+output_modalities = ["text"]
+
 [openai."gpt-6.2-sol"]
+context_window = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+reasoning = true
+tool_calling = true
+input_modalities = ["text", "image", "pdf"]
+output_modalities = ["text"]
+
+[openai."gpt-6.2-sol-healthcare"]
 context_window = 1050000
 max_input_tokens = 922000
 max_output_tokens = 128000
@@ -1092,6 +1128,7 @@ output_modalities = ["text"]
 
 [openrouter."bytedance-seed/seed-2.0-lite"]
 context_window = 262144
+max_input_tokens = 224000
 max_output_tokens = 131072
 reasoning = true
 tool_calling = true
@@ -1100,6 +1137,7 @@ output_modalities = ["text"]
 
 [openrouter."bytedance-seed/seed-2.0-mini"]
 context_window = 262144
+max_input_tokens = 224000
 max_output_tokens = 131072
 reasoning = true
 tool_calling = true
@@ -3035,7 +3073,7 @@ output_modalities = ["text"]
 
 [openrouter."qwen/qwen3.5-397b-a17b"]
 context_window = 262144
-max_output_tokens = 81920
+max_output_tokens = 65536
 reasoning = true
 tool_calling = true
 input_modalities = ["text", "image", "video"]
@@ -3448,28 +3486,12 @@ tool_calling = true
 input_modalities = ["text", "image", "audio"]
 output_modalities = ["text"]
 
-[openrouter."unbiased/pareto-26.10"]
-context_window = 1048576
-max_output_tokens = 131072
-reasoning = false
-tool_calling = true
-input_modalities = ["text", "image"]
-output_modalities = ["text"]
-
-[openrouter."unbiased/pareto-26.10-preview"]
-context_window = 1048576
-max_output_tokens = 131072
-reasoning = false
-tool_calling = true
-input_modalities = ["text", "image"]
-output_modalities = ["text"]
-
-[openrouter."unbiased/pareto-26.9"]
-context_window = 262144
-max_output_tokens = 131072
-reasoning = false
-tool_calling = true
-input_modalities = ["text", "image"]
+[openrouter."tngtech/deepseek-r1t2-chimera"]
+context_window = 131072
+max_output_tokens = 32768
+reasoning = true
+tool_calling = false
+input_modalities = ["text"]
 output_modalities = ["text"]
 
 [openrouter."undi95/remm-slerp-l2-13b"]
@@ -3649,7 +3671,7 @@ input_modalities = ["text"]
 output_modalities = ["text"]
 
 [openrouter."z-ai/glm-4.7-flash"]
-context_window = 200000
+context_window = 131072
 max_output_tokens = 131072
 reasoning = true
 tool_calling = true
@@ -3854,14 +3876,6 @@ max_output_tokens = 128000
 reasoning = true
 tool_calling = true
 input_modalities = ["text", "image", "pdf"]
-output_modalities = ["text"]
-
-[openrouter."~unbiased/pareto-latest"]
-context_window = 1048576
-max_output_tokens = 131072
-reasoning = false
-tool_calling = true
-input_modalities = ["text", "image"]
 output_modalities = ["text"]
 
 [openrouter."~x-ai/grok-latest"]
@@ -4355,7 +4369,7 @@ output_modalities = ["text"]
 
 [qwen."qwen3.7-plus"]
 context_window = 1000000
-max_output_tokens = 64000
+max_output_tokens = 131072
 reasoning = true
 tool_calling = true
 input_modalities = ["text", "image", "video"]

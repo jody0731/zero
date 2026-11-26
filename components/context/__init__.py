@@ -27,6 +27,9 @@ SETTINGS = (
     Setting("result_share_percent", "Limits",
             "Percent of the room left a result may take", 15, "int",
             maximum=100),
+    Setting("max_result_tokens", "Limits",
+            "Maximum tokens one unsized result may take (0 for share only)",
+            12_000, "int", minimum=0),
     # The next reply's room, its thinking included (447 real replies, 8 Nov:
     # p99 3,440 tokens, the longest 4,572), and a compaction handoff's (the
     # longest 2,335); each at most an eighth of the line, so a small window

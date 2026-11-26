@@ -1,10 +1,13 @@
 """A search API's shared result and single-request HTTP transport."""
 
 from dataclasses import dataclass
-from http import HTTPStatus
 from urllib.parse import urlsplit
 
 import httpx2
+
+from components.model.apis.http_errors import response_error_text, status_error_text
+
+REDIRECTED = "The service redirected the lookup."
 
 
 class SearchError(Exception):
@@ -75,15 +78,10 @@ def is_http_url(value):
         return False
 
 
-def http_error(status):
-    """The status and its standard meaning, without upstream text."""
-    if 300 <= status < 400:
-        return SearchError(f"HTTP {status}. The service redirected the lookup.")
-    try:
-        reason = HTTPStatus(status).phrase
-    except ValueError:
-        reason = "unexpected status"
-    return SearchError(f"HTTP {status} ({reason}).")
+def http_error(status, *, body=None, key=None):
+    return SearchError(status_error_text(
+        status, REDIRECTED, body=body, key=key,
+    ))
 
 
 def client(seconds, transport):
@@ -92,21 +90,21 @@ def client(seconds, transport):
     )
 
 
-def post_json(url, body, headers, seconds, transport, check):
+def post_json(url, body, headers, seconds, transport, check, *, key=None):
     """Send once and read JSON. Auth and any task data stay at this URL."""
     try:
         with client(seconds, transport) as http:
             check()
             reply = http.post(url, json=body, headers=headers)
             if not reply.is_success:
-                raise http_error(reply.status_code)
+                raise SearchError(response_error_text(reply, REDIRECTED, key=key))
             return reply.json()
     except httpx2.TimeoutException:
         raise SearchError(f"The service gave no response within {seconds:g} s.") \
             from None
     except httpx2.HTTPError:
         raise SearchError("The connection to the search service failed.") from None
-    except ValueError:
+    except (ValueError, RecursionError):
         raise SearchError("The service returned invalid JSON.") from None
 
 
